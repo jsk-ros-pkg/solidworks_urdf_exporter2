@@ -214,6 +214,9 @@
               title="CAD全体を動かして base_link を世界原点(0,0,0)に合わせる">⌖ origin</button>
       <button id="grid" class="toggle active"
               title="ground grid at root Z=0">grid</button>
+      <button id="posedrag" class="toggle"
+              title="OFF: ドラッグで視点回転 / ON: リンクをドラッグして関節を動かす">
+        🖐 pose</button>
       <select id="gridcap" title="grid pitch"
               style="font-size:11px;color:#334;align-self:center;
                      background:#ffffffcc;border:1px solid #99a;
@@ -391,8 +394,9 @@ skrobot / native-mesh consumers (not RViz-loadable)">⬇ glb</button></a>
         <button id="regbtn">Register</button>
       </div>
     </div>
-    <div id="hint">drag a link to articulate its joint ·
-      orbit: left-drag background · pan: right-drag · zoom: wheel</div>
+    <div id="hint">left-drag: 視点回転 · right-drag: pan · wheel: zoom ·
+      クリックでリンク選択 · 関節はパネルのスライダーで操作
+      （🖐 pose ON でリンクをドラッグして関節を動かせます）</div>
     <div id="log"></div>
   </div>
 </div>
@@ -482,10 +486,15 @@ headlight();
 viewer.highlightMaterial = new THREE.MeshBasicMaterial({
   color: 0xffb340, side: THREE.DoubleSide, toneMapped: false });
 viewer.addEventListener('joint-mouseover', e => {
-  const j = viewer.robot?.joints?.[e.detail];
-  j?.traverse(c => {
+  // the element just swapped every hovered mesh to its flat highlightMaterial
+  // and stashed the real one in __origMaterial.  pose mode: replace it with an
+  // emissive amber CLONE (glow + keep colours).  orbit mode (default): restore
+  // the original outright, so a plain hover never lights the part up.  Walk the
+  // whole robot by __origMaterial so it works regardless of e.detail.
+  viewer.robot?.traverse(c => {
     if (c.isMesh && !c.userData.sw2robotMarker && c.__origMaterial) {
-      c.material = _tintedClone(c.__origMaterial, 'hov');
+      c.material = poseDrag ? _tintedClone(c.__origMaterial, 'hov')
+                            : c.__origMaterial;
     }
   });
   viewer.redraw();
@@ -1052,6 +1061,52 @@ function setAxesVisible(on) {
 }
 axesBtn.addEventListener('click', () => {
   setAxesVisible(axesBtn.classList.toggle('active'));
+});
+
+// ---- drag mode: orbit (default) vs pose (drag a link to move its joint) ----
+// the in-viewer joint panel's sliders/snap buttons drive joints, so the
+// element's drag-to-articulate (which steals left-drag from OrbitControls and
+// amber-highlights links) is OFF by default -- left-drag just rotates the view.
+let poseDrag = false;
+const poseBtn = document.getElementById('posedrag');
+let _origOnHover, _origOnUnhover;     // the element's hover-highlight callbacks
+let _origDragControls = null;
+const _noopHover = () => {};
+function applyPoseDrag() {
+  const dc = viewer.dragControls;
+  if (!dc) { return; }
+  dc.enabled = poseDrag;
+  if (dc !== _origDragControls) {
+    _origDragControls = dc;
+    _origOnHover = dc.onHover; _origOnUnhover = dc.onUnhover;
+  } else {
+    if (dc.onHover !== _noopHover && dc.onHover !== _origOnHover) {
+      _origOnHover = dc.onHover;
+    }
+    if (dc.onUnhover !== _noopHover && dc.onUnhover !== _origOnUnhover) {
+      _origOnUnhover = dc.onUnhover;
+    }
+  }
+  // the element highlights the hovered link on EVERY pointermove (re-applying
+  // it), so a one-shot handler can't undo it -- no-op the hover callbacks in
+  // orbit mode instead, so a plain hover/click never lights the part up
+  dc.onHover = poseDrag ? _origOnHover : _noopHover;
+  dc.onUnhover = poseDrag ? _origOnUnhover : _noopHover;
+  if (!poseDrag) {                            // clear anything left highlighted
+    viewer.robot?.traverse(c => {
+      if (c.isMesh && c.__origMaterial !== undefined) {
+        c.material = c.__origMaterial;
+        delete c.__origMaterial;
+      }
+    });
+    viewer.redraw();
+  }
+}
+poseBtn.addEventListener('click', () => {
+  poseDrag = poseBtn.classList.toggle('active');
+  applyPoseDrag();
+  log(poseDrag ? 'pose: リンクをドラッグで関節を動かす'
+               : 'orbit: ドラッグで視点回転（関節はパネルのスライダーで）', 'ok');
 });
 
 // ---- RGB triads (red=X green=Y blue=Z) -----------------------------------
@@ -1769,9 +1824,11 @@ function highlightJoint(name, on) {
   }
   viewer.redraw();
 }
-// hovering the MODEL highlights the row + axis ...
+// hovering the MODEL emphasises the joint axis -- only in pose mode, where it
+// signals "drag this to move the joint"; in orbit mode it would be a misleading
+// affordance.  (Sidebar-row hover still calls highlightJoint directly.)
 viewer.addEventListener('joint-mouseover',
-  e => highlightJoint(e.detail, true));
+  e => { if (poseDrag) { highlightJoint(e.detail, true); } });
 viewer.addEventListener('joint-mouseout',
   e => highlightJoint(e.detail, false));
 
@@ -2254,7 +2311,7 @@ window.addEventListener('pointerup', ev => {
   boxing = null;
   boxselEl.style.display = 'none';
   viewer.controls.enabled = true;
-  if (viewer.dragControls) { viewer.dragControls.enabled = true; }
+  applyPoseDrag();                 // restore the chosen drag mode (orbit/pose)
   if (Math.abs(ev.clientX - x0) < 4 && Math.abs(ev.clientY - y0) < 4) { return; }
   selectLinksInBox({ l: Math.min(x0, ev.clientX), r: Math.max(x0, ev.clientX),
                      t: Math.min(y0, ev.clientY), b: Math.max(y0, ev.clientY) });
@@ -2459,6 +2516,7 @@ viewer.addEventListener('geometry-loaded', () => {
   requestAnimationFrame(() => {
     addAxisMarkers(viewer.robot);
     addOriginTriad(viewer.robot);
+    applyPoseDrag();               // keep orbit/pose mode across reloads
     buildGrid();
     hiddenLinks.forEach(n => applyLinkVisibility(n));
     tfNodes = [];                  // old robot's TF nodes died with it
