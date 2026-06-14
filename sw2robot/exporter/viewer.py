@@ -1,6 +1,6 @@
 """Load a generated URDF into scikit-robot's browser-based viser viewer.
 
-    uv run python -m sw2robot.sw2urdf.viewer <path/to/robot.urdf>
+    uv run python -m sw2robot.exporter.viewer <path/to/robot.urdf>
 
 Adds:
   * link-name labels (so you can identify parts while dragging joints),

@@ -1,6 +1,6 @@
 """CLI: build URDF from a cached graph.json (fast, no SolidWorks).
 
-    uv run python -m sw2robot.sw2urdf.build <pkg_dir> [--config c.yaml] [--base S] [--exclude a,b] [--ros-pkg]
+    uv run python -m sw2robot.exporter.build <pkg_dir> [--config c.yaml] [--base S] [--exclude a,b] [--ros-pkg]
 """
 from __future__ import annotations
 import argparse

@@ -1,4 +1,4 @@
-"""sw2robot.cad2rc -- the headless core bridging sw2robot.sw2urdf
+"""sw2robot.editor -- the headless core bridging sw2robot.exporter
 (CAD->module) and the ROS config export.
 
 Design (a standing directive):
@@ -8,10 +8,10 @@ Design (a standing directive):
 - **Core API** (``core``): pure functions that mutate State / produce artifacts.
   A viser callback or a FastAPI endpoint is a *thin* wrapper over these.
 - **Headless**: the whole pipeline (CAD build -> edit -> ROS export) runs from
-  the CLI (``python -m sw2robot.cad2rc``) with no GUI and no SolidWorks.
+  the CLI (``python -m sw2robot.editor``) with no GUI and no SolidWorks.
 
-It uses the *pure* halves: ``sw2robot.sw2urdf.export.build`` (no SolidWorks)
-and the vendored ``sw2robot.cad2rc._vendor.rc_config`` (ROS/MoveIt/Gazebo
+It uses the *pure* halves: ``sw2robot.exporter.export.build`` (no SolidWorks)
+and the vendored ``sw2robot.editor._vendor.rc_config`` (ROS/MoveIt/Gazebo
 config generators).
 """
 

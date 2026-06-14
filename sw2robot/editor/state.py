@@ -19,7 +19,7 @@ class JointEdit(BaseModel):
 
     Axis flip / joint-type change are intentionally NOT here: robot-compiler
     treats axis and type as fixed properties of the module URDF, so those are
-    sw2robot.sw2urdf's job (joint-config YAML), not an export-time overlay.
+    sw2robot.exporter's job (joint-config YAML), not an export-time overlay.
     """
 
     rename: Optional[str] = None
@@ -44,7 +44,7 @@ class RobotCompilerState(BaseModel):
     """Everything needed to configure + export one CAD module, GUI-free.
 
     ``joints``/``links``/``root_link`` are the parsed *base* URDF (as built by
-    sw2robot.sw2urdf).  ``edits`` is the interactive overlay, keyed by the joint's
+    sw2robot.exporter).  ``edits`` is the interactive overlay, keyed by the joint's
     ORIGINAL name (so a rename never loses its anchor)."""
 
     robot_name: str

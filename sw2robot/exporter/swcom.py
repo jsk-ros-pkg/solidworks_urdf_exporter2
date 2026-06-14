@@ -22,7 +22,7 @@ import shutil
 import tempfile
 
 # pywin32 is Windows-only and only needed for the SolidWorks `extract` phase.
-# Guard the imports so the SW-free `build` path (model/urdf_writer/sw2robot.cad2rc.ui)
+# Guard the imports so the SW-free `build` path (model/urdf_writer/sw2robot.editor.ui)
 # imports on any OS / a PC without pywin32 -- the COM calls below only run when
 # `SolidWorks()`/`as_iface()` are actually used (i.e. during extract).
 try:

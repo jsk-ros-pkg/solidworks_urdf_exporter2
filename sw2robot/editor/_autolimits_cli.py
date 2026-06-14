@@ -7,7 +7,7 @@ keep-alive connection threads -- the classic CPython convoy, which inflated an
 8 s sweep to ~90 s just by having a page open.  A fresh process has its own GIL
 and no server threads, so it stays at the true ~8 s (+~3 s to load the model).
 
-    python -m sw2robot.cad2rc._autolimits_cli <urdf> <step_deg> <max_deg>
+    python -m sw2robot.editor._autolimits_cli <urdf> <step_deg> <max_deg>
     -> stdout: {"results": [{"child","lower","upper","continuous"}, ...]}
 """
 
@@ -54,7 +54,7 @@ def main():
     urdf, step_deg, max_deg = sys.argv[1], float(sys.argv[2]), float(sys.argv[3])
     import trimesh
     from skrobot.models.urdf import RobotModelFromURDF
-    from sw2robot.cad2rc import autoinit
+    from sw2robot.editor import autoinit
 
     load_urdf, is_tmp = _fast_urdf(urdf)
     try:

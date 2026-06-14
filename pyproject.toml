@@ -31,15 +31,15 @@ ui = [
 ]
 
 [project.scripts]
-sw2urdf = "sw2robot.sw2urdf.export:main"     # extract + build (needs SolidWorks)
-sw2robot = "sw2robot.cad2rc.cli:main"        # headless build/edit/export CLI
-sw2robot-web = "sw2robot.cad2rc.webserver:main"  # the browser editor server
+sw2urdf = "sw2robot.exporter.export:main"     # extract + build (needs SolidWorks)
+sw2robot = "sw2robot.editor.cli:main"        # headless build/edit/export CLI
+sw2robot-web = "sw2robot.editor.webserver:main"  # the browser editor server
 
 [tool.hatch.build.targets.wheel]
 packages = ["sw2robot"]
 
 [tool.hatch.build.targets.wheel.force-include]
-"sw2robot/cad2rc/web/index.html" = "sw2robot/cad2rc/web/index.html"
+"sw2robot/editor/web/index.html" = "sw2robot/editor/web/index.html"
 
 [tool.pytest.ini_options]
 # put the repo root on sys.path so `sw2robot` imports without an install

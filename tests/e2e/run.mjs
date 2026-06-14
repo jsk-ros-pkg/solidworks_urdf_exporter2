@@ -1,7 +1,7 @@
 // cad2rc web editor E2E suite (puppeteer-core + system Chrome).
 //
 // Prereqs:
-//   1. server running:  uv run python -m sw2robot.cad2rc.webserver output/<pkg> --root output --port 8090
+//   1. server running:  uv run python -m sw2robot.editor.webserver output/<pkg> --root output --port 8090
 //   2. once:            cd tests/e2e && npm i
 // Run:
 //   node tests/e2e/run.mjs [url]

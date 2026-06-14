@@ -4,12 +4,12 @@ Turn a SolidWorks assembly into a URDF, then clean it up in the browser.
 
 One import package, with two subpackages:
 
-- **`sw2robot.sw2urdf`** — the exporter. `extract` opens a throwaway copy of a `.sldasm`
+- **`sw2robot.exporter`** — the exporter. `extract` opens a throwaway copy of a `.sldasm`
   in a hidden SolidWorks instance and pulls the kinematic graph + per-link
   meshes into `graph.json` (slow, Windows + SolidWorks only). `build` turns that
   `graph.json` into a URDF (fast, headless, no SolidWorks). The original CAD file
   is never modified.
-- **`sw2robot.cad2rc`** — a single-page browser editor on top of the graph: re-root the
+- **`sw2robot.editor`** — a single-page browser editor on top of the graph: re-root the
   tree, change joint types (incl. **Shift+drag box-select** to bulk-set a range),
   edit root frames, set materials/densities, see **live self-collision** as you
   drag, **auto joint limits** from a self-collision sweep, and export a ROS /
@@ -31,14 +31,14 @@ report "not available" until it is installed.
 **Extract a `.sldasm` -> URDF** (Windows, with SolidWorks installed):
 
 ```bash
-python -m sw2robot.sw2urdf.export path/to/assembly.sldasm -o output
+python -m sw2robot.exporter.export path/to/assembly.sldasm -o output
 ```
 
 **Open the browser editor** on an already-extracted package (no SolidWorks
 needed — a sample is included):
 
 ```bash
-python -m sw2robot.cad2rc.webserver examples/fingertip --port 8090
+python -m sw2robot.editor.webserver examples/fingertip --port 8090
 # then open http://localhost:8090
 ```
 
@@ -48,25 +48,25 @@ fresh one (it fingerprints the file on disk and drives SolidWorks for you).
 **Headless build / edit / export** (no GUI):
 
 ```bash
-python -m sw2robot.cad2rc            # see the CLI
+python -m sw2robot.editor            # see the CLI
 ```
 
 ## Layout
 
 ```
 sw2robot/                one import package (pip install sw2robot)
-  sw2urdf/               SolidWorks -> graph.json -> URDF
-  cad2rc/                the browser editor (server + single-page web/index.html)
+  exporter/              SolidWorks -> graph.json -> URDF
+  editor/                the browser editor (server + single-page web/index.html)
     _vendor/rc_config/   vendored ROS/MoveIt/Gazebo config generators
 examples/fingertip/      a small pre-extracted package to try the editor offline
-tests/                   pytest (sw2robot.sw2urdf classification) + tests/e2e (puppeteer UI suite)
+tests/                   pytest (sw2robot.exporter classification) + tests/e2e (puppeteer UI suite)
 ```
 
 ## Tests
 
 ```bash
-PYTHONPATH= pytest                       # sw2robot.sw2urdf unit tests
-cd tests/e2e && npm i && node run.mjs    # UI suite (needs a running cad2rc-web + Chrome)
+PYTHONPATH= pytest                       # sw2robot.exporter unit tests
+cd tests/e2e && npm i && node run.mjs    # UI suite (needs a running sw2robot-web + Chrome)
 ```
 
 Some pytest fixtures expect a cached `output/<pkg>/graph.json`; those skip when

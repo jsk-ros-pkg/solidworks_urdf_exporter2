@@ -1,11 +1,11 @@
 """Headless CLI for the CAD -> robot-compiler bridge.
 
-    uv run python -m sw2robot.cad2rc <package_dir> [--config c.yaml]
+    uv run python -m sw2robot.editor <package_dir> [--config c.yaml]
         [--register <registry_dir>] [--export <out.zip>] [--state-out s.json]
 
 The whole pipeline runs with no GUI and no SolidWorks (it consumes the cached
-``graph.json`` a prior ``sw2robot.sw2urdf.export.extract`` produced).  A GUI is
-just a thin caller of the same ``sw2robot.cad2rc.core`` functions.
+``graph.json`` a prior ``sw2robot.exporter.export.extract`` produced).  A GUI is
+just a thin caller of the same ``sw2robot.editor.core`` functions.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("package_dir",
-                    help="sw2robot.sw2urdf package dir (has graph.json)")
+                    help="sw2robot.exporter package dir (has graph.json)")
     ap.add_argument("--config", default=None, help="joint-config YAML")
     ap.add_argument("--base", default=None, help="base/root link hint")
     ap.add_argument("--register", default=None, metavar="DIR",

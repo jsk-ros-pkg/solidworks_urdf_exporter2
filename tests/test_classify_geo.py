@@ -5,7 +5,7 @@ Each case is a list of MateGeo-shaped dicts as build_mate_graph records them
 import numpy as np
 import pytest
 
-from sw2robot.sw2urdf.model import classify_edge_geo, classify_edge_auto
+from sw2robot.exporter.model import classify_edge_geo, classify_edge_auto
 
 Z = [0.0, 0.0, 1.0]
 X = [1.0, 0.0, 0.0]

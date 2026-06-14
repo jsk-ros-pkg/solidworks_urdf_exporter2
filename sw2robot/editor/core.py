@@ -4,7 +4,7 @@ Every function here is callable from a CLI, a viser callback, or a FastAPI
 endpoint with no change -- that is the whole point (see the package docstring).
 
 Pipeline:
-    import_module()   #3  CAD package (sw2robot.sw2urdf, no SolidWorks) -> RobotCompilerState
+    import_module()   #3  CAD package (sw2robot.exporter, no SolidWorks) -> RobotCompilerState
     load_module()     #3  an already-built URDF -> state (no rebuild)
     register_module() #3  drop the module into a robot-compiler registry dir
     rename_joint() / set_limits() / set_mimic() / set_servo() /
@@ -121,7 +121,7 @@ def load_edits(state: RobotCompilerState, path=None) -> int:
 
 # --------------------------------------------------------------- #3 import
 def load_module(urdf_path, package_dir=None) -> RobotCompilerState:
-    """Parse an already-built URDF into a state -- NO sw2robot.sw2urdf rebuild.
+    """Parse an already-built URDF into a state -- NO sw2robot.exporter rebuild.
 
     ``package_dir`` (for meshes / registration) defaults to the URDF's
     grandparent (the ``<pkg>/urdf/<name>.urdf`` layout)."""
@@ -137,10 +137,10 @@ def load_module(urdf_path, package_dir=None) -> RobotCompilerState:
 
 def import_module(package_dir, config_path=None, base_hint=None,
                   exclude=None) -> RobotCompilerState:
-    """Build the CAD module headlessly (sw2robot.sw2urdf build half, NO
+    """Build the CAD module headlessly (sw2robot.exporter build half, NO
     SolidWorks) from a cached ``graph.json`` package, then load it into a
     state."""
-    from sw2robot.sw2urdf.export import build
+    from sw2robot.exporter.export import build
 
     urdf_path = build(package_dir, config_path=config_path,
                       base_hint=base_hint, exclude=exclude)
@@ -157,14 +157,14 @@ def extract_and_import(assembly_path, out_dir=None, robot_name=None,
     half PLUS the fast ``build`` half), so the viser View can offer a single
     "Import from SolidWorks" button.  ``extract`` opens a throwaway COPY of
     ``assembly_path`` in its own SolidWorks instance and never touches the
-    user's original file (see :class:`sw2robot.sw2urdf.swcom.SolidWorks`).
+    user's original file (see :class:`sw2robot.exporter.swcom.SolidWorks`).
 
     SolidWorks/pywin32 are Windows-only and imported lazily, so importing this
     module stays cheap and OS-agnostic (the headless ``build`` path never needs
     them).  ``progress`` -- if given -- is called with short status strings so a
     UI can show what the (multi-minute) extract is doing.
     """
-    from sw2robot.sw2urdf.export import extract
+    from sw2robot.exporter.export import extract
 
     if progress:
         progress("reusing the warm SolidWorks session ..." if sw is not None
@@ -204,7 +204,7 @@ def sw_session_status() -> dict:
     if not st["running"]:
         return st
     try:
-        from sw2robot.sw2urdf.swcom import SolidWorks, safe_prop
+        from sw2robot.exporter.swcom import SolidWorks, safe_prop
         sw = SolidWorks(attach=True)
     except Exception:
         return st          # running but not attachable from this process

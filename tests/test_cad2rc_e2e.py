@@ -1,13 +1,13 @@
-"""End-to-end regression test for the cad2rc bridge.
+"""End-to-end regression test for the sw2robot.editor bridge.
 
 Exercises the agreed integration flow on the committed ``feetech_hand`` cache
 (``output/feetech_hand/graph.json`` + meshes) WITHOUT SolidWorks:
 
-    import_module (pure sw2urdf.build)  ->  edit (rename / limits / servo / mimic)
+    import_module (pure sw2robot.exporter.build)  ->  edit (rename / limits / servo / mimic)
     ->  validate  ->  register_module  ->  export_ros_package (ROS/MoveIt/... ZIP)
 
 The pure-build + edit half runs anywhere.  The ``register``/``export`` half uses
-the vendored ``cad2rc._vendor.rc_config`` package.
+the vendored ``sw2robot.editor._vendor.rc_config`` package.
 """
 
 import shutil
@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-import sw2robot.cad2rc.core as c
+import sw2robot.editor.core as c
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CACHE = REPO_ROOT / "output" / "feetech_hand"
@@ -25,8 +25,8 @@ CACHE = REPO_ROOT / "output" / "feetech_hand"
 
 def _rc_config_available() -> bool:
     try:
-        from sw2robot.cad2rc._vendor.rc_config.export import export_all_configs  # noqa: F401
-        from sw2robot.cad2rc._vendor.rc_config.urdf_parser import parse_urdf_content  # noqa: F401
+        from sw2robot.editor._vendor.rc_config.export import export_all_configs  # noqa: F401
+        from sw2robot.editor._vendor.rc_config.urdf_parser import parse_urdf_content  # noqa: F401
     except Exception:
         return False
     return True
@@ -36,7 +36,7 @@ def _rc_config_available() -> bool:
 def state(tmp_path_factory):
     if not (CACHE / "graph.json").is_file():
         pytest.skip(f"missing cached graph: {CACHE / 'graph.json'}")
-    # Build into a COPY of the cache: import_module -> sw2urdf.build regenerates
+    # Build into a COPY of the cache: import_module -> sw2robot.exporter.build regenerates
     # the joints.yaml template and the urdf next to graph.json, so building in
     # place would dirty the committed output/feetech_hand/ cache on every run.
     work = tmp_path_factory.mktemp("feetech_hand")

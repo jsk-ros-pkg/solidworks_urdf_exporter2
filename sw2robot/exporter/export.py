@@ -7,9 +7,9 @@
 
   export   = extract + build (one shot).
 
-    uv run python -m sw2robot.sw2urdf.export  <assembly.sldasm> [-o OUT] [-n NAME]
-    uv run python -m sw2robot.sw2urdf.extract <assembly.sldasm> [-o OUT] [-n NAME]
-    uv run python -m sw2robot.sw2urdf.build   <pkg_dir> [--config c.yaml] [--base ..] [--exclude ..]
+    uv run python -m sw2robot.exporter.export  <assembly.sldasm> [-o OUT] [-n NAME]
+    uv run python -m sw2robot.exporter.extract <assembly.sldasm> [-o OUT] [-n NAME]
+    uv run python -m sw2robot.exporter.build   <pkg_dir> [--config c.yaml] [--base ..] [--exclude ..]
 """
 
 from __future__ import annotations
@@ -150,7 +150,7 @@ def build(pkg_dir, config_path=None, base_hint=None, exclude=None,
     print(f"  URDF:   {urdf_path}")
     if not config_path:
         print(f"  Config: {tmpl}  (edit, re-run: "
-              "python -m sw2robot.sw2urdf.build with --config)")
+              "python -m sw2robot.exporter.build with --config)")
     print(f"  View:   uv run visualize-urdf \"{urdf_path}\" --viewer viser")
     return urdf_path
 

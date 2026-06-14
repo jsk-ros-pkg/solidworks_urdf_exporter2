@@ -47,7 +47,7 @@ def write_template(model, path):
     lines = [
         "# Joint config -- this IS the kinematic tree.  Edit parent/child to",
         "# re-wire the chain and 'type' per edge, then re-run:",
-        "#   uv run python -m sw2robot.sw2urdf.export <asm> --config this_file.yaml",
+        "#   uv run python -m sw2robot.exporter.export <asm> --config this_file.yaml",
         "# type: fixed | revolute | prismatic | continuous",
         "# Sub-assemblies with moving internals expand automatically;",
         "# override with  expand: [name-substr]  /  no_expand: [name-substr]",

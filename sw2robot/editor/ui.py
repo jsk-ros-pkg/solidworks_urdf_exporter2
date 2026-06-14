@@ -1,12 +1,12 @@
-"""A thin viser View over ``sw2robot.cad2rc.core`` -- the browser UI for
+"""A thin viser View over ``sw2robot.editor.core`` -- the browser UI for
 configuring a CAD-derived module, modeled on robot-compiler's config page.
 
 This is deliberately a *thin* View (see [[headless-core-thin-view]]): every widget
-callback just calls a ``sw2robot.cad2rc.core`` function that mutates the
+callback just calls a ``sw2robot.editor.core`` function that mutates the
 ``RobotCompilerState``.  The same core drives the CLI and would drive a future
 FastAPI/React frontend.  No GUI logic lives here beyond wiring.
 
-    uv run python -m sw2robot.cad2rc.ui [package_dir] [--config c.yaml] [--port 8080]
+    uv run python -m sw2robot.editor.ui [package_dir] [--config c.yaml] [--port 8080]
 
 With no ``package_dir`` the browser opens on a "🔌 SolidWorks" connect panel:
 type the path to a ``.sldasm``, click *Import from SolidWorks*, and the whole
@@ -1041,7 +1041,7 @@ def build_connect_panel(server, defaults: dict, on_import):
     the viser event loop stays responsive; a per-stage ``progress`` callback plus
     a 1 Hz elapsed-time ticker stream "what it's doing + for how long" into a
     markdown widget.  On success ``on_import(state)`` rebuilds the UI.  Thin View:
-    all real work is in ``sw2robot.cad2rc.core`` (see
+    all real work is in ``sw2robot.editor.core`` (see
     [[headless-core-thin-view]])."""
     with server.gui.add_folder("🔌 SolidWorks"):
         session = server.gui.add_markdown("_checking SolidWorks session …_")
@@ -1236,7 +1236,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("package_dir", nargs="?", default=None,
-                    help="existing sw2robot.sw2urdf package dir "
+                    help="existing sw2robot.exporter package dir "
                          "(with graph.json). "
                          "Omit to start on the SolidWorks connect panel.")
     ap.add_argument("--config", default=None)

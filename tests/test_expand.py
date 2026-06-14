@@ -5,8 +5,8 @@ revolute, and re-attach the mounting mate to the owning child."""
 import numpy as np
 import pytest
 
-from sw2robot.sw2urdf.model import from_graph, build_model
-from sw2robot.sw2urdf.state import (GraphState, SubGraph, ComponentState, MateEdge,
+from sw2robot.exporter.model import from_graph, build_model
+from sw2robot.exporter.state import (GraphState, SubGraph, ComponentState, MateEdge,
                            MateGeo)
 
 from test_classify_geo import mate, dup, conc, coinc_planes, PLANE, CYL, Z, O
@@ -126,19 +126,19 @@ def _conc_r(p, r, d=Z):
 
 
 def test_strict_small_radius_is_fastener():
-    from sw2robot.sw2urdf.model import classify_edge_geo
+    from sw2robot.exporter.model import classify_edge_geo
     jt, ax, note = classify_edge_geo(dup(_conc_r(O, 0.0011)), strict=True)
     assert jt == "fixed" and "fastener" in note
 
 
 def test_strict_large_radius_stays_revolute():
-    from sw2robot.sw2urdf.model import classify_edge_geo
+    from sw2robot.exporter.model import classify_edge_geo
     jt, ax, note = classify_edge_geo(dup(_conc_r(O, 0.017)), strict=True)
     assert jt == "revolute"
 
 
 def test_nonstrict_small_radius_unchanged():
-    from sw2robot.sw2urdf.model import classify_edge_geo
+    from sw2robot.exporter.model import classify_edge_geo
     jt, ax, note = classify_edge_geo(dup(_conc_r(O, 0.0011)), strict=False)
     assert jt == "revolute"   # top-level behaviour (feetech pins) unchanged
 
@@ -225,7 +225,7 @@ def test_hidden_components_excluded():
 def test_snap_not_fooled_by_multi_mate_single_instance():
     # ONE cover mated to two boards: hole A on its origin axis (0mm), hole B
     # 20mm away -- legitimate design, must NOT be "corrected"
-    from sw2robot.sw2urdf.model import _warn_unsolved_mates, Component
+    from sw2robot.exporter.model import _warn_unsolved_mates, Component
     import numpy as np
     def comp(name, path, xyz):
         w = np.eye(4); w[:3, 3] = xyz
@@ -249,7 +249,7 @@ def test_snap_not_fooled_by_multi_mate_single_instance():
 
 
 def test_snap_still_fires_for_true_stale_sibling():
-    from sw2robot.sw2urdf.model import _warn_unsolved_mates, Component
+    from sw2robot.exporter.model import _warn_unsolved_mates, Component
     import numpy as np
     def comp(name, path, xyz):
         w = np.eye(4); w[:3, 3] = xyz
@@ -274,14 +274,14 @@ def test_snap_still_fires_for_true_stale_sibling():
 
 
 def _adj_rec(mates_):
-    from sw2robot.sw2urdf.model import _edge_rec
+    from sw2robot.exporter.model import _edge_rec
     return _edge_rec(_edge("a", "b", mates_))
 
 
 def test_loop_locked_hinge_demoted():
     # A-B looks like a hinge, but A-C and B-C are HARD fixed -> the loop
     # locks the hinge (what SolidWorks drag shows)
-    from sw2robot.sw2urdf.model import _auto_parent_map, Component
+    from sw2robot.exporter.model import _auto_parent_map, Component
     import numpy as np
     def comp(name, xyz):
         w = np.eye(4); w[:3, 3] = xyz
@@ -292,7 +292,7 @@ def test_loop_locked_hinge_demoted():
     hinge = dup(conc(O, Z), coinc_planes(O, Z))
     rigid = dup(conc([0.0, 0, 0], Z), conc([0.02, 0, 0], Z),
                 coinc_planes(O, Z))     # bolt pattern: fully constrained
-    from sw2robot.sw2urdf.model import _edge_rec
+    from sw2robot.exporter.model import _edge_rec
     def rec(ms):
         e = _edge("x", "y", ms)
         return _edge_rec(e)
@@ -310,7 +310,7 @@ def test_loop_with_offset_fastener_also_locks():
     # the loop edge is a single small fastener on a DIFFERENT axis: two
     # non-collinear axes on one part -> SolidWorks drag cannot rotate it,
     # so the global solve demotes the hinge too
-    from sw2robot.sw2urdf.model import _auto_parent_map, Component
+    from sw2robot.exporter.model import _auto_parent_map, Component
     import numpy as np
     def comp(name, xyz):
         w = np.eye(4); w[:3, 3] = xyz
@@ -318,7 +318,7 @@ def test_loop_with_offset_fastener_also_locks():
                          is_subassembly=False, world=w, fixed=False,
                          dof=None)
     A, B, C = comp("A", (0, 0, 0)), comp("B", (0.05, 0, 0)), comp("C", (0, 0.05, 0))
-    from sw2robot.sw2urdf.model import _edge_rec
+    from sw2robot.exporter.model import _edge_rec
     def rec(ms, strict=False):
         r = _edge_rec(_edge("x", "y", ms))
         if strict: r["strict"] = True
@@ -337,7 +337,7 @@ def test_loop_with_offset_fastener_also_locks():
 
 def test_isolated_hinge_survives_global_solve():
     # a hinge with NO other path stays movable under the global solve
-    from sw2robot.sw2urdf.model import _auto_parent_map, Component
+    from sw2robot.exporter.model import _auto_parent_map, Component
     import numpy as np
     def comp(name, xyz):
         w = np.eye(4); w[:3, 3] = xyz
@@ -345,7 +345,7 @@ def test_isolated_hinge_survives_global_solve():
                          is_subassembly=False, world=w, fixed=False,
                          dof=None)
     A, B = comp("A", (0, 0, 0)), comp("B", (0.05, 0, 0))
-    from sw2robot.sw2urdf.model import _edge_rec
+    from sw2robot.exporter.model import _edge_rec
     adj = {frozenset(("A", "B")):
            _edge_rec(_edge("x", "y", dup(conc(O, Z), coinc_planes(O, Z))))}
     parent_of, info = _auto_parent_map([A, B], adj, A)

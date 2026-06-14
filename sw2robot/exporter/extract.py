@@ -1,6 +1,6 @@
 """CLI: extract the CAD graph + meshes from SolidWorks (slow, once).
 
-    uv run python -m sw2robot.sw2urdf.extract <assembly.sldasm> [-o OUT] [-n NAME] [--visible]
+    uv run python -m sw2robot.exporter.extract <assembly.sldasm> [-o OUT] [-n NAME] [--visible]
 """
 from __future__ import annotations
 import argparse

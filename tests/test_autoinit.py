@@ -24,7 +24,7 @@ CACHE = REPO_ROOT / "output" / "feetech_hand"
 def built_pkg(tmp_path_factory):
     if not (CACHE / "graph.json").is_file():
         pytest.skip(f"missing cached graph: {CACHE / 'graph.json'}")
-    from sw2robot.sw2urdf.export import build
+    from sw2robot.exporter.export import build
 
     work = tmp_path_factory.mktemp("pkg")
     shutil.copy2(CACHE / "graph.json", work / "graph.json")
@@ -62,7 +62,7 @@ def test_density_scales_mass_linearly(tmp_path):
     """Doubling density doubles every mass (pure geometry * density)."""
     if not (CACHE / "graph.json").is_file():
         pytest.skip("missing cached graph")
-    from sw2robot.sw2urdf.export import build
+    from sw2robot.exporter.export import build
 
     def total_mass(density):
         work = tmp_path / f"d{int(density)}"
@@ -115,7 +115,7 @@ def _load_robot_and_meshes(urdf_path):
 def test_sweep_limits_finds_limits_and_restores_pose(built_pkg):
     if not _skrobot_ready():
         pytest.skip("skrobot / python-fcl not available")
-    from sw2robot.cad2rc import autoinit
+    from sw2robot.editor import autoinit
 
     robot, meshes = _load_robot_and_meshes(built_pkg)
     res = autoinit.sweep_limits(robot, meshes, step_deg=6, max_deg=120)
@@ -136,7 +136,7 @@ def test_sweep_limits_finds_limits_and_restores_pose(built_pkg):
 def test_self_collision_min_distance(built_pkg):
     if not _skrobot_ready():
         pytest.skip("skrobot / python-fcl not available")
-    from sw2robot.cad2rc import autoinit
+    from sw2robot.editor import autoinit
 
     robot, meshes = _load_robot_and_meshes(built_pkg)
     sc = autoinit.SelfCollision(robot, meshes)
