@@ -33,6 +33,7 @@ import socket
 import socketserver
 import sys
 import threading
+import tempfile
 import time
 import urllib.parse
 
@@ -40,6 +41,34 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 PACKAGE_ROOT = os.path.dirname(HERE)
 PROJECT_ROOT = os.path.dirname(PACKAGE_ROOT)
 WEB_DIR = os.path.join(HERE, "web")
+
+
+def _app_data_dir():
+    """Writable base for runtime side-files (the drive index, the default
+    package root, the client report).  A PyInstaller-frozen exe's PROJECT_ROOT
+    lives INSIDE the read-only bundle, so fall back to a stable Windows temp
+    dir there; a source checkout keeps using the repo root, so the dev workflow
+    is unchanged."""
+    if getattr(sys, "frozen", False):
+        d = os.path.join(tempfile.gettempdir(), "sw2robot")
+        os.makedirs(d, exist_ok=True)
+        return d
+    return PROJECT_ROOT
+
+
+# repo root in a checkout; %TEMP%\sw2robot in a frozen .exe
+_DATA_DIR = _app_data_dir()
+
+
+def _default_root():
+    """Default package root when the user gives no ``--root``: a double-clicked
+    GUI exe has no useful CWD, so write under the Windows temp data dir; in a
+    source checkout keep the historical ``output`` (relative to the CWD)."""
+    if getattr(sys, "frozen", False):
+        d = os.path.join(_DATA_DIR, "output")
+        os.makedirs(d, exist_ok=True)
+        return d
+    return "output"
 
 _CTYPES = {
     ".html": "text/html; charset=utf-8",
@@ -142,7 +171,7 @@ _DEFAULT_CAD_ROOTS = [
 ]
 _SKIP_DIRS = {"backup", "backups", "old", "_old", "bak", "trash", ".git",
               "sandbox"}
-_INDEX_FILE = os.path.join(PROJECT_ROOT, "_sldasm_index.json")
+_INDEX_FILE = os.path.join(_DATA_DIR, "_sldasm_index.json")
 _INDEX_MAX_AGE_S = 24 * 3600
 _index = {"byname": {}, "building": False, "count": 0}
 
@@ -228,7 +257,7 @@ def _locate_sldasm(name, size=None):
             consider(p)
     except Exception:
         pass
-    root = PROJECT_ROOT
+    root = _DATA_DIR
     out_dir = os.path.join(root, "output")
     if os.path.isdir(out_dir):                  # extracted packages know
         for d in os.listdir(out_dir):           # their own source path
@@ -648,7 +677,8 @@ def _run_extract(sldasm):
                      "extractions reuse this session) ...")
             sw = SolidWorks(visible=False)
             _sw["sess"] = sw
-        state = core.extract_and_import(sldasm, progress=progress, sw=sw)
+        state = core.extract_and_import(
+            sldasm, out_dir=_Handler.root_dir, progress=progress, sw=sw)
         _job["package"] = str(state.package_dir)
         _preconvert_meshes(str(state.package_dir))
         progress(f"done -> {state.package_dir} (SolidWorks kept warm for "
@@ -1343,7 +1373,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             if parsed.path == "/api/client_log":
                 n = int(self.headers.get("Content-Length", 0))
                 body = json.loads(self.rfile.read(n) or b"{}")
-                out = os.path.join(PROJECT_ROOT, "_client_report.json")
+                out = os.path.join(_DATA_DIR, "_client_report.json")
                 with open(out, "w", encoding="utf-8") as f:
                     json.dump(body, f, ensure_ascii=False, indent=1)
                 print(f"[sw2robot.web] CLIENT REPORT -> {out}")
@@ -1685,7 +1715,7 @@ def serve(package_dir=None, root_dir=None, port=8090, cad_roots=None):
     import atexit
     atexit.register(_shutdown_sw)     # close the warm session on exit
     threading.Thread(target=_keepalive_loop, daemon=True).start()
-    _Handler.root_dir = os.path.abspath(root_dir or "output")
+    _Handler.root_dir = os.path.abspath(root_dir or _default_root())
     _ensure_index(cad_roots or _DEFAULT_CAD_ROOTS)
     if package_dir:
         pkg, rel = _resolve_package(package_dir)
@@ -1704,8 +1734,11 @@ def serve(package_dir=None, root_dir=None, port=8090, cad_roots=None):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("package_dir", nargs="?", default=None)
-    ap.add_argument("--root", default="output",
-                    help="directory scanned for /api/list (default: output)")
+    ap.add_argument("--root", default=None,
+                    help="directory scanned for /api/list and where new "
+                         "extractions are written (default: ./output in a "
+                         "source checkout, %TEMP%\\sw2robot\\output for the "
+                         "frozen .exe)")
     ap.add_argument("--port", type=int, default=8090)
     ap.add_argument("--cad-roots", nargs="*", default=None,
                     help="directories indexed for drag&drop .sldasm lookup "
