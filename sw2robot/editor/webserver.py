@@ -272,13 +272,22 @@ def _read_root_pose(txt):
 def _export_zip(pkg_dir, robot_name, mesh_fmt="native"):
     """ZIP the module package (it already contains package.xml/CMakeLists).
 
+    ``mesh_fmt='dae'`` (the portable ROS variant) emits a standalone
+    ``<robot_name>_description`` package: ``package://`` mesh URLs + COLLADA
+    ``.dae`` meshes (RViz/Gazebo-loadable, colours kept).
     ``mesh_fmt='stl'`` converts every mesh to STL and rewrites the URDF
-    references -- RViz cannot read 3DXML/GLB, so this is the
-    ROS-displayable variant (colours are lost; the native variant keeps
-    them for skrobot / native-mesh consumers)."""
+    references -- also RViz-displayable but colours are lost.
+    ``mesh_fmt='native'`` ships the raw 3DXML/GLB + relative paths for skrobot /
+    native-mesh consumers."""
     import io as _io
     import zipfile
     buf = _io.BytesIO()
+    if mesh_fmt == "dae":
+        from sw2robot.exporter.ros_export import build_ros_description
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            for arc, data in build_ros_description(pkg_dir, robot_name):
+                z.writestr(arc, data)
+        return buf.getvalue()
     skip_suffix = (".part.glb", ".part.3dxml")
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         for dirpath, _dirs, files in os.walk(pkg_dir):
@@ -878,11 +887,12 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                     return self._send_json({"error": "no package open"}, 400)
                 fmt = (query.get("meshes") or ["native"])[0]
                 data = _export_zip(cls.pkg_dir, cls.robot_name, fmt)
+                fname = (f"{cls.robot_name}_description.zip" if fmt == "dae"
+                         else f"{cls.robot_name}_ros.zip")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/zip")
                 self.send_header("Content-Disposition",
-                                 f'attachment; filename="{cls.robot_name}'
-                                 f'_ros.zip"')
+                                 f'attachment; filename="{fname}"')
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
                 self.wfile.write(data)

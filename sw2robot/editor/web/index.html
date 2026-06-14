@@ -351,11 +351,16 @@
       <div style="color:#8fd99f;font-size:11px;margin-bottom:4px">
         📦 Export</div>
       <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">
-        <a id="expnative" href="/api/export/zip" download>
-          <button>⬇ ROS package</button></a>
+        <a id="expdae" href="/api/export/zip?meshes=dae" download>
+          <button title="portable ROS package: package:// URLs + COLLADA .dae
+meshes (colours kept, loads in RViz/Gazebo). Package: <name>_description">
+            ⬇ ROS package</button></a>
         <a id="expstl" href="/api/export/zip?meshes=stl" download>
-          <button title="meshes converted to STL so RViz can display them">
-            ⬇ ROS pkg (STL)</button></a>
+          <button title="meshes converted to STL so RViz can display them
+(colours lost)">⬇ ROS pkg (STL)</button></a>
+        <a id="expnative" href="/api/export/zip" download>
+          <button title="raw 3DXML/GLB + URDF-relative paths, for skrobot /
+native-mesh consumers (not RViz-loadable)">⬇ native</button></a>
         <a id="exprc" href="/api/export/rczip" download>
           <button title="MoveIt/Gazebo/servo/IL config zip via robot-compiler">
             ⬇ configs zip</button></a>

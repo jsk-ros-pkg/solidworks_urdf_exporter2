@@ -139,15 +139,26 @@ def build(pkg_dir, config_path=None, base_hint=None, exclude=None,
     print(f"      {len(model.components)} links, {len(model.joints)} joints")
 
     urdf_kwargs = {} if density is None else {"density": float(density)}
-    write_urdf(model, urdf_path, ros_pkg=robot_name if ros_pkg else None,
-               **urdf_kwargs)
+    # the working URDF keeps URDF-relative mesh paths (our viewer + skrobot
+    # auto-limits resolve those); the portable ROS variant is a SEPARATE package
+    write_urdf(model, urdf_path, **urdf_kwargs)
     write_ros_package(model, pkg_dir)
     tmpl = os.path.join(pkg_dir, robot_name + ".joints.yaml")
     if not config_path:
         jointcfg.write_template(model, tmpl)
 
+    desc_dir = None
+    if ros_pkg:
+        # a standalone <robot_name>_description package next to pkg_dir:
+        # package:// URLs + COLLADA .dae meshes (RViz/Gazebo-ready)
+        from .ros_export import write_ros_description_package
+        desc_dir = write_ros_description_package(
+            pkg_dir, robot_name, os.path.dirname(os.path.abspath(pkg_dir)))
+
     print(f"\nDONE. Package: {pkg_dir}")
     print(f"  URDF:   {urdf_path}")
+    if desc_dir:
+        print(f"  ROS pkg: {desc_dir}  (package:// + .dae)")
     if not config_path:
         print(f"  Config: {tmpl}  (edit, re-run: "
               "python -m sw2robot.exporter.build with --config)")
@@ -176,7 +187,10 @@ def main():
     ap.add_argument("--config", default=None)
     ap.add_argument("--base", default=None)
     ap.add_argument("--exclude", default=None)
-    ap.add_argument("--ros-pkg", action="store_true")
+    ap.add_argument("--ros-pkg", action="store_true",
+                    help="also write a portable <name>_description package "
+                         "(package:// URLs + COLLADA .dae meshes) next to the "
+                         "output; the working URDF stays mesh-relative")
     args = ap.parse_args()
     export(args.assembly, args.out, args.name, args.visible,
            config_path=args.config, base_hint=args.base,
