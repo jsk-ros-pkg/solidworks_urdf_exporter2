@@ -115,11 +115,15 @@
   .renamable:hover { outline: 1px dotted #6cf; outline-offset: 1px; }
   [contenteditable="true"] { outline: 1px solid #6cf; background: #15171a;
     color: #fff; border-radius: 3px; padding: 0 2px; cursor: text; }
-  #renamelist { position: absolute; inset: 0; z-index: 12; display: flex;
-    align-items: center; justify-content: center; background: #0008; }
-  #renamelist .card { background: #1c2228; border: 1px solid #456;
-    border-radius: 8px; padding: 14px 16px; max-height: 82%; max-width: 90%;
-    overflow: auto; color: #dde; box-shadow: 0 8px 30px #000a; }
+  /* a right-docked panel, NOT a full-screen modal: the viewer stays
+     interactive (orbit/select) while you rename */
+  #renamelist { position: absolute; top: 8px; right: 8px; bottom: 8px;
+    z-index: 12; display: flex; align-items: flex-start;
+    pointer-events: none; }
+  #renamelist .card { pointer-events: auto; background: #1c2228f2;
+    border: 1px solid #456; border-radius: 8px; padding: 14px 16px;
+    max-height: 100%; max-width: 46vw; overflow: auto; color: #dde;
+    box-shadow: 0 8px 30px #000a; }
   .rntable { border-collapse: collapse; font-size: 12px; }
   .rntable th, .rntable td { padding: 3px 8px; border-bottom: 1px solid #2a323a;
     text-align: left; white-space: nowrap; }
@@ -737,7 +741,6 @@ function openRenameList() {
   close.addEventListener('click', () => ov.remove());
   card.appendChild(close);
   ov.appendChild(card);
-  ov.addEventListener('mousedown', e => { if (e.target === ov) { ov.remove(); } });
   card.querySelectorAll('.rn-input').forEach(inp => {
     inp.addEventListener('change', async () => {
       const v = inp.value.trim(), old = inp.dataset.old;
