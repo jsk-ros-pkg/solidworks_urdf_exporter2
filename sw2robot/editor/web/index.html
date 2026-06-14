@@ -343,14 +343,6 @@
         <button class="rot" data-ax="2" data-s="-1"
                 style="color:#9dc4ff">Z−90</button>
       </div>
-      <div style="display:flex;gap:3px;flex-wrap:wrap;margin-top:5px">
-        <button id="snapground" title="原点をモデル底面の中心へ (Z=0が接地面に)">
-          ⊥ 接地</button>
-        <button id="snapcenter" title="原点をバウンディングボックス中心へ">
-          ⌖ 中心</button>
-        <button id="snapreset" title="root_rpy/root_xyz を全部0に戻す">
-          0 リセット</button>
-      </div>
       <div style="display:flex;gap:3px;align-items:center;margin-top:5px;
                   flex-wrap:wrap">
         <span style="color:#8a93a3">rpy°</span>
@@ -2894,45 +2886,6 @@ document.querySelectorAll('#rootbox .rot').forEach(b =>
     rpy[Number(b.dataset.ax)] = Number(b.dataset.s) * Math.PI / 2;
     postRootPose({ rpy }, `rotating root ${b.textContent}`);
   }));
-// origin snaps: bbox point (in the CURRENT root frame) -> translation-only
-// root_xyz update via the same no-reload path as align
-function bboxLocal() {
-  const box = robotBox();
-  if (!box || !viewer.robot) { return null; }
-  const min = new THREE.Vector3(Infinity, Infinity, Infinity);
-  const max = min.clone().negate();
-  const corner = new THREE.Vector3();
-  const inv = rootDelta.clone().invert();
-  for (const xi of ['min', 'max']) {
-    for (const yi of ['min', 'max']) {
-      for (const zi of ['min', 'max']) {
-        corner.set(box[xi].x, box[yi].y, box[zi].z);
-        viewer.robot.worldToLocal(corner).applyMatrix4(inv);
-        min.min(corner);
-        max.max(corner);
-      }
-    }
-  }
-  return { min, max,
-           center: min.clone().add(max).multiplyScalar(0.5) };
-}
-document.getElementById('snapground').addEventListener('click', () => {
-  const b = bboxLocal();
-  if (!b) { return; }
-  postRootPose({ xyz: [b.center.x, b.center.y, b.min.z] },
-               'snapping origin to the model bottom centre');
-});
-document.getElementById('snapcenter').addEventListener('click', () => {
-  const b = bboxLocal();
-  if (!b) { return; }
-  postRootPose({ xyz: b.center.toArray() },
-               'snapping origin to the bbox centre');
-});
-document.getElementById('snapreset').addEventListener('click', () => {
-  postRootPose({ absolute: { rpy: [0, 0, 0], xyz: [0, 0, 0] } },
-               'resetting the root frame');
-});
-
 // numeric fields apply LIVE (Enter / focus-out), no Set button needed
 function applyRootFields() {
   const deg = id => (parseFloat(document.getElementById(id).value) || 0);
