@@ -451,9 +451,62 @@ def _set_xyz(elem, vec):
     elem.set("xyz", " ".join(f"{v:.8g}" for v in vec))
 
 
+def _safe_name(name: str) -> str:
+    """Sanitize one URDF identifier (link/joint name) the same way the exporter
+    does: keep ``[A-Za-z0-9_]``, collapse every other run to ``_``, never start
+    with a digit.  Idempotent on names that are already valid."""
+    from sw2robot.exporter.model import safe_name
+    return safe_name(name)
+
+
+def _sanitize_urdf_names(root) -> None:
+    """Rewrite every ``<link>``/``<joint>`` name -- and all their cross
+    references (joint parent/child link, mimic joint) -- through
+    :func:`_safe_name`, so the emitted URDF never carries a hyphen, space, dot
+    or other character that downstream tools (xacro, ROS, MoveIt) choke on.
+
+    A no-op when the names are already clean (the usual case: the exporter and
+    ``rename_joint`` both validate), so it is a safety net that also covers
+    hand-edited root names, ports and externally imported URDFs."""
+    def _remap(elems, attr):
+        mapping, used = {}, set()
+        for el in elems:
+            orig = el.get(attr)
+            if orig is None or orig in mapping:
+                continue
+            cand, i = _safe_name(orig), 1
+            while cand in used:               # two dirty names -> same clean one
+                i += 1
+                cand = f"{_safe_name(orig)}_{i}"
+            mapping[orig] = cand
+            used.add(cand)
+        return mapping
+
+    links = root.findall("link")
+    joints = root.findall("joint")
+    lmap = _remap(links, "name")
+    jmap = _remap(joints, "name")
+    for le in links:
+        if le.get("name") in lmap:
+            le.set("name", lmap[le.get("name")])
+    for je in joints:
+        if je.get("name") in jmap:
+            je.set("name", jmap[je.get("name")])
+        for tag in ("parent", "child"):
+            el = je.find(tag)
+            if el is not None and el.get("link") in lmap:
+                el.set("link", lmap[el.get("link")])
+        mim = je.find("mimic")
+        if mim is not None and mim.get("joint") in jmap:
+            mim.set("joint", jmap[mim.get("joint")])
+
+
 def build_urdf(state: RobotCompilerState) -> str:
     """The CAD URDF with the interactive overlay baked in (rename, limits, mimic,
-    axis flip, joint type), so the exported package and configs stay consistent."""
+    axis flip, joint type), so the exported package and configs stay consistent.
+
+    Link/joint names are passed through :func:`_sanitize_urdf_names` last, so the
+    final URDF is guaranteed free of hyphens and other unsafe characters."""
     root = ET.fromstring(Path(state.urdf_path).read_text(encoding="utf-8"))
     renames = {j: e.rename for j, e in state.edits.items() if e.rename}
 
@@ -507,16 +560,22 @@ def build_urdf(state: RobotCompilerState) -> str:
         if mim is not None and mim.get("joint") in renames:
             mim.set("joint", renames[mim.get("joint")])
 
+    # final guarantee: no hyphens/spaces/etc. in any emitted link or joint name
+    _sanitize_urdf_names(root)
     return ET.tostring(root, encoding="unicode")
 
 
 def _servo_mappings(state: RobotCompilerState, parsed_joints: list) -> list:
     by_name = {j["name"]: j for j in parsed_joints}
+    final_name = {
+        orig.get("name"): parsed.get("name")
+        for orig, parsed in zip(state.joints, parsed_joints)
+    }
     out = []
     for orig, e in state.edits.items():
         if e.servo_id is None:
             continue
-        eff = e.rename or orig
+        eff = final_name.get(orig) or _safe_name(e.rename or orig)
         j = by_name.get(eff, {})
         out.append({
             "jointName": eff, "servoId": e.servo_id, "direction": e.direction,

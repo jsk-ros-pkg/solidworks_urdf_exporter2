@@ -19,6 +19,7 @@ from __future__ import annotations
 import os
 
 from . import inertia as _inertia
+from .model import safe_name
 
 # Fallback inertial when no mesh is available / its volume is unusable.
 _PLACEHOLDER_INERTIAL = {
@@ -95,8 +96,8 @@ def _link_xml(comp, ros_pkg=None, rn=lambda n: n, mesh_dir=None, density=None):
     return "\n".join(lines), method
 
 
-def _joint_xml(joint, rn=lambda n: n):
-    lines = [f'  <joint name="{joint.name}" type="{joint.jtype}">']
+def _joint_xml(joint, rn=lambda n: n, jn=lambda n: n):
+    lines = [f'  <joint name="{jn(joint.name)}" type="{joint.jtype}">']
     lines.append(f'    <origin xyz="{_fmt(joint.xyz)}" rpy="{_fmt(joint.rpy)}"/>')
     lines.append(f'    <parent link="{rn(joint.parent)}"/>')
     lines.append(f'    <child link="{rn(joint.child)}"/>')
@@ -108,7 +109,7 @@ def _joint_xml(joint, rn=lambda n: n):
         lines.append(f'    <limit lower="{lo:.6g}" upper="{up:.6g}" '
                      f'effort="10" velocity="3.14"/>')
     if joint.mimic:
-        mj = joint.mimic.get("joint")
+        mj = jn(joint.mimic.get("joint"))
         mult = joint.mimic.get("multiplier", 1.0)
         off = joint.mimic.get("offset", 0.0)
         lines.append(f'    <mimic joint="{mj}" multiplier="{mult:g}" '
@@ -119,18 +120,21 @@ def _joint_xml(joint, rn=lambda n: n):
     return "\n".join(lines)
 
 
-def _port_xml(port, rn=lambda n: n):
+def _port_xml(port, rn=lambda n: n, link_name=None, joint_name=None):
     """An output port: an empty dummy_link on a fixed joint (robot-compiler
     detects ``dummy_link*`` as a bidirectional connection port)."""
-    suffix = port.name[len("dummy_link"):] if port.name.startswith("dummy_link") \
-        else "_" + port.name
-    jn = "dummy_joint" + suffix
+    if link_name is None:
+        link_name = rn(port.name)
+    if joint_name is None:
+        suffix = port.name[len("dummy_link"):] if port.name.startswith("dummy_link") \
+            else "_" + port.name
+        joint_name = safe_name("dummy_joint" + suffix)
     return "\n".join([
-        f'  <link name="{port.name}"/>',
-        f'  <joint name="{jn}" type="fixed">',
+        f'  <link name="{link_name}"/>',
+        f'  <joint name="{joint_name}" type="fixed">',
         f'    <origin xyz="{_fmt(port.xyz)}" rpy="{_fmt(port.rpy)}"/>',
         f'    <parent link="{rn(port.parent_link)}"/>',
-        f'    <child link="{port.name}"/>',
+        f'    <child link="{link_name}"/>',
         "  </joint>",
     ])
 
@@ -143,8 +147,42 @@ def write_urdf(model, urdf_path, ros_pkg=None, density=_inertia.DEFAULT_DENSITY)
     # the joint-config template / viewer keep referring to component names.
     root_name = getattr(model, "root_link_name", "") or model.base_link
 
+    def _unique_safe(items):
+        mapping, used = {}, set()
+        for key, raw in items:
+            base = safe_name(raw)
+            cand, i = base, 1
+            while cand in used:
+                i += 1
+                cand = f"{base}_{i}"
+            mapping[key] = cand
+            used.add(cand)
+        return mapping
+
+    ports = list(getattr(model, "ports", []))
+    comp_name_items = [
+        (("comp", c.link_name),
+         root_name if c.link_name == model.base_link else c.link_name)
+        for c in model.components]
+    comp_name_items.sort(key=lambda item: item[0][1] != model.base_link)
+    link_names = _unique_safe(
+        comp_name_items
+        + [(("port", i), p.name) for i, p in enumerate(ports)])
+    joint_names = _unique_safe(
+        [(("joint", j.name), j.name) for j in model.joints]
+        + [(("port", i), "dummy_joint" + (
+            p.name[len("dummy_link"):] if p.name.startswith("dummy_link")
+            else "_" + p.name)) for i, p in enumerate(ports)])
+
+    # every emitted link / joint name passes through safe_name, with collision
+    # suffixes shared by all references (root remap, ports, parent/child, mimic).
     def rn(name):
-        return root_name if name == model.base_link else name
+        key = ("comp", name)
+        return link_names[key] if key in link_names else safe_name(name or "")
+
+    def jn(name):
+        key = ("joint", name)
+        return joint_names[key] if key in joint_names else safe_name(name or "")
 
     # meshes are stored relative to the package root (<pkg>/meshes/x), and the
     # urdf lives at <pkg>/urdf/<name>.urdf -> the package root is two levels up.
@@ -159,9 +197,10 @@ def write_urdf(model, urdf_path, ros_pkg=None, density=_inertia.DEFAULT_DENSITY)
         methods[method] = methods.get(method, 0) + 1
     _report_inertia(methods)
     for joint in model.joints:
-        parts.append(_joint_xml(joint, rn))
-    for port in getattr(model, "ports", []):
-        parts.append(_port_xml(port, rn))
+        parts.append(_joint_xml(joint, rn, jn))
+    for i, port in enumerate(ports):
+        parts.append(_port_xml(port, rn, link_names[("port", i)],
+                               joint_names[("port", i)]))
     parts.append("</robot>\n")
     with open(urdf_path, "w", encoding="utf-8") as f:
         f.write("\n".join(parts))
