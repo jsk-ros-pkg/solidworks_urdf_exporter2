@@ -40,7 +40,6 @@ packages = ["sw2robot"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "sw2robot/editor/web/index.html" = "sw2robot/editor/web/index.html"
-"sw2robot/editor/web/assets" = "sw2robot/editor/web/assets"
 
 [tool.pytest.ini_options]
 # put the repo root on sys.path so `sw2robot` imports without an install

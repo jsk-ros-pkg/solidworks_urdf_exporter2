@@ -171,24 +171,6 @@
               style="font-size:11px;color:#334;align-self:center;
                      background:#ffffffcc;border:1px solid #99a;
                      border-radius:3px;padding:1px 4px"></select>
-      <select id="scaleref" title="寸法の目安に既知サイズの物体を横に置く"
-              style="font-size:11px;color:#334;align-self:center;
-                     background:#ffffffcc;border:1px solid #99a;
-                     border-radius:3px;padding:1px 4px">
-        <option value="">スケール参照: なし</option>
-        <option value="human">👤 人(身長)</option>
-        <option value="hand">✋ 手 (≈18cm)</option>
-        <option value="can">🥫 350ml缶 (φ66×122)</option>
-        <option value="card">💳 カード (86×54)</option>
-        <option value="ball">🎾 テニスボール (φ67)</option>
-        <option value="bar">📏 10cm バー</option>
-      </select>
-      <input id="scalehgt" type="number" min="30" max="220" step="1"
-             value="170" title="身長 (cm)"
-             style="display:none;width:48px;font-size:11px;color:#334;
-                    align-self:center;background:#ffffffcc;border:1px solid #99a;
-                    border-radius:3px;padding:1px 3px"><span id="scalehgtu"
-             style="display:none;font-size:11px;color:#ccd;align-self:center">cm</span>
     </div>
     <div id="hovertip"></div>
     <div id="colstat" style="position:absolute;left:50%;top:36px;
@@ -1589,8 +1571,8 @@ function seatModel() {
 }
 document.getElementById('vorigin').addEventListener('click', seatModel);
 
-function setView(name, boxOverride) {
-  const box = boxOverride || robotBox();
+function setView(name) {
+  const box = robotBox();
   if (!box) { return; }
   const center = box.getCenter(new THREE.Vector3());
   const diag = box.getSize(new THREE.Vector3()).length();
@@ -2093,213 +2075,6 @@ gridBtn.addEventListener('click', () => {
   viewer.redraw();
 });
 
-// ---- scale reference: a known-size object beside the robot so you can read
-// the real dimensions at a glance (the grid gives mm; this gives intuition) --
-const scaleRefSel = document.getElementById('scaleref');
-const scaleHgt = document.getElementById('scalehgt');
-const scaleHgtU = document.getElementById('scalehgtu');
-let scaleRefObj = null;
-let scaleRefToken = 0;          // discards an in-flight mesh load if the
-                               // selection/height changed before it arrived
-const REF_MAT = () => new THREE.MeshStandardMaterial({
-  color: 0x37c2c9, transparent: true, opacity: 0.4, roughness: 0.85,
-  metalness: 0, side: THREE.DoubleSide, depthWrite: false });
-
-// free a three object's geometries/materials (used when swapping the human
-// capsule placeholder for the loaded OSS mesh, or discarding a stale load)
-function freeObj3D(o) {
-  o.traverse(n => {
-    n.geometry?.dispose?.();
-    const m = n.material;
-    if (Array.isArray(m)) { m.forEach(x => x.dispose?.()); }
-    else { m?.dispose?.(); }
-  });
-}
-
-function freeMat(m) {
-  if (Array.isArray(m)) { m.forEach(x => x.dispose?.()); }
-  else { m?.dispose?.(); }
-}
-
-// load the bundled OSS human mesh (CesiumMan, CC-BY 4.0 -- see
-// web/assets/ATTRIBUTION.md) as a translucent teal ghost, scaled so its REAL
-// height == H, feet on y=0, centred on x/z.  Resolves to a ready-to-add Group.
-function loadHumanMesh(H) {
-  return new Promise((resolve, reject) => {
-    new GLTFLoader().load('/assets/human.glb', gltf => {
-      let root = null;
-      try {
-        root = gltf.scene;
-        const mat = REF_MAT();
-        root.traverse(n => {
-          if (n.isMesh) {
-            freeMat(n.material);
-            n.material = mat; n.castShadow = false; n.receiveShadow = false;
-          }
-        });
-        const wrap = new THREE.Group();
-        wrap.add(root);
-        wrap.updateMatrixWorld(true);
-        let bb = new THREE.Box3().setFromObject(wrap);
-        const h0 = bb.max.y - bb.min.y;
-        if (!(h0 > 0)) { throw new Error('human mesh has no height'); }
-        wrap.scale.multiplyScalar(H / h0);
-        wrap.updateMatrixWorld(true);
-        bb = new THREE.Box3().setFromObject(wrap);
-        wrap.position.set(-(bb.min.x + bb.max.x) / 2, -bb.min.y,
-                          -(bb.min.z + bb.max.z) / 2);
-        resolve(wrap);
-      } catch (e) {
-        if (root) { freeObj3D(root); }
-        reject(e);
-      }
-    }, null, reject);
-  });
-}
-
-// build a reference at the scene scale (1 unit = 1 m), BASE sitting on y=0
-function makeScaleRef(type, heightM) {
-  const mat = REF_MAT();
-  const g = new THREE.Group();
-  const cyl = (r, h, seg = 14) =>
-    new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, seg), mat);
-  const sph = (r) => new THREE.Mesh(new THREE.SphereGeometry(r, 18, 14), mat);
-  const box = (w, h, d) => new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
-  // CapsuleGeometry: rounded limbs read as a real body/finger (total height
-  // along +Y = len + 2r, centred at the origin)
-  const cap = (r, len) =>
-    new THREE.Mesh(new THREE.CapsuleGeometry(r, Math.max(len, 0.001), 6, 14), mat);
-  if (type === 'human') {
-    const H = heightM;                 // ~7.5-head proportions, capsule limbs
-    const headR = 0.052 * H, shY = 0.81 * H, hipY = 0.50 * H;
-    const head = sph(headR); head.position.y = H - headR; g.add(head);
-    const neck = cap(0.030 * H, 0.02 * H);
-    neck.position.y = (H - 2 * headR + shY) / 2; g.add(neck);
-    const torso = cap(0.115 * H, Math.max(0.02, (shY - hipY) - 0.20 * H));
-    torso.position.y = (shY + hipY) / 2; torso.scale.z = 0.55; g.add(torso);
-    const pelvis = cap(0.095 * H, 0.03 * H);
-    pelvis.position.y = hipY + 0.02 * H; pelvis.scale.z = 0.62; g.add(pelvis);
-    for (const s of [-1, 1]) {          // arms: shoulder -> hand (~mid-thigh)
-      const x = s * 0.155 * H, top = shY - 0.01 * H, bot = 0.40 * H;
-      const arm = cap(0.034 * H, Math.max(0.02, (top - bot) - 0.068 * H));
-      arm.position.set(x, (top + bot) / 2, 0); arm.rotation.z = s * 0.05;
-      g.add(arm);
-      const hand = sph(0.033 * H); hand.position.set(x, bot, 0); g.add(hand);
-    }
-    for (const s of [-1, 1]) {          // legs: hip -> ankle, + a foot
-      const x = s * 0.075 * H, top = hipY + 0.02 * H, bot = 0.045 * H;
-      const leg = cap(0.052 * H, Math.max(0.02, (top - bot) - 0.104 * H));
-      leg.position.set(x, (top + bot) / 2, 0); g.add(leg);
-      const foot = box(0.06 * H, 0.028 * H, 0.13 * H);
-      foot.position.set(x, 0.014 * H, 0.03 * H); g.add(foot);
-    }
-    // scale so its REAL height is EXACTLY H (a scale ref must be accurate)
-    g.updateMatrixWorld(true);
-    const bb = new THREE.Box3().setFromObject(g);
-    const h0 = bb.max.y - bb.min.y;
-    if (h0 > 0) { g.scale.multiplyScalar(H / h0); }
-    g.userData.refLabel = `人 ${Math.round(H * 100)}cm`;
-  } else if (type === 'hand') {
-    // palm + 4 capsule fingers + an angled thumb (~18 cm, wrist at y=0)
-    const palm = cap(0.024, 0.05); palm.scale.set(1.85, 1, 0.5);
-    palm.position.y = 0.049; g.add(palm);
-    const fingers = [   // x, knuckle y, length
-      [-0.026, 0.094, 0.050], [-0.009, 0.096, 0.060],
-      [0.009, 0.094, 0.055], [0.026, 0.088, 0.043]];
-    for (const [x, base, len] of fingers) {
-      const fr = 0.0078, fc = cap(fr, len);
-      fc.position.set(x, base + len / 2 + fr, 0); fc.scale.z = 0.85; g.add(fc);
-      const k = sph(fr * 1.1); k.position.set(x, base, 0); g.add(k);
-    }
-    const thumb = cap(0.0105, 0.04);
-    thumb.position.set(-0.043, 0.046, 0.004); thumb.rotation.z = 0.95;
-    g.add(thumb);
-    g.userData.refLabel = '手 ≈18cm';
-  } else if (type === 'can') {
-    const c = cyl(0.033, 0.122, 24); c.position.y = 0.061; g.add(c);
-    g.userData.refLabel = '350ml缶 φ66×122mm';
-  } else if (type === 'card') {
-    const c = box(0.086, 0.054, 0.0008); c.position.y = 0.027; g.add(c);
-    g.userData.refLabel = 'カード 86×54mm';
-  } else if (type === 'ball') {
-    const b = sph(0.0335); b.position.y = 0.0335; g.add(b);
-    g.userData.refLabel = 'テニスボール φ67mm';
-  } else if (type === 'bar') {
-    const b = box(0.10, 0.004, 0.004); b.position.set(0.05, 0.002, 0); g.add(b);
-    for (const x of [0, 0.05, 0.10]) {
-      const t = box(0.002, 0.012, 0.006); t.position.set(x, 0.006, 0); g.add(t);
-    }
-    g.userData.refLabel = '10cm バー';
-  }
-  return g;
-}
-
-function disposeScaleRef() {
-  if (!scaleRefObj) { return; }
-  const mats = new Set();
-  scaleRefObj.traverse(o => {
-    o.geometry?.dispose?.();
-    const m = o.material;
-    if (Array.isArray(m)) { m.forEach(x => mats.add(x)); }
-    else if (m) { mats.add(m); }
-  });
-  mats.forEach(m => m.dispose?.());
-  scaleRefObj.removeFromParent();
-  scaleRefObj = null;
-}
-
-function buildScaleRef({ refit = true } = {}) {
-  disposeScaleRef();
-  const myToken = ++scaleRefToken;     // any later build/dispose invalidates us
-  const type = scaleRefSel.value;
-  const showHgt = type === 'human';
-  scaleHgt.style.display = showHgt ? '' : 'none';
-  scaleHgtU.style.display = showHgt ? '' : 'none';
-  if (!type || !viewer.robot) { viewer.redraw(); return; }
-  const H = Math.max(0.3, Math.min(2.2, (parseFloat(scaleHgt.value) || 170) / 100));
-  const ref = makeScaleRef(type, H);
-  ref.traverse(markHelper);                     // never eat raycasts/drags
-  const rb = robotBox();
-  if (rb) {
-    const refBox = new THREE.Box3().setFromObject(ref);
-    const refSize = refBox.getSize(new THREE.Vector3());
-    const margin = Math.max(0.05, refSize.x * 0.4,
-                            rb.getSize(new THREE.Vector3()).x * 0.15);
-    ref.position.set(rb.max.x + margin + refSize.x / 2,
-                     -refBox.min.y, rb.getCenter(new THREE.Vector3()).z);
-  }
-  viewer.scene.add(ref);
-  scaleRefObj = ref;
-  // frame robot + reference together so the comparison is immediately visible
-  const rb2 = robotBox();
-  if (refit && rb2) {
-    const union = rb2.clone().union(
-      new THREE.Box3().setFromObject(ref));
-    setView('iso', union);
-    log(`スケール参照: ${ref.userData.refLabel} を横に表示`, 'ok');
-  }
-  viewer.redraw();
-
-  // upgrade the human capsule placeholder to the real OSS mesh once it loads
-  // (async; the capsule stays as the fallback if the GLB fails to fetch)
-  if (type === 'human') {
-    loadHumanMesh(H).then(mesh => {
-      if (myToken !== scaleRefToken || !scaleRefObj) { freeObj3D(mesh); return; }
-      // swap the capsule limbs out for the mesh, keeping ref's placement
-      for (const c of [...scaleRefObj.children]) {
-        freeObj3D(c); scaleRefObj.remove(c);
-      }
-      mesh.traverse(markHelper);
-      scaleRefObj.add(mesh);
-      viewer.redraw();
-    }).catch(err => console.warn('[scale-ref] human mesh load failed', err));
-  }
-}
-scaleRefSel.addEventListener('change', buildScaleRef);
-scaleHgt.addEventListener('change', () => {
-  if (scaleRefSel.value === 'human') { buildScaleRef(); }
-});
-
 viewer.addEventListener('urdf-processed', () => {
   const n = buildJointRows(viewer.robot);
   log(`URDF parsed ✓ — ${Object.keys(viewer.robot.links).length} links, ` +
@@ -2327,7 +2102,6 @@ viewer.addEventListener('geometry-loaded', () => {
     addAxisMarkers(viewer.robot);
     addOriginTriad(viewer.robot);
     buildGrid();
-    if (scaleRefSel.value) { buildScaleRef({ refit: false }); }
     hiddenLinks.forEach(n => applyLinkVisibility(n));
     tfNodes = [];                  // old robot's TF nodes died with it
     undimAll();                    // restore shared (cached) materials!
