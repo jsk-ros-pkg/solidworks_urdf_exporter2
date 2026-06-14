@@ -28,9 +28,6 @@ from .urdf_writer import CMAKELISTS, PACKAGE_XML
 
 # extensions we convert; anything else (already .dae/.stl, abs URLs) is left alone
 _CONVERTIBLE = (".3dxml", ".glb")
-# mesh format per URDF context: detailed colour mesh for display, plain STL for
-# collision checking
-_CTX_FMT = (("visual", "dae"), ("collision", "stl"))
 
 
 def _load_mesh_metres(src):
@@ -72,7 +69,19 @@ def _mesh_to_stl_bytes(src):
     return _load_mesh_metres(src).export(file_type="stl")
 
 
-_CONVERT = {"dae": _mesh_to_dae_bytes, "stl": _mesh_to_stl_bytes}
+def _mesh_to_glb_bytes(src):
+    """GLB bytes in metres, keeping the original material/texture (for
+    three.js / skrobot consumers, not RViz)."""
+    return _load_mesh_metres(src).export(file_type="glb")
+
+
+_CONVERT = {"dae": _mesh_to_dae_bytes, "stl": _mesh_to_stl_bytes,
+            "glb": _mesh_to_glb_bytes}
+
+# default: <visual> as colour COLLADA, <collision> as plain STL (the ROS split)
+_CTX_FMT = (("visual", "dae"), ("collision", "stl"))
+# a uniform GLB variant (both contexts) for native-mesh / three.js consumers
+GLB_CTX_FMT = (("visual", "glb"), ("collision", "glb"))
 
 
 def _collada_meshes(mesh):
@@ -134,14 +143,18 @@ def _resolve_mesh(pkg_dir, ref):
     return base, src, ext
 
 
-def build_ros_description(pkg_dir, robot_name, email="auto@example.com"):
+def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
+                          ctx_fmt=_CTX_FMT):
     """``pkg_dir`` (a built package) -> ``[(arcname, bytes), ...]`` for a portable
-    ``<robot_name>_description`` ROS package: ``<visual>`` -> colour ``.dae``,
-    ``<collision>`` -> plain ``.stl``, all behind ``package://`` URLs.
+    ``<robot_name>_description`` ROS package, all behind ``package://`` URLs.
+
+    ``ctx_fmt`` maps each URDF context to a mesh format; the default emits
+    ``<visual>`` as colour ``.dae`` and ``<collision>`` as plain ``.stl`` (the
+    usual ROS split).  Pass :data:`GLB_CTX_FMT` for a uniform ``.glb`` package.
 
     Reads the on-disk ``urdf/<robot_name>.urdf`` (which already carries the
     editor's applied edits).  A missing/unconvertible mesh aborts the export
-    before any entries are emitted, so a half-rewritten ROS package never ships."""
+    before any entries are emitted, so a half-rewritten package never ships."""
     pkg = f"{robot_name}_description"
     urdf_path = os.path.join(pkg_dir, "urdf", robot_name + ".urdf")
     root = ET.parse(urdf_path).getroot()
@@ -163,7 +176,7 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com"):
         done[(base, fmt)] = arc
 
     for link in root.findall("link"):
-        for ctx, fmt in _CTX_FMT:
+        for ctx, fmt in ctx_fmt:
             for block in link.findall(ctx):
                 for mesh in block.iter("mesh"):
                     base, src, _ext = _resolve_mesh(pkg_dir, mesh.get("filename"))

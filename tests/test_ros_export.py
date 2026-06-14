@@ -94,6 +94,27 @@ def test_build_ros_description_layout(tmp_path):
             assert len(m.faces) > 0
 
 
+def test_glb_ctx_exports_uniform_glb(tmp_path):
+    import io
+    import trimesh
+    import xml.etree.ElementTree as ET
+    from sw2robot.exporter.ros_export import build_ros_description, GLB_CTX_FMT
+
+    pkg_dir = _make_pkg(tmp_path, robot="g")
+    files = dict(build_ros_description(pkg_dir, "g", ctx_fmt=GLB_CTX_FMT))
+
+    assert "g_description/meshes/part.glb" in files
+    assert not any(a.endswith((".dae", ".stl")) for a in files)   # uniform glb
+    link = ET.fromstring(files["g_description/urdf/g.urdf"].decode()).find("link")
+    for ctx in ("visual", "collision"):
+        assert (link.find(ctx).find(".//mesh").get("filename")
+                == "package://g_description/meshes/part.glb")
+    m = trimesh.load(io.BytesIO(files["g_description/meshes/part.glb"]),
+                     file_type="glb")
+    m = m.dump(concatenate=True) if isinstance(m, trimesh.Scene) else m
+    assert len(m.faces) > 0
+
+
 def test_working_package_is_not_modified(tmp_path):
     """The converter only READS the package -- the source urdf/mesh are untouched
     (the working URDF must stay mesh-relative for the viewer / auto-limits)."""

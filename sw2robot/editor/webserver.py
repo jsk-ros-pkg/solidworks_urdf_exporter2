@@ -269,52 +269,26 @@ def _read_root_pose(txt):
             float(m.group(1)) if m else 0.0)
 
 
-def _export_zip(pkg_dir, robot_name, mesh_fmt="native"):
-    """ZIP the module package (it already contains package.xml/CMakeLists).
+def _export_zip(pkg_dir, robot_name, mesh_fmt="dae"):
+    """ZIP a portable ``<robot_name>_description`` package (package:// URLs).
 
-    ``mesh_fmt='dae'`` (the portable ROS variant) emits a standalone
-    ``<robot_name>_description`` package: ``package://`` mesh URLs + COLLADA
-    ``.dae`` meshes (RViz/Gazebo-loadable, colours kept).
-    ``mesh_fmt='stl'`` converts every mesh to STL and rewrites the URDF
-    references -- also RViz-displayable but colours are lost.
-    ``mesh_fmt='native'`` ships the raw 3DXML/GLB + relative paths for skrobot /
-    native-mesh consumers."""
+    ``mesh_fmt='dae'`` (default): ``<visual>`` as colour COLLADA ``.dae`` +
+    ``<collision>`` as plain ``.stl`` -- the RViz/Gazebo-ready variant.
+    ``mesh_fmt='glb'``: a uniform ``.glb`` package (colour kept) for three.js /
+    skrobot / native-mesh consumers (not RViz-loadable)."""
+    if mesh_fmt not in ("dae", "glb"):
+        raise ValueError(f"unsupported mesh format: {mesh_fmt}")
+
     import io as _io
     import zipfile
+
+    from sw2robot.exporter.ros_export import (GLB_CTX_FMT,
+                                              build_ros_description)
+    kwargs = {"ctx_fmt": GLB_CTX_FMT} if mesh_fmt == "glb" else {}
     buf = _io.BytesIO()
-    if mesh_fmt == "dae":
-        from sw2robot.exporter.ros_export import build_ros_description
-        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-            for arc, data in build_ros_description(pkg_dir, robot_name):
-                z.writestr(arc, data)
-        return buf.getvalue()
-    skip_suffix = (".part.glb", ".part.3dxml")
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        for dirpath, _dirs, files in os.walk(pkg_dir):
-            for f in files:
-                full = os.path.join(dirpath, f)
-                rel = os.path.relpath(full, pkg_dir).replace("\\", "/")
-                low = f.lower()
-                if any(low.endswith(s) for s in skip_suffix) \
-                        or low.endswith(".3dxml.glb"):
-                    continue
-                if mesh_fmt == "stl":
-                    if low.endswith((".3dxml", ".glb")):
-                        import trimesh
-                        mesh = trimesh.load(full, force="mesh")
-                        if low.endswith(".3dxml"):
-                            mesh.apply_scale(0.001)   # mm -> m
-                        stem = rel.rsplit(".", 1)[0]
-                        z.writestr(stem + ".stl",
-                                   mesh.export(file_type="stl"))
-                        continue
-                    if low.endswith(".urdf"):
-                        txt = open(full, encoding="utf-8").read()
-                        txt = txt.replace(".3dxml", ".stl") \
-                                 .replace(".glb", ".stl")
-                        z.writestr(rel, txt)
-                        continue
-                z.write(full, rel)
+        for arc, data in build_ros_description(pkg_dir, robot_name, **kwargs):
+            z.writestr(arc, data)
     return buf.getvalue()
 
 
@@ -885,37 +859,17 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 cls = type(self)
                 if not cls.pkg_dir:
                     return self._send_json({"error": "no package open"}, 400)
-                fmt = (query.get("meshes") or ["native"])[0]
+                fmt = (query.get("meshes") or ["dae"])[0]
+                if fmt not in ("dae", "glb"):
+                    return self._send_json(
+                        {"error": f"unsupported mesh format: {fmt}"}, 400)
                 data = _export_zip(cls.pkg_dir, cls.robot_name, fmt)
-                fname = (f"{cls.robot_name}_description.zip" if fmt == "dae"
-                         else f"{cls.robot_name}_ros.zip")
+                fname = (f"{cls.robot_name}_glb.zip" if fmt == "glb"
+                         else f"{cls.robot_name}_description.zip")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/zip")
                 self.send_header("Content-Disposition",
                                  f'attachment; filename="{fname}"')
-                self.send_header("Content-Length", str(len(data)))
-                self.end_headers()
-                self.wfile.write(data)
-                return None
-            if path == "/api/export/rczip":
-                cls = type(self)
-                if not cls.pkg_dir:
-                    return self._send_json({"error": "no package open"}, 400)
-                from . import core
-                import tempfile
-                state = core.load_module(
-                    os.path.join(cls.pkg_dir, cls.urdf_rel),
-                    package_dir=cls.pkg_dir)
-                out = os.path.join(tempfile.gettempdir(),
-                                   cls.robot_name + "_configs.zip")
-                core.export_ros_package(state, out)
-                with open(out, "rb") as f:
-                    data = f.read()
-                self.send_response(200)
-                self.send_header("Content-Type", "application/zip")
-                self.send_header("Content-Disposition",
-                                 f'attachment; filename="{cls.robot_name}'
-                                 f'_configs.zip"')
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
                 self.wfile.write(data)
