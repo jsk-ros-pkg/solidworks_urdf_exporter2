@@ -312,7 +312,6 @@
     </div>
     <div>
       <button id="reset">Reset pose</button>
-      <button id="apply" disabled>Apply joint changes</button>
       <button id="undo" disabled title="undo (Ctrl+Z)">↶</button>
       <button id="redo" disabled title="redo (Ctrl+Y)">↷</button>
       <button id="renamelistbtn" title="関節名・リンク名を一覧で改名">≣ 改名</button>
@@ -614,27 +613,6 @@ viewer.loadMeshFunc = (path, manager, done) => {
 // ---- joint rows: slider (movable) + type select + bulk checkbox ---------
 const fmt = v => (Math.abs(v) < 1e-10 ? 0 : v).toFixed(2);
 const rows = new Map();        // joint name -> row record
-const pending = new Map();     // joint name -> change {name,parent,child,type}
-const applyBtn = document.getElementById('apply');
-
-function refreshApply() {
-  applyBtn.disabled = pending.size === 0;
-  applyBtn.textContent = pending.size
-    ? `Apply joint changes (${pending.size})` : 'Apply joint changes';
-}
-
-function markChange(rec) {
-  const t = rec.typeSel.value;
-  rec.row.classList.toggle('dirty', t !== rec.origType);
-  rec.typeSel.className = 'jtypesel t-' + t;
-  if (t !== rec.origType) {
-    pending.set(rec.joint.name, {
-      name: rec.joint.name, parent: rec.parent, child: rec.child, type: t });
-  } else {
-    pending.delete(rec.joint.name);
-  }
-  refreshApply();
-}
 
 // the in-viewer joint editor's live-sync hook, set while #linkinfo shows a
 // movable joint: {name, set(nativeVal)} so the sidebar slider and the overlay
@@ -799,8 +777,6 @@ document.getElementById('renamelistbtn')
 function buildJointRows(robot) {
   jointsEl.innerHTML = '';
   rows.clear();
-  pending.clear();
-  refreshApply();
   // kinematic tree: parent link -> [joint, ...]; root = never a child
   const linkOf = (j, tag) => [...(j.urdfNode?.children ?? [])]
     .find(el => el.tagName === tag)?.getAttribute('link') ?? '';
@@ -863,7 +839,14 @@ function buildJointRows(robot) {
                   typeSel: row.querySelector('.jtypesel'),
                   pick: row.querySelector('.pick'),
                   slider, val: row.querySelector('.jval') };
-    rec.typeSel.addEventListener('change', () => markChange(rec));
+    rec.typeSel.addEventListener('change', () => {
+      const t = rec.typeSel.value;
+      rec.typeSel.className = 'jtypesel t-' + t;
+      if (t !== rec.origType) {           // apply instantly -- no Apply button
+        applyTypeChanges([{ name: rec.joint.name, parent: rec.parent,
+                            child: rec.child, type: t }]);
+      }
+    });
     row.querySelector('.mkroot').addEventListener('click',
       () => reRoot(child));
     row.classList.toggle('hiddenlink', hiddenLinks.has(child));
@@ -1832,21 +1815,27 @@ document.getElementById('selall').addEventListener('change', e => {
 });
 document.getElementById('bulkset').addEventListener('click', () => {
   const t = document.getElementById('bulktype').value;
-  let n = 0;
+  const changes = [];
   rows.forEach(r => {
-    if (r.pick.checked) { r.typeSel.value = t; markChange(r); n += 1; }
+    if (r.pick.checked && r.typeSel.value !== t) {
+      changes.push({ name: r.joint.name, parent: r.parent,
+                     child: r.child, type: t });
+    }
   });
-  log(n ? `${n} joints staged as "${t}" — press Apply`
-        : 'no joints selected (use the checkboxes / select-all)', 'wrn');
+  if (!changes.length) {
+    log('no joints selected (use the checkboxes / select-all)', 'wrn');
+    return;
+  }
+  applyTypeChanges(changes);             // the whole batch in ONE rebuild
 });
 
-// apply -> patch joints.yaml + rebuild + reload
+// set joint type(s) -> patch joints.yaml + rebuild + reload (applied instantly;
+// the sidebar dropdown / box-select / panel all funnel through here)
 async function applyTypeChanges(changes) {
   if (!changes.length || !currentInfo) {
     reselectAfterLoad = null;
     return false;
   }
-  applyBtn.disabled = true;
   log(`applying ${changes.length} type change(s) + rebuilding URDF …`);
   statusEl.textContent = '⏳ rebuilding URDF …';
   try {
@@ -1863,7 +1852,6 @@ async function applyTypeChanges(changes) {
       log('NO change matched joints.yaml — nothing was rebuilt ' +
           '(joint naming mismatch; see missed list above)', 'err');
       reselectAfterLoad = null;
-      refreshApply();
       return false;
     }
     log(`rebuilt ✓ (${r.applied.length} change(s)) — reloading (meshes ` +
@@ -1874,13 +1862,9 @@ async function applyTypeChanges(changes) {
   } catch (e) {
     log(`apply failed: ${e.message ?? e}`, 'err');
     reselectAfterLoad = null;
-    refreshApply();
     return false;
   }
 }
-applyBtn.addEventListener('click', () => {
-  if (pending.size) { applyTypeChanges([...pending.values()]); }
-});
 
 // ---- 🛠 auto joint limits via the self-collision sweep -------------------
 const autolimitsBtn = document.getElementById('autolimits');
@@ -2621,7 +2605,6 @@ function loadRobot(info, { drop = false, keepPose = false,
   meshStats.want = meshStats.done = meshStats.fail = 0;
   jointsEl.innerHTML = '';
   rows.clear();
-  pending.clear();
   savedMats.clear();              // old robot's meshes are discarded anyway
   selectedLink = null;
   jpSync = null;                  // the old #linkinfo panel died with robot
@@ -2629,7 +2612,6 @@ function loadRobot(info, { drop = false, keepPose = false,
   clearFaceOverlay();
   document.getElementById('selbar').style.display = 'none';
   document.getElementById('linkinfo').style.display = 'none';
-  refreshApply();
   document.getElementById('title').textContent = info.name;
   document.title = `${info.name} — sw2robot`;
   if (!drop) {
@@ -3265,7 +3247,6 @@ function sw2robotDump() {
     links: Object.keys(v.robot?.links ?? {}).length,
     eventEaters: eaters,           // what HTML sits over the viewport
     align: alignOn(), tf: tfOn(), axes: axesOn(),
-    pendingChanges: pending.size,
     logTail: [...document.querySelectorAll('#log div')]
       .slice(-15).map(d => d.textContent),
     oplog: oplog.slice(-80),
