@@ -210,6 +210,8 @@
               title="TF view: frame triads at every link + parent lines, meshes dimmed">tf</button>
       <button id="alignmode" class="toggle"
               title="click a face: root origin moves there, +Z = face normal">⊕ align</button>
+      <button id="portmode" class="toggle"
+              title="click a face: add a coordinate-only link (dummy_link port) there, +Z = face normal; click a port marker to remove it">⊕ port</button>
       <button id="vorigin"
               title="CAD全体を動かして base_link を世界原点(0,0,0)に合わせる">⌖ origin</button>
       <button id="grid" class="toggle active"
@@ -1122,6 +1124,65 @@ function addOriginTriad(robot) {
                           Math.max(diag * 0.0035, 0.0008));
   robot.add(originTriad);           // root-link frame, follows the model
   originTriad.visible = originOn();
+}
+
+// ---- coordinate-only links (dummy_link ports): a mesh-less link is invisible,
+// so draw a magenta sphere + a frame triad at each, and make the sphere a
+// click target so a mis-placed port can be removed --------------------------
+let portNodes = [];                 // marker groups, cleared each reload
+let portPickTargets = [];           // the clickable spheres (raycast to remove)
+const portSphereMat = new THREE.MeshBasicMaterial({
+  color: 0xff3df0, depthTest: false, transparent: true, opacity: 0.9 });
+
+function clearPortMarkers() {
+  portNodes.forEach(o => o.removeFromParent());
+  portNodes = [];
+  portPickTargets = [];
+}
+
+function addPortMarkers(robot) {
+  clearPortMarkers();
+  if (!robot) { return; }
+  const box = robotBox();
+  const diag = box ? box.getSize(new THREE.Vector3()).length() : 0.3;
+  const len = Math.max(diag * 0.1, 0.02);
+  const r = Math.max(diag * 0.0035, 0.0008);
+  for (const [name, link] of Object.entries(robot.links)) {
+    if (!/^dummy_link/.test(name)) { continue; }    // robot-compiler port
+    const g = new THREE.Group();
+    g.add(makeTriad(len, r));       // RGB axes: +Z (blue) = outgoing connector
+    const sphere = new THREE.Mesh(
+      new THREE.SphereGeometry(Math.max(diag * 0.012, 0.003), 16, 12),
+      portSphereMat);
+    sphere.renderOrder = 999;
+    sphere.userData.portName = name;
+    markHelper(sphere);             // ignored by link raycast / pose-drag
+    g.add(sphere);
+    markHelper(g);
+    link.add(g);
+    portNodes.push(g);
+    portPickTargets.push(sphere);
+  }
+  if (portPickTargets.length) { viewer.redraw(); }
+}
+
+// the markers are markHelper'd (inert to the link raycast + pose-drag), so we
+// can't raycast them; pick by screen-space proximity to each port's center
+function pickPort(ev) {
+  if (!portPickTargets.length || !viewer.robot) { return null; }
+  const rect = viewer.getBoundingClientRect();
+  const mx = ev.clientX - rect.left, my = ev.clientY - rect.top;
+  const v = new THREE.Vector3();
+  let best = null, bestD = 18;          // px hit radius
+  for (const s of portPickTargets) {
+    s.getWorldPosition(v).project(viewer.camera);
+    if (v.z > 1) { continue; }          // behind the camera
+    const sx = (v.x * 0.5 + 0.5) * rect.width;
+    const sy = (-v.y * 0.5 + 0.5) * rect.height;
+    const d = Math.hypot(sx - mx, sy - my);
+    if (d < bestD) { bestD = d; best = s.userData.portName; }
+  }
+  return best;
 }
 
 // ---- TF view: a small triad on EVERY link + parent->child lines, with the
@@ -2124,8 +2185,28 @@ function showFaceOverlay(hit) {
 alignBtn.addEventListener('click', () => {
   const on = alignBtn.classList.toggle('active');
   if (on) {
+    portBtn.classList.remove('active');   // the two face modes are exclusive
     log('align mode: hover highlights the face; click = root origin at ' +
         'the FACE CENTER, +Z along its normal; Esc to cancel', 'wrn');
+  } else {
+    clearFaceOverlay();
+  }
+});
+
+// ---- ⊕ port mode: same face-pick as align, but click drops a coordinate-only
+// link (robot-compiler dummy_link) on the clicked LINK at the face center,
+// +Z along its normal.  Clicking an existing port marker removes it. ---------
+const portBtn = document.getElementById('portmode');
+const portOn = () => portBtn.classList.contains('active');
+
+portBtn.addEventListener('click', () => {
+  const on = portBtn.classList.toggle('active');
+  if (on) {
+    alignBtn.classList.remove('active');  // the two face modes are exclusive
+    clearFaceOverlay();
+    log('port mode: hover a face, click = add a dummy_link there (+Z along ' +
+        'its normal); click a magenta port marker to remove it; Esc to cancel',
+        'wrn');
   } else {
     clearFaceOverlay();
   }
@@ -2182,6 +2263,80 @@ async function alignRootTo(hit) {
   }
 }
 
+async function addPortAt(ph) {
+  op('add_port');
+  if (!currentInfo) {
+    log('add port needs a server-side package (not a drop)', 'wrn');
+    return;
+  }
+  // recompute the face overlay from THIS click: the hover that drew it is
+  // throttled, so a quick move+click could otherwise place the port at the
+  // previously-hovered face while parenting it to the newly clicked link
+  if (ph.hit?.face) { showFaceOverlay(ph.hit); }
+  // same face center + normal extraction as alignRootTo
+  let wPoint, nWorld;
+  if (faceOverlay) {
+    wPoint = faceOverlay.host.localToWorld(faceOverlay.centroidLocal.clone());
+    nWorld = faceOverlay.normalLocal.clone()
+      .transformDirection(faceOverlay.host.matrixWorld);
+  } else {
+    wPoint = ph.hit.point.clone();
+    nWorld = ph.hit.face.normal.clone()
+      .transformDirection(ph.hit.object.matrixWorld);
+  }
+  clearFaceOverlay();
+  // the port hangs off the CLICKED link, so resolve the point/normal in THAT
+  // link's frame (its matrixWorld already reflects the current pose; a rebuild
+  // reproduces the same link-relative frame -- no rootDelta juggling needed)
+  const lo = viewer.robot.links[ph.link];
+  if (!lo) { log(`add port: link '${ph.link}' not found`, 'err'); return; }
+  lo.updateMatrixWorld(true);
+  const pLocal = lo.worldToLocal(wPoint.clone());
+  const nLocal = nWorld.clone()
+    .applyQuaternion(lo.getWorldQuaternion(new THREE.Quaternion()).invert())
+    .normalize();
+  log(`adding port on ${ph.link}: origin=(${pLocal.x.toFixed(4)}, ` +
+      `${pLocal.y.toFixed(4)}, ${pLocal.z.toFixed(4)}) ` +
+      `+Z=(${nLocal.x.toFixed(2)}, ${nLocal.y.toFixed(2)}, ` +
+      `${nLocal.z.toFixed(2)}) + rebuilding …`);
+  statusEl.textContent = '⏳ adding port …';
+  try {
+    const resp = await fetch('/api/add_port', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ link: ph.link, xyz: pLocal.toArray(),
+                             zdir: nLocal.toArray() }) });
+    const r = await resp.json();
+    if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
+    log(`port added on ${r.parent} ✓ (ports: entry written to joints.yaml)`,
+        'ok');
+    loadRobot(currentInfo, { keepPose: true });   // the dummy_link needs a rebuild
+    refreshHistory();
+  } catch (e) {
+    log(`add port failed: ${e.message ?? e}`, 'err');
+  }
+}
+
+async function removePort(name) {
+  op('remove_port');
+  if (!currentInfo) { return; }
+  log(`removing port ${name} + rebuilding …`);
+  statusEl.textContent = '⏳ removing port …';
+  try {
+    const resp = await fetch('/api/remove_port', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }) });
+    const r = await resp.json();
+    if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
+    log(`port ${name} removed ✓`, 'ok');
+    loadRobot(currentInfo, { keepPose: true });
+    refreshHistory();
+  } catch (e) {
+    log(`remove port failed: ${e.message ?? e}`, 'err');
+  }
+}
+
 // clicking the view moves keyboard focus to it (so R works even after
 // typing in the path box) and a no-drag click selects the link
 viewer.setAttribute('tabindex', '-1');
@@ -2202,6 +2357,14 @@ viewer.addEventListener('pointerup', ev => {
     else { log('align cancelled (no face under the cursor)', 'wrn'); }
     return;
   }
+  if (portOn()) {                                  // stays on: add several
+    const pn = pickPort(ev);                       // an existing port? remove it
+    if (pn) { removePort(pn); return; }
+    const ph = pickHit(ev);
+    if (ph?.hit?.face) { addPortAt(ph); }
+    else { log('port: no face under the cursor', 'wrn'); }
+    return;
+  }
   const link = pickLink(ev);
   if (link) { selectLink(link); }
   else { selectLink(null); }       // empty space: always clear selection
@@ -2216,13 +2379,27 @@ viewer.addEventListener('pointermove', ev => {
   const now = performance.now();
   if (now - lastPick < 60) { return; }    // throttle the raycast
   lastPick = now;
-  if (alignOn()) {                        // face-pick mode: no link tint
+  if (alignOn() || portOn()) {            // face-pick mode: no link tint
+    const port = portOn() ? pickPort(ev) : null;   // hovering an existing port?
+    if (port) {
+      clearFaceOverlay();
+      const rect = viewer.getBoundingClientRect();
+      hovertip.innerHTML = `${port} — <span class="key">click</span> remove ` +
+        `this port`;
+      hovertip.style.left = (ev.clientX - rect.left + 14) + 'px';
+      hovertip.style.top = (ev.clientY - rect.top + 18) + 'px';
+      hovertip.style.display = 'block';
+      return;
+    }
     const ph = pickHit(ev);
     if (ph?.hit?.face) {
       showFaceOverlay(ph.hit);
       const rect = viewer.getBoundingClientRect();
-      hovertip.innerHTML = `${ph.link} — <span class="key">click</span> ` +
-        `align root to this face (origin = face center)`;
+      hovertip.innerHTML = portOn()
+        ? `${ph.link} — <span class="key">click</span> add a port here ` +
+          `(+Z = face normal)`
+        : `${ph.link} — <span class="key">click</span> ` +
+          `align root to this face (origin = face center)`;
       hovertip.style.left = (ev.clientX - rect.left + 14) + 'px';
       hovertip.style.top = (ev.clientY - rect.top + 18) + 'px';
       hovertip.style.display = 'block';
@@ -2375,6 +2552,7 @@ window.addEventListener('keydown', ev => {
     selectLink(null);              // also dismisses a stale selection bar
     clearBoxSelection();
     alignBtn.classList.remove('active');
+    portBtn.classList.remove('active');
     clearFaceOverlay();
   }
 });
@@ -2494,6 +2672,7 @@ viewer.addEventListener('geometry-loaded', () => {
   requestAnimationFrame(() => {
     addAxisMarkers(viewer.robot);
     addOriginTriad(viewer.robot);
+    addPortMarkers(viewer.robot);  // dummy_link ports (mesh-less, else unseen)
     applyPoseDrag();               // keep orbit/pose mode across reloads
     buildGrid();
     hiddenLinks.forEach(n => applyLinkVisibility(n));

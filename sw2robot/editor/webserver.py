@@ -373,6 +373,85 @@ def _remove_yaml_block(txt, mapkey):
                   txt)
 
 
+def _yaml_scalar(s):
+    """Render ``s`` as a yaml plain scalar, single-quoting it when it carries
+    characters (spaces, ``:`` ...) that would otherwise break a plain scalar."""
+    s = str(s)
+    if s and re.match(r"^[A-Za-z0-9_./-]+$", s):
+        return s
+    return "'" + s.replace("'", "''") + "'"
+
+
+def _append_yaml_list_item(txt, listkey, item_lines):
+    """Append a block-style list item under ``listkey:`` in joints.yaml text,
+    creating the list when absent.  ``item_lines`` are this item's
+    ``key: value`` strings -- the first becomes ``- key: value``, the rest are
+    indented continuation lines."""
+    body = "  - " + "\n    ".join(item_lines) + "\n"
+    block = re.compile(r"(?m)^" + re.escape(listkey) + r":\n((?:[ \t]+\S.*\n?)*)")
+    m = block.search(txt)
+    if m:
+        existing = m.group(1)
+        if existing and not existing.endswith("\n"):
+            existing += "\n"
+        return txt[:m.start()] + f"{listkey}:\n{existing}{body}" + txt[m.end():]
+    if txt and not txt.endswith("\n"):
+        txt += "\n"
+    return txt + f"{listkey}:\n{body}"
+
+
+def _remove_yaml_list_item(txt, listkey, idx):
+    """Remove the ``idx``-th (0-based) item from a block-style ``listkey:``
+    list; drop the whole block if it becomes empty."""
+    block = re.compile(r"(?m)^" + re.escape(listkey) + r":\n((?:[ \t]+\S.*\n?)*)")
+    m = block.search(txt)
+    if not m:
+        return txt
+    items = [p for p in re.split(r"(?m)^(?=[ \t]*-\s)", m.group(1)) if p.strip()]
+    if idx < 0 or idx >= len(items):
+        return txt
+    del items[idx]
+    if items:
+        return txt[:m.start()] + f"{listkey}:\n{''.join(items)}" + txt[m.end():]
+    return txt[:m.start()] + txt[m.end():]
+
+
+def _rot_z_to(zdir):
+    """3x3 minimal rotation (Rodrigues) taking +Z onto ``unit(zdir)``: an
+    already +Z-aligned vector yields identity, an antiparallel one a 180° flip
+    about X.  Shared by the root align (/api/set_root_pose) and ports."""
+    import numpy as np
+    z = np.asarray(zdir, float)
+    nz = np.linalg.norm(z)
+    if nz < 1e-12:
+        return np.eye(3)
+    z = z / nz
+    ez = np.array([0.0, 0.0, 1.0])
+    c = float(ez @ z)
+    # guard 1/(1+c): near-antiparallel is a deterministic 180° flip about X
+    if c < -1.0 + 1e-9:
+        return np.diag([1.0, -1.0, -1.0])
+    v = np.cross(ez, z)
+    if np.linalg.norm(v) < 1e-12:
+        return np.eye(3)                         # already +Z aligned
+    K = np.array([[0, -v[2], v[1]],
+                  [v[2], 0, -v[0]],
+                  [-v[1], v[0], 0]])
+    return np.eye(3) + K + K @ K * (1.0 / (1.0 + c))
+
+
+def _zdir_to_rpy(zdir):
+    """``_rot_z_to`` expressed as roll/pitch/yaw, for a port's fixed-joint
+    origin (+Z = outgoing connector axis)."""
+    import numpy as np
+
+    from sw2robot.exporter.geometry import matrix_to_xyz_rpy
+    M = np.eye(4)
+    M[:3, :3] = _rot_z_to(zdir)
+    _, rpy = matrix_to_xyz_rpy(M)
+    return list(rpy)
+
+
 def _urdf_names(pkg_dir, urdf_rel, tag):
     """Current ``<link>``/``<joint>`` names in the served URDF (the source of
     truth for what's on screen), for the rename collision check + root detect."""
@@ -1232,20 +1311,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                     # MINIMAL rotation taking +Z onto zdir (Rodrigues), so
                     # an already-aligned normal changes nothing -- a basis
                     # built from an arbitrary 'up' would add a surprise yaw
-                    z = np.asarray(zdir, float)
-                    z = z / np.linalg.norm(z)
-                    ez = np.array([0.0, 0.0, 1.0])
-                    v = np.cross(ez, z)
-                    c = float(ez @ z)
-                    if np.linalg.norm(v) < 1e-9:
-                        if c < 0:          # flipped: 180 deg about X
-                            D[:3, :3] = np.diag([1.0, -1.0, -1.0])
-                    else:
-                        K = np.array([[0, -v[2], v[1]],
-                                      [v[2], 0, -v[0]],
-                                      [-v[1], v[0], 0]])
-                        D[:3, :3] = (np.eye(3) + K
-                                     + K @ K * (1.0 / (1.0 + c)))
+                    # (shared with /api/add_port via _rot_z_to)
+                    D[:3, :3] = _rot_z_to(zdir)
                 D[:3, 3] = p
                 M_new = M_old @ D
                 R_new = M_new[:3, :3]
@@ -1441,6 +1508,96 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                       f"{'' if reset else ' -> ' + new}")
                 return self._send_json(
                     {"ok": True, "kind": kind, "old": old, "new": new})
+            if parsed.path == "/api/add_port":
+                # click-to-add a coordinate-only link (robot-compiler dummy_link
+                # port): origin at `xyz`, +Z along `zdir`, both in the clicked
+                # LINK's frame.  Appended to `ports:` and auto-named by build
+                # (dummy_link, dummy_link2 ...).  Mirrors /api/set_root_pose but
+                # targets a link instead of the root.
+                cls = type(self)
+                n = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(n) or b"{}")
+                link = body.get("link")
+                if not cls.pkg_dir or not link:
+                    return self._send_json({"error": "no package/link"}, 400)
+                name = os.path.splitext(os.path.basename(cls.urdf_rel))[0]
+                yml = os.path.join(cls.pkg_dir, name + ".joints.yaml")
+                if not os.path.exists(yml):
+                    return self._send_json(
+                        {"error": "joints.yaml not found"}, 400)
+                with open(yml, encoding="utf-8") as f:
+                    txt = f.read()
+                # the block-list helpers only understand a block-style `ports:`
+                # (what the exporter and this endpoint emit); refuse to edit a
+                # hand-written flow-style list rather than append a 2nd key
+                if re.search(r"(?m)^ports:[ \t]*\S", txt):
+                    return self._send_json(
+                        {"error": "ports: is in inline/flow style; reformat it "
+                                  "to a block list before adding ports"}, 400)
+                # the rest of joints.yaml is keyed by the COMPONENT link name;
+                # reverse-map the on-screen (display) name so resolve_ports'
+                # _match_component finds the tip link
+                comp = _link_names_inverse(txt).get(link, link)
+                xyz = body.get("xyz") or [0, 0, 0]
+                rpy = _zdir_to_rpy(body.get("zdir") or [0, 0, 1])
+                fmt = lambda v: "[" + ", ".join(f"{x:.6g}" for x in v) + "]"
+                _snapshot(cls.pkg_dir, yml, f"add port on {comp[:30]}")
+                txt = _append_yaml_list_item(txt, "ports", [
+                    f"parent: {_yaml_scalar(comp)}",
+                    f"xyz: {fmt(xyz)}", f"rpy: {fmt(rpy)}"])
+                with open(yml, "w", encoding="utf-8") as f:
+                    f.write(txt)
+                from sw2robot.exporter.export import build
+                try:
+                    build(cls.pkg_dir, config_path=yml)
+                except Exception as e:
+                    return self._send_json(
+                        {"error": f"rebuild failed: {e}"}, 500)
+                print(f"[sw2robot.web] add_port: parent={comp} "
+                      f"xyz={list(xyz)} rpy={rpy}")
+                return self._send_json(
+                    {"ok": True, "parent": comp, "xyz": list(xyz), "rpy": rpy})
+            if parsed.path == "/api/remove_port":
+                # drop a previously-added dummy_link port by its emitted name
+                cls = type(self)
+                n = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(n) or b"{}")
+                pname = body.get("name")
+                if not cls.pkg_dir or not pname:
+                    return self._send_json({"error": "no package/name"}, 400)
+                name = os.path.splitext(os.path.basename(cls.urdf_rel))[0]
+                yml = os.path.join(cls.pkg_dir, name + ".joints.yaml")
+                if not os.path.exists(yml):
+                    return self._send_json(
+                        {"error": "joints.yaml not found"}, 400)
+                with open(yml, encoding="utf-8") as f:
+                    txt = f.read()
+                import yaml as _yaml
+                try:
+                    ports = (_yaml.safe_load(txt) or {}).get("ports") or []
+                except Exception:
+                    ports = []
+                idx = None
+                for i, p in enumerate(ports):
+                    pn = (p or {}).get("name") or (
+                        "dummy_link" if i == 0 else f"dummy_link{i + 1}")
+                    if pn == pname:
+                        idx = i
+                        break
+                if idx is None:
+                    return self._send_json({"error": f"no port '{pname}'"}, 400)
+                _snapshot(cls.pkg_dir, yml, f"remove port {pname}")
+                txt = _remove_yaml_list_item(txt, "ports", idx)
+                with open(yml, "w", encoding="utf-8") as f:
+                    f.write(txt)
+                from sw2robot.exporter.export import build
+                try:
+                    build(cls.pkg_dir, config_path=yml)
+                except Exception as e:
+                    return self._send_json(
+                        {"error": f"rebuild failed: {e}"}, 500)
+                print(f"[sw2robot.web] remove_port: {pname}")
+                return self._send_json({"ok": True, "name": pname})
             if parsed.path == "/api/reset_names":
                 # drop ALL rename overlays -> every link/joint back to default
                 cls = type(self)
