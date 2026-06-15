@@ -202,6 +202,16 @@ def sweep_limits(robot, meshes, step_deg=6.0, max_deg=180.0, margin_deg=2.0,
         # (convex hulls touch at rest and mask real collisions -> limits too
         # wide).  Callers that already built a hull `sc` (the live UI) pass it.
         sc = SelfCollision(robot, meshes, margin=margin_m, hull=hull)
+    # Hull PRE-FILTER world.  A convex hull CONTAINS its mesh, so if two hulls
+    # do not collide the meshes inside them cannot either: a hull-clear angle is
+    # provably mesh-clear.  The coarse scan runs on these cheap hulls and only
+    # escalates to the exact mesh where a hull flags a possible collision, so a
+    # free joint (the common, expensive case -- it scans the whole range finding
+    # nothing) costs only hull queries.  Result-identical to the pure-mesh scan;
+    # see `_hull_clear`.  (When the caller already asked for a hull `sc`, reuse
+    # it rather than build a redundant second hull world.)
+    sc_hull = sc if hull else SelfCollision(robot, meshes, margin=margin_m,
+                                            hull=True)
 
     step = np.radians(step_deg)
     nmax = max(1, int(np.radians(max_deg) / step))
@@ -210,19 +220,25 @@ def sweep_limits(robot, meshes, step_deg=6.0, max_deg=180.0, margin_deg=2.0,
 
     import fcl
 
+    _req = fcl.CollisionRequest(num_max_contacts=1000, enable_contact=True)
+
     # Reuse the fcl objects SelfCollision already built (their BVH is built
     # ONCE here).  Per joint we register the prebuilt objects into throwaway
     # broadphase managers -- registerObjects does NOT rebuild the BVH, so a
     # query is ~1 ms even on the real (non-hull) meshes; rebuilding a manager
     # via trimesh.add_object instead cost ~2 s/joint (the whole sweep was 55 s).
-    objs = {n: sc.cm._objs[n]["obj"] for n in sc.names}
-    geom2name = {id(sc.cm._objs[n]["geom"]): n for n in sc.names}
-    _req = fcl.CollisionRequest(num_max_contacts=1000, enable_contact=True)
+    def _world(world):
+        objs = {n: world.cm._objs[n]["obj"] for n in world.names}
+        geom2name = {id(world.cm._objs[n]["geom"]): n for n in world.names}
 
-    def _set_obj_T(n):
-        T = sc._link[n].worldcoords().T()
-        objs[n].setTranslation(np.ascontiguousarray(T[:3, 3]))
-        objs[n].setRotation(np.ascontiguousarray(T[:3, :3]))
+        def set_T(n):
+            T = world._link[n].worldcoords().T()
+            objs[n].setTranslation(np.ascontiguousarray(T[:3, 3]))
+            objs[n].setRotation(np.ascontiguousarray(T[:3, :3]))
+        return objs, geom2name, set_T
+
+    raw_objs, raw_g2n, raw_set_T = _world(sc)
+    hull_objs, hull_g2n, hull_set_T = _world(sc_hull)
 
     def _moving_set(J):
         # Which links ACTUALLY move when only J rotates?  Determined by probing
@@ -255,51 +271,81 @@ def sweep_limits(robot, meshes, step_deg=6.0, max_deg=180.0, margin_deg=2.0,
                     progress(J.name, out[J.name])
                 continue
             # static links don't move while J sweeps -> set their transforms
-            # once; only the moving set updates per angle.
-            st_mgr = fcl.DynamicAABBTreeCollisionManager()
-            st_mgr.registerObjects([objs[n] for n in static])
-            for n in static:
-                _set_obj_T(n)
-            st_mgr.setup()
-            mv_mgr = fcl.DynamicAABBTreeCollisionManager()
-            mv_mgr.registerObjects([objs[n] for n in moving])
-            mv_mgr.setup()
+            # once; only the moving set updates per angle.  Build the same
+            # throwaway broadphase managers for BOTH the exact-mesh world and
+            # the hull pre-filter world, over the same moving/static split.
+            def _make_pairs(objs, geom2name, set_T, margin):
+                st_mgr = fcl.DynamicAABBTreeCollisionManager()
+                st_mgr.registerObjects([objs[n] for n in static])
+                for n in static:
+                    set_T(n)
+                st_mgr.setup()
+                mv_mgr = fcl.DynamicAABBTreeCollisionManager()
+                mv_mgr.registerObjects([objs[n] for n in moving])
+                mv_mgr.setup()
 
-            def _pairs(mag, direction):
-                J.joint_angle(direction * mag)
-                for n in moving:
-                    _set_obj_T(n)
-                mv_mgr.update()          # refresh AABBs after the move
-                cdata = fcl.CollisionData(request=_req)
-                mv_mgr.collide(st_mgr, cdata, fcl.defaultCollisionCallback)
-                depth = {}
-                for c in cdata.result.contacts:
-                    a = geom2name.get(id(c.o1))
-                    b = geom2name.get(id(c.o2))
-                    if a and b:
-                        k = frozenset((a, b))
-                        depth[k] = max(depth.get(k, 0.0),
-                                       abs(c.penetration_depth))
-                return {k for k, v in depth.items() if v > sc.margin}
+                def _pairs(mag, direction):
+                    J.joint_angle(direction * mag)
+                    for n in moving:
+                        set_T(n)
+                    mv_mgr.update()          # refresh AABBs after the move
+                    cdata = fcl.CollisionData(request=_req)
+                    mv_mgr.collide(st_mgr, cdata, fcl.defaultCollisionCallback)
+                    depth = {}
+                    for c in cdata.result.contacts:
+                        a = geom2name.get(id(c.o1))
+                        b = geom2name.get(id(c.o2))
+                        if a and b:
+                            k = frozenset((a, b))
+                            depth[k] = max(depth.get(k, 0.0),
+                                           abs(c.penetration_depth))
+                    return {k for k, v in depth.items() if v > margin}
+                return _pairs
 
-            # baseline: moving-vs-static pairs already in contact at HOME
-            ignore = _pairs(0.0, 1) | sc.baseline
+            raw_pairs = _make_pairs(raw_objs, raw_g2n, raw_set_T, sc.margin)
+            hull_pairs = _make_pairs(hull_objs, hull_g2n, hull_set_T,
+                                     sc_hull.margin)
+
+            # baseline: moving-vs-static pairs already in contact at HOME (mesh)
+            ignore = raw_pairs(0.0, 1) | sc.baseline
 
             def _collides(mag, direction):
-                new = _pairs(mag, direction) - ignore
+                new = raw_pairs(mag, direction) - ignore
                 return (tuple(sorted(next(iter(new)))) if new else None)
+
+            def _hull_clear(mag, direction):
+                # Hull CONTAINS the mesh, so no hull collision => no mesh
+                # collision: this angle is skipped without an exact-mesh query.
+                # Subtract the MESH `ignore` (not a hull baseline) so a pair that
+                # only the hull touches at rest is never absorbed into the
+                # baseline and so can never mask a real mesh collision -- this is
+                # what keeps the pre-filter result-identical to a pure-mesh scan.
+                return not (hull_pairs(mag, direction) - ignore)
 
             lim = {}
             hit = {}
             for direction in (+1, -1):
                 clear_mag, hit_mag, hit_pair = 0.0, None, None
+                # The hull pre-filter pays off only while the hulls actually
+                # separate as J turns.  Some links have fat hulls that overlap a
+                # static link at rest and never separate (a non-adjacent pair the
+                # mesh never touches); for them every step would escalate, so the
+                # hull query is pure overhead.  Treat the hull as "innocent until
+                # useless": the first time it flags a step that the mesh finds
+                # clear (a persistent false positive), stop consulting it for the
+                # rest of this direction and scan the mesh directly.
+                use_hull = True
                 for k in range(1, nmax + 1):
                     mag = k * step
-                    pair = _collides(mag, direction)
+                    if use_hull and _hull_clear(mag, direction):
+                        clear_mag = mag          # hull clear => mesh clear
+                        continue
+                    pair = _collides(mag, direction)  # hull flagged: check mesh
                     if pair:
                         hit_mag, hit_pair = mag, pair
                         break
-                    clear_mag = mag
+                    clear_mag = mag              # hull false positive; mesh clear
+                    use_hull = False             # hull is useless here; drop it
                 # bisect [clear_mag, hit_mag] to the precise boundary
                 if refine and hit_mag is not None:
                     a, b = clear_mag, hit_mag
