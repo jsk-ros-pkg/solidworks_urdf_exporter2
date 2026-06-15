@@ -1,6 +1,7 @@
-# solidworks_urdf_exporter2
+# sw2robot
 
-Turn a SolidWorks assembly into a URDF, then clean it up in the browser.
+**SolidWorks → robot (URDF) converter.** Turn a SolidWorks assembly into a
+URDF, then clean it up in the browser.
 
 One import package, with two subpackages:
 
