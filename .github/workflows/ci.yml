@@ -9,6 +9,9 @@ name: CI
 #   build-check -- freezes the web editor .exe on Windows x64 exactly like
 #                  release.yml, but does NOT upload or release it; it just
 #                  proves the freeze still succeeds.
+#   e2e         -- builds the bundled fingertip example into a URDF package,
+#                  serves it, and drives the web editor with puppeteer +
+#                  headless Chrome (guards the browser UI, incl. the i18n).
 
 on:
   push:
@@ -66,3 +69,65 @@ jobs:
             Write-Error "PyInstaller did not produce the expected .exe"
             exit 1
           }
+
+  e2e:
+    name: web e2e (puppeteer)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Chrome
+        id: chrome
+        uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ".[ui]"
+
+      - name: Build the fingertip example into a URDF package
+        run: |
+          python -m sw2robot.exporter.build examples/fingertip \
+            --config examples/fingertip/fingertip.joints.yaml
+
+      - name: Start the web editor server
+        run: |
+          nohup python -m sw2robot.editor.webserver examples/fingertip --port 8090 \
+            > server.log 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:8090/api/info >/dev/null 2>&1; then
+              echo "server up"; exit 0
+            fi
+            sleep 1
+          done
+          echo "server did not come up"; cat server.log; exit 1
+
+      - name: Install e2e dependencies
+        working-directory: tests/e2e
+        run: npm install
+
+      - name: Run the e2e suite
+        working-directory: tests/e2e
+        env:
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+          # headless WebGL needs SwiftShader (three.js); the minimal bundled
+          # fixture has no movable joints, so run the smoke subset.
+          CHROME_ARGS: '--no-sandbox,--disable-setuid-sandbox,--enable-unsafe-swiftshader,--use-gl=angle,--use-angle=swiftshader'
+          E2E_SMOKE: '1'
+        run: node run.mjs http://localhost:8090
+
+      - name: Server log (on failure)
+        if: failure()
+        run: cat server.log
