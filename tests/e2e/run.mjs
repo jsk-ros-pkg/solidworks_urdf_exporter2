@@ -17,6 +17,12 @@ import { fileURLToPath } from 'node:url';
 // regardless of the test machine's browser locale (?lang= overrides detection)
 const BASE = process.argv[2] ?? 'http://localhost:8090';
 const URL = BASE + (BASE.includes('?') ? '&' : '?') + 'lang=ja';
+
+// Smoke mode (E2E_SMOKE=1, used by CI against the tiny bundled fingertip
+// example): skip the sections that need a package with movable joints /
+// many meshes (the auto-limits sweep), which the minimal fixture can't
+// exercise.  Local full runs against a real package leave it unset.
+const SMOKE = process.env.E2E_SMOKE === '1';
 const CHROME = process.env.CHROME_PATH
   ?? 'C:/Program Files/Google/Chrome/Application/chrome.exe';
 
@@ -27,8 +33,13 @@ const check = (name, ok, detail = '') => {
 };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+// CI (headless Linux) needs --no-sandbox etc.; pass them via CHROME_ARGS so
+// local runs keep their default launch flags untouched.
+const EXTRA_ARGS = (process.env.CHROME_ARGS ?? '')
+  .split(',').map(s => s.trim()).filter(Boolean);
 const browser = await puppeteer.launch({
-  executablePath: CHROME, headless: 'new', args: ['--disable-gpu'] });
+  executablePath: CHROME, headless: 'new',
+  args: ['--disable-gpu', ...EXTRA_ARGS] });
 const page = await browser.newPage();
 const pageErrors = [];
 page.on('pageerror', e => pageErrors.push(e.message.split('\n')[0]));
@@ -170,8 +181,11 @@ const descended = await page.evaluate(async () => {
   await new Promise(r => setTimeout(r, 1000));
   return document.getElementById('fspath').textContent;
 });
-check('fs: descend into a folder', !!descended && descended !== fs1.path,
-      `-> "${descended}"`);
+if (descended === null) {
+  console.log('SKIP  fs: descend into a folder (no sub-folder under the browse root)');
+} else {
+  check('fs: descend into a folder', descended !== fs1.path, `-> "${descended}"`);
+}
 await page.click('#fsclose');
 const fsClosed = await page.evaluate(
   () => document.getElementById('fsmodal').style.display);
@@ -306,6 +320,10 @@ if (colReady) {
 // The flow does an async rebuild+reload (~20s for 126 meshes), so POLL for
 // the expected joint state rather than fixed sleeps -- and only undo AFTER
 // the apply-reload has landed, or the two reloads race.
+if (SMOKE) {
+  console.log('SKIP  auto-limits + box-select (smoke mode: minimal fixture has no movable joints)');
+}
+if (!SMOKE) {
 const countContinuous = () => page.evaluate(() =>
   Object.values(document.getElementById('viewer').robot?.joints ?? {})
     .filter(j => j.jointType === 'continuous').length);
@@ -382,6 +400,7 @@ let movRestored = movAfter;
 for (let i = 0; i < 40; i++) { await sleep(2000); movRestored = await movable(); if (movRestored === movBefore) break; }
 check('box-select: undo restores joint types',
       movRestored === movBefore, `back to ${movRestored}`);
+}  // end if (!SMOKE) -- auto-limits + box-select block
 
 // ---- 10. extraction loading UI (mock /api/extract*, no SolidWorks) ---------
 // B: determinate bar during mesh export; C: cold-start reassurance; seconds.
