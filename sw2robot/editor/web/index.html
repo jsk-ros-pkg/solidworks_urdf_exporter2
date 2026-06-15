@@ -139,6 +139,8 @@
   button { background: #3a3f48; color: #ddd; border: 1px solid #555;
            border-radius: 4px; padding: 4px 10px; cursor: pointer; }
   button:hover { background: #474d58; }
+  #langbar button.active { background: #3d6fb4; border-color: #7db8ff;
+                           color: #fff; }
   #hint { color: #666; font-size: 11px; margin: 8px 0; }
   #log { height: 150px; overflow-y: auto; background: #15171a;
          border: 1px solid #333; border-radius: 4px; padding: 6px;
@@ -189,37 +191,39 @@
 </script>
 </head>
 <body>
-<div id="droptip">drop a module folder or a .sldasm here</div>
+<div id="droptip" data-i18n="ui.droptip">drop a module folder or a .sldasm here</div>
 <div id="app">
   <div id="viewwrap">
     <urdf-manipulator id="viewer" up="Z" highlight-color="#ffb86b">
     </urdf-manipulator>
     <div id="views">
-      <button data-v="iso"   title="isometric">◇ Iso</button>
+      <button data-v="iso"   data-i18n-title="t.iso" title="isometric">◇ Iso</button>
       <button data-v="front" title="+X">Front</button>
       <button data-v="back"  title="−X">Back</button>
       <button data-v="left"  title="−Y">Left</button>
       <button data-v="right" title="+Y">Right</button>
       <button data-v="top"   title="+Z">Top</button>
       <button data-v="bottom" title="−Z">Btm</button>
-      <button id="axes" class="toggle active" title="joint axes">axes
+      <button id="axes" class="toggle active" data-i18n-title="t.axes"
+              title="joint axes">axes
       </button>
-      <button id="origin" class="toggle active" title="root origin triad">
+      <button id="origin" class="toggle active" data-i18n-title="t.origin"
+              title="root origin triad">
         origin</button>
-      <button id="tf" class="toggle"
+      <button id="tf" class="toggle" data-i18n-title="t.tf"
               title="TF view: frame triads at every link + parent lines, meshes dimmed">tf</button>
-      <button id="alignmode" class="toggle"
+      <button id="alignmode" class="toggle" data-i18n-title="t.align"
               title="click a face: root origin moves there, +Z = face normal">⊕ align</button>
-      <button id="portmode" class="toggle"
+      <button id="portmode" class="toggle" data-i18n-title="t.port"
               title="click a face: add a coordinate-only link (dummy_link port) there, +Z = face normal; click a port marker to remove it">⊕ port</button>
-      <button id="vorigin"
+      <button id="vorigin" data-i18n-title="t.vorigin"
               title="CAD全体を動かして base_link を世界原点(0,0,0)に合わせる">⌖ origin</button>
-      <button id="grid" class="toggle active"
+      <button id="grid" class="toggle active" data-i18n-title="t.grid"
               title="ground grid at root Z=0">grid</button>
-      <button id="posedrag" class="toggle"
+      <button id="posedrag" class="toggle" data-i18n-title="t.posedrag"
               title="OFF: ドラッグで視点回転 / ON: リンクをドラッグして関節を動かす">
         🖐 pose</button>
-      <select id="gridcap" title="grid pitch"
+      <select id="gridcap" data-i18n-title="t.gridcap" title="grid pitch"
               style="font-size:11px;color:#334;align-self:center;
                      background:#ffffffcc;border:1px solid #99a;
                      border-radius:3px;padding:1px 4px"></select>
@@ -235,9 +239,10 @@
          transform:translate(-50%,-50%);z-index:4;display:none;
          text-align:center;color:#7a828e;pointer-events:none">
       <div style="font-size:42px">⤓</div>
-      <div style="font-size:16px;margin-top:6px">
+      <div style="font-size:16px;margin-top:6px" data-i18n="ui.emptyDrop">
         ここに .sldasm / パッケージフォルダを Drag &amp; Drop</div>
-      <div style="font-size:12px;margin-top:4px;color:#5a6472">
+      <div style="font-size:12px;margin-top:4px;color:#5a6472"
+           data-i18n="ui.emptyPick">
         または右の「📄 ファイルを開く…」「📁 フォルダ…」から選択</div>
     </div>
     <div id="fsmodal" style="position:absolute;left:50%;top:8%;
@@ -266,10 +271,11 @@
          border:1px solid #444;border-radius:4px;padding:4px 8px;
          font-size:12px">
       <span id="selname" style="color:#55d6ff"></span>
-      <button id="seleye" title="show/hide this link">👁</button>
-      <button id="selexclude"
+      <button id="seleye" data-i18n-title="row.eyeTitle"
+              title="show/hide this link">👁</button>
+      <button id="selexclude" data-i18n-title="t.selexclude"
               title="URDFから除外する (yaml exclude: に追加、Ctrl+Zで戻る)">🗑</button>
-      <button id="selroot">⌂ make root</button>
+      <button id="selroot" data-i18n="ui.selroot">⌂ make root</button>
       <button id="seldesel">✕</button>
     </div>
     <div id="boxsel" style="position:absolute;z-index:6;display:none;
@@ -280,30 +286,41 @@
          border-radius:6px;padding:6px 10px;font-size:12px;color:#dde;
          box-shadow:0 4px 16px #0007">
       <span id="bulkcount" style="color:#8fd0ff"></span>
-      <span style="color:#8a93a3">→ 一括設定:</span>
-      <button data-bt="fixed">固定</button>
-      <button data-bt="revolute">回転</button>
-      <button data-bt="continuous">連続回転</button>
-      <button data-bt="prismatic">直動</button>
+      <span style="color:#8a93a3" data-i18n="ui.bulkArrow">→ 一括設定:</span>
+      <button data-bt="fixed" data-i18n="ui.btFixed">固定</button>
+      <button data-bt="revolute" data-i18n="ui.btRevolute">回転</button>
+      <button data-bt="continuous" data-i18n="ui.btContinuous">連続回転</button>
+      <button data-bt="prismatic" data-i18n="ui.btPrismatic">直動</button>
       <button id="bulkclose" style="margin-left:4px">✕</button>
     </div>
     <div id="linkinfo"></div>
   </div>
   <div id="panel">
+    <div id="langbar" style="display:flex;gap:4px;justify-content:flex-end;
+         margin-bottom:2px" data-i18n-title="lang.title" title="display language">
+      <button data-lang="en" style="font-size:11px;padding:1px 7px">EN</button>
+      <button data-lang="ja" style="font-size:11px;padding:1px 7px">日本語</button>
+    </div>
+    <!-- #title / #status carry dynamic text (package name, live status), so
+         they are NOT data-i18n (that would reset them on a language switch);
+         their initial localized value is set in JS instead. -->
     <h1 id="title">sw2robot viewer</h1>
     <div id="status">starting…</div>
     <div id="picker">
-      <button id="useactive" style="display:none;width:100%;margin:2px 0">
+      <button id="useactive" style="display:none;width:100%;margin:2px 0"
+              data-i18n="ui.useactive">
         🎯 Extract the assembly open in SolidWorks</button>
       <div id="swstat" style="font-size:11px;color:#8a93a3"></div>
       <div style="display:flex;gap:4px">
-        <button id="openfile" style="flex:1"
+        <button id="openfile" style="flex:1" data-i18n="ui.openfile"
+                data-i18n-title="t.openfile"
                 title="OSのファイルダイアログ (.sldasm / .urdf)">
           📄 ファイルを開く…</button>
-        <button id="openfolder" style="flex:1"
+        <button id="openfolder" style="flex:1" data-i18n="ui.openfolder"
+                data-i18n-title="t.openfolder"
                 title="OSのフォルダダイアログ (パッケージフォルダ)">
           📁 フォルダ…</button>
-        <button id="fsbrowse"
+        <button id="fsbrowse" data-i18n-title="t.fsbrowse"
                 title="サーバー側のファイルブラウザ (ダイアログで見つからない時)">
           🗄</button>
       </div>
@@ -313,21 +330,28 @@
              multiple style="display:none">
     </div>
     <div>
-      <button id="reset">Reset pose</button>
-      <button id="undo" disabled title="undo (Ctrl+Z)">↶</button>
-      <button id="redo" disabled title="redo (Ctrl+Y)">↷</button>
-      <button id="renamelistbtn" title="関節名・リンク名を一覧で改名">≣ 改名</button>
-      <button id="bug" title="壊れたらこれ: 操作ログ+状態をサーバーに送る">🐞
+      <button id="reset" data-i18n="ui.reset">Reset pose</button>
+      <button id="undo" disabled data-i18n-title="hist.undoEmpty"
+              title="undo (Ctrl+Z)">↶</button>
+      <button id="redo" disabled data-i18n-title="hist.redoEmpty"
+              title="redo (Ctrl+Y)">↷</button>
+      <button id="renamelistbtn" data-i18n="ui.renamelist"
+              data-i18n-title="t.renamelist"
+              title="関節名・リンク名を一覧で改名">≣ 改名</button>
+      <button id="bug" data-i18n-title="t.bug"
+              title="壊れたらこれ: 操作ログ+状態をサーバーに送る">🐞
       </button>
     </div>
     <div>
-      <button id="autolimits" style="width:100%"
+      <button id="autolimits" style="width:100%" data-i18n="ui.autolimits"
+              data-i18n-title="t.autolimits"
               title="各回転関節を ±2π(±360°)の範囲で自己干渉が起きる角度まで掃引(粗スキャン+二分探索)して lower/upper を自動設定。±2π まで自由に回る関節は continuous に。Ctrl+Zで戻せます">
         🛠 自動関節リミット (自己干渉, ±2π)</button>
     </div>
     <div id="rootbox" style="border:1px solid #333;border-radius:4px;
          padding:6px 8px;margin:6px 0;background:#1e2126;font-size:12px">
-      <div style="color:#8a93a3;font-size:11px;margin-bottom:4px">
+      <div style="color:#8a93a3;font-size:11px;margin-bottom:4px"
+           data-i18n="ui.rootframe">
         root frame (rotate about current axes / set numbers)</div>
       <div style="display:flex;gap:3px;flex-wrap:wrap">
         <button class="rot" data-ax="0" data-s="1"
@@ -351,19 +375,21 @@
         <span style="color:#8a93a3">xyz mm</span>
         <input class="rnum" id="r_x"><input class="rnum" id="r_yy">
         <input class="rnum" id="r_z">
-        <span style="color:#666;font-size:10px">(Enter で即適用)</span>
+        <span style="color:#666;font-size:10px"
+              data-i18n="ui.enterApply">(Enter で即適用)</span>
       </div>
     </div>
     <div id="bulk">
-      <input type="checkbox" id="selall" title="select all">
-      <span>selected →</span>
+      <input type="checkbox" id="selall" data-i18n-title="t.selall"
+             title="select all">
+      <span data-i18n="ui.selectedArrow">selected →</span>
       <select id="bulktype">
         <option value="fixed">fixed</option>
         <option value="revolute">revolute</option>
         <option value="continuous">continuous</option>
         <option value="prismatic">prismatic</option>
       </select>
-      <button id="bulkset">Set</button>
+      <button id="bulkset" data-i18n="ui.set">Set</button>
       <button id="exclchip" style="display:none;font-size:11px"></button>
     </div>
     <div id="joints"></div>
@@ -373,15 +399,16 @@
         📦 Export</div>
       <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">
         <a id="expdae" href="/api/export/zip?meshes=dae" download>
-          <button title="portable ROS package (<name>_description): package://
+          <button data-i18n="ui.expdae" data-i18n-title="t.expdae"
+                  title="portable ROS package (<name>_description): package://
 URLs, visual = colour COLLADA .dae, collision = .stl (loads in RViz/Gazebo)">
             ⬇ ROS package</button></a>
         <a id="expglb" href="/api/export/zip?meshes=glb" download>
-          <button title="uniform .glb meshes (colour kept) for three.js /
+          <button data-i18n-title="t.expglb" title="uniform .glb meshes (colour kept) for three.js /
 skrobot / native-mesh consumers (not RViz-loadable)">⬇ glb</button></a>
       </div>
     </div>
-    <div id="hint">left-drag: 視点回転 · right-drag: pan · wheel: zoom ·
+    <div id="hint" data-i18n="ui.hint">left-drag: 視点回転 · right-drag: pan · wheel: zoom ·
       クリックでリンク選択 · 関節はパネルのスライダーで操作
       （🖐 pose ON でリンクをドラッグして関節を動かせます）</div>
     <div id="log"></div>
@@ -391,6 +418,441 @@ skrobot / native-mesh consumers (not RViz-loadable)">⬇ glb</button></a>
 <!-- plain (non-module) script: runs even if ES-module loading breaks, so
      errors during CDN imports are always visible on the page -->
 <script>
+  // ---- i18n: DISPLAY language only (EN / 日本語).  NOTE: this never touches
+  // any filesystem path, package name, or Google-Drive "shared drives" mount
+  // name -- those are real on-disk identifiers (they carry the SolidWorks
+  // paths) and are resolved server-side; we only translate UI chrome. --------
+  const I18N = {
+    // boot / module load
+    'boot.pageLoaded': { en: 'page loaded; importing three.js + urdf-loader from unpkg.com …',
+                         ja: 'ページを読み込みました。three.js + urdf-loader を unpkg.com から取得中 …' },
+    'boot.jsError': { en: a => `JS error: ${a.msg} (${a.file}:${a.line})`,
+                      ja: a => `JSエラー: ${a.msg} (${a.file}:${a.line})` },
+    'boot.promiseRejected': { en: a => `promise rejected: ${a.reason}`,
+                              ja: a => `Promise が拒否されました: ${a.reason}` },
+    'load.ok': { en: 'three.js + urdf-loader loaded ✓', ja: 'three.js + urdf-loader を読み込みました ✓' },
+    'load.fail': { en: a => `CDN import failed: ${a.e}`, ja: a => `CDN の読み込みに失敗: ${a.e}` },
+    'load.failHint': { en: '→ check internet access / proxy for unpkg.com, then reload',
+                       ja: '→ unpkg.com へのインターネット接続/プロキシを確認してリロードしてください' },
+    // common
+    'common.close': { en: 'close', ja: '閉じる' },
+    'common.cancel': { en: 'cancel', ja: 'キャンセル' },
+    'common.na': { en: '(n/a)', ja: '(なし)' },
+    'common.none': { en: '(none)', ja: '(なし)' },
+    'common.openFirst': { en: 'open a package first', ja: 'まずパッケージを開いてください' },
+    'common.rebuilding': { en: a => `${a.what} + rebuilding …`, ja: a => `${a.what} ・再ビルド中 …` },
+    // language toggle
+    'lang.title': { en: 'display language', ja: '表示言語' },
+    // status line
+    'status.starting': { en: 'starting…', ja: '起動中…' },
+    'status.rebuilding': { en: '⏳ rebuilding URDF …', ja: '⏳ URDF を再ビルド中 …' },
+    'status.loadingUrdf': { en: 'loading URDF …', ja: 'URDF を読み込み中 …' },
+    'status.summary': { en: a => `${a.links} links · ${a.joints} movable joints · meshes ${a.done}/${a.want}${a.tail}`,
+                        ja: a => `${a.links} リンク · 可動関節 ${a.joints} · メッシュ ${a.done}/${a.want}${a.tail}` },
+    'status.summaryFail': { en: a => ` (${a.n} failed)`, ja: a => ` (${a.n} 件失敗)` },
+    'status.summaryOk': { en: ' ✓', ja: ' ✓' },
+    // mesh loading
+    'mesh.tick': { en: a => `mesh ${a.i}/${a.n} ${a.mark} ${a.name}${a.detail}`,
+                   ja: a => `メッシュ ${a.i}/${a.n} ${a.mark} ${a.name}${a.detail}` },
+    'mesh.status': { en: a => `loading meshes ${a.i}/${a.n}${a.fail}`,
+                     ja: a => `メッシュ読み込み中 ${a.i}/${a.n}${a.fail}` },
+    'mesh.statusFail': { en: a => ` (${a.n} failed)`, ja: a => ` (${a.n} 件失敗)` },
+    'mesh.barText': { en: a => `mesh ${a.i}/${a.n}  ${a.name}`, ja: a => `メッシュ ${a.i}/${a.n}  ${a.name}` },
+    'mesh.barSub': { en: 'loading meshes …', ja: 'メッシュ読み込み中 …' },
+    'mesh.unsupported': { en: 'unsupported mesh format', ja: 'サポートされていないメッシュ形式' },
+    'mesh.loadFailed': { en: 'load failed', ja: '読み込み失敗' },
+    'mesh.allLoaded': { en: 'all meshes loaded ✓', ja: 'メッシュをすべて読み込みました ✓' },
+    // exclude chip
+    'excl.chip': { en: a => `🗑 excluded: ${a.n} ↩`, ja: a => `🗑 除外: ${a.n} ↩` },
+    'excl.restoreAll': { en: '(click to restore all)', ja: '(クリックで全部復元)' },
+    'excl.excluding': { en: a => `excluding ${a.l} from the URDF`, ja: a => `${a.l} を URDF から除外` },
+    'excl.restoring': { en: 'restoring all excluded components', ja: '除外したコンポーネントをすべて復元' },
+    'excl.now': { en: a => `URDF exclude list now: ${a.n} item(s) ✓ (Ctrl+Z to restore)`,
+                  ja: a => `URDF 除外リスト: 現在 ${a.n} 件 ✓ (Ctrl+Z で復元可)` },
+    'excl.fail': { en: a => `exclude failed: ${a.e}`, ja: a => `除外に失敗: ${a.e}` },
+    // rename
+    'rename.resetOk': { en: a => `reset ${a.kind} name to default: ${a.name}`,
+                        ja: a => `${a.kind} 名をデフォルトに戻しました: ${a.name}` },
+    'rename.ok': { en: a => `renamed ${a.kind}: ${a.old} → ${a.new}`,
+                   ja: a => `改名 ${a.kind}: ${a.old} → ${a.new}` },
+    'rename.fail': { en: a => `${a.reset ? 'reset' : 'rename'} failed: ${a.e}`,
+                     ja: a => `${a.reset ? 'リセット' : '改名'}失敗: ${a.e}` },
+    'rename.confirmResetAll': { en: 'Revert ALL joint/link names to their defaults?',
+                                ja: 'すべての joint 名・link 名をデフォルトに戻しますか？' },
+    'rename.resetAllOk': { en: 'all names reverted to defaults', ja: 'すべての名前をデフォルトに戻しました' },
+    'rename.resetAllFail': { en: a => `reset failed: ${a.e}`, ja: a => `リセット失敗: ${a.e}` },
+    'rename.inlineTitle': { en: 'double-click to rename (empty + Enter = default name)',
+                            ja: 'ダブルクリックで改名（空にして Enter でデフォルト名に戻す）' },
+    'rename.emptyResetTitle': { en: 'empty + Enter = back to default name', ja: '空にして Enter でデフォルト名に戻す' },
+    'rename.listTitle': { en: 'rename joints / links', ja: '関節名・リンク名の改名' },
+    'rename.listHelp': { en: 'edit a value + Enter (letters, digits, _ ; not starting with a digit); empty = back to default',
+                         ja: '値を編集して Enter（英数字と _、先頭は数字不可）・空にするとデフォルトに戻る' },
+    'rename.thJoint': { en: 'joint name', ja: 'joint 名' },
+    'rename.thParent': { en: 'parent', ja: 'parent' },
+    'rename.thChild': { en: 'child link name', ja: 'child link 名' },
+    'rename.thType': { en: 'type', ja: 'type' },
+    'rename.resetAllBtn': { en: '↺ reset all to defaults', ja: '↺ 全デフォルト名に戻す' },
+    'rename.resetAllBtnTitle': { en: 'revert every joint/link name to its original',
+                                 ja: 'すべての joint 名・link 名を元の名前に戻す' },
+    // joint rows / tree
+    'row.jnameTitle': { en: a => `joint: ${a.name}\n${a.parent} → ${a.child}`,
+                        ja: a => `関節: ${a.name}\n${a.parent} → ${a.child}` },
+    'row.eyeTitle': { en: 'show/hide this link', ja: 'このリンクを表示/非表示' },
+    'row.mkrootTitle': { en: 'make this link the root (re-roots the tree + rebuilds)',
+                         ja: 'このリンクをルートにする（ツリーを再ルート化して再ビルド）' },
+    'row.rootLinkTitle': { en: 'root link', ja: 'ルートリンク' },
+    'axes.drawn': { en: a => `${a.k} joint axes drawn, sized per link (red=revolute orange=continuous blue=prismatic purple=mimic)`,
+                    ja: a => `関節軸を ${a.k} 本描画（リンクごとにサイズ調整。赤=回転 橙=連続回転 青=直動 紫=mimic）` },
+    'axes.ghostSuffix': { en: a => `; ${a.g} ghost axes on fixed joints (hover to see)`,
+                          ja: a => `；固定関節のゴースト軸 ${a.g} 本（ホバーで表示）` },
+    // pose / orbit
+    'pose.on': { en: 'pose: drag a link to move its joint', ja: 'pose: リンクをドラッグで関節を動かす' },
+    'pose.off': { en: 'orbit: drag to rotate the view (use the panel sliders for joints)',
+                  ja: 'orbit: ドラッグで視点回転（関節はパネルのスライダーで）' },
+    'pose.restored': { en: a => `pose restored (${a.n} joints)`, ja: a => `姿勢を復元しました（${a.n} 関節）` },
+    // collision
+    'col.modelErr': { en: a => `collision model: ${a.e}`, ja: a => `干渉モデル: ${a.e}` },
+    'col.ready': { en: a => `collision model ready — ${a.n} rest-pose contact pairs form the ignored baseline`,
+                   ja: a => `干渉モデル準備完了 — 初期姿勢の接触ペア ${a.n} 件をベースラインとして無視` },
+    'col.label': { en: a => `⚠ ${a.at}collision: ${a.list}`, ja: a => `⚠ ${a.at}干渉: ${a.list}` },
+    // joint panel
+    'jp.title': { en: '🔧 joint editor', ja: '🔧 関節エディタ' },
+    'jp.lblLink': { en: 'link', ja: 'リンク' },
+    'jp.lblJoint': { en: 'joint', ja: '関節' },
+    'jp.lblType': { en: 'type', ja: '種類' },
+    'jp.limit': { en: a => `limit ${a.lo} … ${a.hi} ${a.unit}${a.rad}`,
+                  ja: a => `可動域 ${a.lo} … ${a.hi} ${a.unit}${a.rad}` },
+    'jp.mimic': { en: a => `driven by <b>${a.mn}</b> (mimic)`, ja: a => `<b>${a.mn}</b> に追従 (mimic)` },
+    'jp.fixed': { en: 'fixed — pick a type above to add motion', ja: 'fixed — 上で種類を選ぶと可動になります' },
+    // link info
+    'li.jointAxis': { en: 'joint axis', ja: '関節軸' },
+    'li.parentJoint': { en: 'parent joint', ja: '親関節' },
+    'li.rootLink': { en: '(root link)', ja: '(ルートリンク)' },
+    'li.bbox': { en: 'bbox', ja: '境界ボックス' },
+    'li.mass': { en: 'mass', ja: '質量' },
+    'li.com': { en: 'CoM 🟣', ja: '重心 🟣' },
+    'li.inertia': { en: 'inertia', ja: '慣性' },
+    'li.color': { en: 'color', ja: '色' },
+    'li.material': { en: 'material', ja: '材質' },
+    'li.mesh': { en: 'mesh', ja: 'メッシュ' },
+    'li.override': { en: '(override)', ja: '(上書き)' },
+    'li.swUnset': { en: '(unset in SW)', ja: '(SWで未設定)' },
+    'li.reextract': { en: '(re-extract to get)', ja: '(再抽出で取得)' },
+    'li.setMaterial': { en: 'set material', ja: 'set 材質' },
+    'li.densityPlaceholder': { en: '— override density —', ja: '— 密度を上書き —' },
+    'li.densityReset': { en: 'back to SW value (clear override)', ja: 'SW値に戻す (上書き解除)' },
+    'li.densityPrompt': { en: 'density (kg/m³):', ja: '密度 (kg/m³):' },
+    'li.swValue': { en: '(SW value)', ja: '(SW値)' },
+    'li.settingDensity': { en: a => `setting density of ${a.name} -> ${a.d} + rebuilding …`,
+                           ja: a => `${a.name} の密度を ${a.d} に設定して再ビルド中 …` },
+    'li.densityOk': { en: 'density updated ✓ (mass/inertia rebuilt)', ja: '密度を更新しました ✓（質量・慣性を再計算）' },
+    'li.densityFail': { en: a => `set material failed: ${a.e}`, ja: a => `材質設定に失敗: ${a.e}` },
+    'li.matNylon': { en: 'Nylon', ja: 'ナイロン' },
+    'li.matFR4': { en: 'FR4 board', ja: 'FR4基板' },
+    'li.matAlu': { en: 'Aluminium 6061', ja: 'アルミ6061' },
+    'li.matSteel': { en: 'Iron/Steel', ja: '鉄/鋼' },
+    'li.matTitanium': { en: 'Titanium', ja: 'チタン' },
+    'li.matCustom': { en: 'custom…', ja: 'カスタム…' },
+    // selection
+    'sel.status': { en: a => `selected: ${a.name}`, ja: a => `選択中: ${a.name}` },
+    // bulk type change
+    'bulk.noneSelected': { en: 'no joints selected (use the checkboxes / select-all)',
+                           ja: '関節が選択されていません（チェックボックス / 全選択を使ってください）' },
+    'bulk.count': { en: a => `${a.n} links selected`, ja: a => `${a.n} 個のリンクを選択` },
+    'bulk.boxSelected': { en: a => `box-select: ${a.n} links — set a type in bulk`,
+                          ja: a => `box-select: ${a.n} links — 一括で type を設定できます` },
+    'bulk.boxNone': { en: 'box-select: no links in range', ja: 'box-select: 範囲内にリンクなし' },
+    'bulk.applying': { en: a => `bulk set: ${a.n} links → ${a.type} …`, ja: a => `一括設定: ${a.n} links → ${a.type} …` },
+    'bulk.applied': { en: a => `bulk set ✓ — ${a.n} applied`, ja: a => `一括設定 ✓ — ${a.n} 件適用` },
+    'bulk.appliedMissed': { en: a => ` (${a.m} skipped)`, ja: a => ` (${a.m} 件は対象外)` },
+    'bulk.reloadUndo': { en: ' — reloading (Ctrl+Z to undo)', ja: ' — reloading (Ctrl+Z で戻せます)' },
+    'bulk.fail': { en: a => `bulk set failed: ${a.e}`, ja: a => `一括設定 failed: ${a.e}` },
+    // type changes
+    'types.applying': { en: a => `applying ${a.n} type change(s) + rebuilding URDF …`,
+                        ja: a => `${a.n} 件の種類変更を適用して URDF を再ビルド中 …` },
+    'types.notFound': { en: a => `not found in joints.yaml: ${a.list}`, ja: a => `joints.yaml に見つかりません: ${a.list}` },
+    'types.noneMatched': { en: 'NO change matched joints.yaml — nothing was rebuilt (joint naming mismatch; see missed list above)',
+                           ja: 'joints.yaml に一致する変更がありません — 再ビルドしませんでした（関節名の不一致。上記の未一致リスト参照）' },
+    'types.rebuilt': { en: a => `rebuilt ✓ (${a.n} change(s)) — reloading (meshes come from cache, pose+camera kept)`,
+                       ja: a => `再ビルド完了 ✓（${a.n} 件）— reloading（メッシュはキャッシュ、姿勢・カメラ維持）` },
+    'types.applyFail': { en: a => `apply failed: ${a.e}`, ja: a => `適用に失敗: ${a.e}` },
+    // auto limits
+    'auto.needPkg': { en: 'auto-limits needs a server package (open via 📄/📁, not drop)',
+                      ja: '自動リミットにはサーバー側パッケージが必要です（📄/📁 で開く。ドロップ不可）' },
+    'auto.sweepStart': { en: 'self-collision limit sweep (coarse scan + binary search) — this takes a few seconds …',
+                         ja: '自己干渉リミット探索（粗スキャン + 二分探索）— 数秒かかります …' },
+    'auto.sweepBar': { en: 'searching joint limits …', ja: '関節リミットを探索中 …' },
+    'auto.sweepDone': { en: a => `sweep done: ${a.l} joint(s) get limits, ${a.c} stay continuous — applying …`,
+                        ja: a => `探索完了: ${a.l} 関節にリミット、${a.c} 関節は連続回転のまま — 適用中 …` },
+    'auto.noRot': { en: 'no rotational joints to limit', ja: 'リミット対象の回転関節がありません' },
+    'auto.writeBar': { en: 'writing limits + rebuilding …', ja: 'リミットを書き込み・再ビルド中 …' },
+    'auto.notMatched': { en: a => `not matched in joints.yaml: ${a.list}`, ja: a => `joints.yaml に一致しません: ${a.list}` },
+    'auto.applied': { en: a => `applied limits to ${a.n} joint(s) ✓ — reloading (Ctrl+Z to undo)`,
+                      ja: a => `${a.n} 関節にリミットを適用 ✓ — reloading（Ctrl+Z で元に戻せます）` },
+    'auto.fail': { en: a => `auto-limits failed: ${a.e}`, ja: a => `自動リミットに失敗: ${a.e}` },
+    // origin
+    'origin.seated': { en: 'base_link aligned to the world origin ⌖', ja: 'base_link を世界原点に合わせました ⌖' },
+    // re-root
+    'reroot.needPkg': { en: 'root change needs a server-side package (not a drop)',
+                        ja: 'ルート変更にはサーバー側パッケージが必要です（ドロップ不可）' },
+    'reroot.start': { en: a => `re-rooting at ${a.link} + rebuilding …`, ja: a => `${a.link} を起点に再ルート化して再ビルド中 …` },
+    'reroot.status': { en: '⏳ re-rooting …', ja: '⏳ 再ルート化中 …' },
+    'reroot.ok': { en: a => `root is now ${a.base} (${a.flipped} edges re-rooted) ✓`,
+                   ja: a => `ルートを ${a.base} に変更（${a.flipped} 辺を再ルート化）✓` },
+    'reroot.fail': { en: a => `re-root failed: ${a.e}`, ja: a => `再ルート化に失敗: ${a.e}` },
+    'reroot.camFollow': { en: 'camera followed the model ✓', ja: 'カメラがモデルに追従しました ✓' },
+    // align mode
+    'align.modeOn': { en: 'align mode: hover highlights the face; click = root origin at the FACE CENTER, +Z along its normal; Esc to cancel',
+                      ja: 'align モード: ホバーで面をハイライト。クリックで面の中心にルート原点を置き +Z を法線方向に。Esc で取消' },
+    'align.needPkg': { en: 'align needs a server-side package (not a drop)',
+                       ja: 'align にはサーバー側パッケージが必要です（ドロップ不可）' },
+    'align.faceCenter': { en: a => `face center used (area ${a.area} mm²)`, ja: a => `面の中心を使用（面積 ${a.area} mm²）` },
+    'align.aligning': { en: a => `aligning root: origin=(${a.origin}) +Z=(${a.zdir}) + rebuilding …`,
+                        ja: a => `ルートを整列: 原点=(${a.origin}) +Z=(${a.zdir}) ・再ビルド中 …` },
+    'align.status': { en: '⏳ aligning root frame …', ja: '⏳ ルートフレームを整列中 …' },
+    'align.ok': { en: 'root frame aligned ✓ (root_rpy/root_xyz written to joints.yaml)',
+                  ja: 'ルートフレームを整列しました ✓（root_rpy/root_xyz を joints.yaml に書き込み）' },
+    'align.fail': { en: a => `align failed: ${a.e}`, ja: a => `align に失敗: ${a.e}` },
+    'align.cancelNoFace': { en: 'align cancelled (no face under the cursor)', ja: 'align 取消（カーソル下に面がありません）' },
+    // port mode
+    'port.modeOn': { en: 'port mode: hover a face, click = add a dummy_link there (+Z along its normal); click a magenta port marker to remove it; Esc to cancel',
+                     ja: 'port モード: 面にホバーしてクリックで dummy_link を追加（+Z は法線方向）。マゼンタのポートマーカーをクリックで削除。Esc で取消' },
+    'port.needPkg': { en: 'add port needs a server-side package (not a drop)',
+                      ja: 'ポート追加にはサーバー側パッケージが必要です（ドロップ不可）' },
+    'port.linkNotFound': { en: a => `add port: link '${a.link}' not found`, ja: a => `ポート追加: リンク '${a.link}' が見つかりません` },
+    'port.adding': { en: a => `adding port on ${a.link}: origin=(${a.origin}) +Z=(${a.zdir}) + rebuilding …`,
+                     ja: a => `${a.link} にポート追加: 原点=(${a.origin}) +Z=(${a.zdir}) ・再ビルド中 …` },
+    'port.status': { en: '⏳ adding port …', ja: '⏳ ポート追加中 …' },
+    'port.added': { en: a => `port added on ${a.parent} ✓ (ports: entry written to joints.yaml)`,
+                    ja: a => `${a.parent} にポートを追加 ✓（ports: エントリを joints.yaml に書き込み）` },
+    'port.addFail': { en: a => `add port failed: ${a.e}`, ja: a => `ポート追加に失敗: ${a.e}` },
+    'port.removing': { en: a => `removing port ${a.name} + rebuilding …`, ja: a => `ポート ${a.name} を削除して再ビルド中 …` },
+    'port.removeStatus': { en: '⏳ removing port …', ja: '⏳ ポート削除中 …' },
+    'port.removed': { en: a => `port ${a.name} removed ✓`, ja: a => `ポート ${a.name} を削除しました ✓` },
+    'port.removeFail': { en: a => `remove port failed: ${a.e}`, ja: a => `ポート削除に失敗: ${a.e}` },
+    'port.noFace': { en: 'port: no face under the cursor', ja: 'port: カーソル下に面がありません' },
+    // hover tips
+    'hov.removePort': { en: a => `${a.port} — <span class="key">click</span> remove this port`,
+                        ja: a => `${a.port} — <span class="key">click</span> このポートを削除` },
+    'hov.addPort': { en: a => `${a.link} — <span class="key">click</span> add a port here (+Z = face normal)`,
+                     ja: a => `${a.link} — <span class="key">click</span> ここにポートを追加（+Z = 面の法線）` },
+    'hov.alignFace': { en: a => `${a.link} — <span class="key">click</span> align root to this face (origin = face center)`,
+                       ja: a => `${a.link} — <span class="key">click</span> この面にルートを整列（原点 = 面の中心）` },
+    'hov.selected': { en: a => `✓ ${a.link} selected — <span class="key">R</span> make root`,
+                      ja: a => `✓ ${a.link} を選択中 — <span class="key">R</span> でルート化` },
+    'hov.link': { en: a => `${a.link} — <span class="key">click</span> select, <span class="key">dbl-click</span> tree, <span class="key">Shift+drag</span> box-select`,
+                  ja: a => `${a.link} — <span class="key">click</span> 選択、<span class="key">dbl-click</span> ツリー、<span class="key">Shift+drag</span> 範囲選択` },
+    // camera fit
+    'fit.emptyBox': { en: 'bounding box is EMPTY — meshes attached but no geometry?',
+                      ja: '境界ボックスが空です — メッシュは付いているがジオメトリがない？' },
+    'fit.bbox': { en: a => `robot bbox: ${a.x} × ${a.y} × ${a.z} m`, ja: a => `ロボット境界ボックス: ${a.x} × ${a.y} × ${a.z} m` },
+    'fit.bigBox': { en: 'bbox is >100 m — mesh units look wrong (mm leaking through?)',
+                    ja: '境界ボックスが 100m 超 — メッシュ単位が怪しい（mm が混入？）' },
+    'fit.ok': { en: 'camera fitted ✓', ja: 'カメラを調整しました ✓' },
+    // urdf load
+    'urdf.parsed': { en: a => `URDF parsed ✓ — ${a.n} links, ${a.m} movable joints`,
+                     ja: a => `URDF を解析 ✓ — ${a.n} リンク、可動関節 ${a.m}` },
+    'urdf.error': { en: a => `URDF error: ${a.detail}`, ja: a => `URDF エラー: ${a.detail}` },
+    'urdf.seeConsole': { en: '(see console)', ja: '(コンソール参照)' },
+    'urdf.loading': { en: a => `loading URDF ${a.urdf} …`, ja: a => `URDF ${a.urdf} を読み込み中 …` },
+    'urdf.loadingBar': { en: a => `loading ${a.name} …`, ja: a => `${a.name} を読み込み中 …` },
+    // root frame box
+    'root.needPkg': { en: 'root frame editing needs a server-side package', ja: 'ルートフレーム編集にはサーバー側パッケージが必要です' },
+    'root.doing': { en: a => `${a.what} …`, ja: a => `${a.what} …` },
+    'root.rotating': { en: a => `rotating root ${a.dir}`, ja: a => `ルートを回転 ${a.dir}` },
+    'root.settingNumeric': { en: 'setting root frame numerically', ja: 'ルートフレームを数値で設定' },
+    'root.ok': { en: 'root frame updated ✓ (no reload needed)', ja: 'ルートフレームを更新 ✓（リロード不要）' },
+    'root.okStatus': { en: 'root frame updated', ja: 'ルートフレームを更新' },
+    'root.fail': { en: a => `root frame update failed: ${a.e}`, ja: a => `ルートフレーム更新に失敗: ${a.e}` },
+    // history
+    'hist.undoTitle': { en: a => `undo: ${a.label} (Ctrl+Z)`, ja: a => `元に戻す: ${a.label} (Ctrl+Z)` },
+    'hist.undoEmpty': { en: 'undo (Ctrl+Z)', ja: '元に戻す (Ctrl+Z)' },
+    'hist.redoTitle': { en: a => `redo: ${a.label} (Ctrl+Y)`, ja: a => `やり直し: ${a.label} (Ctrl+Y)` },
+    'hist.redoEmpty': { en: 'redo (Ctrl+Y)', ja: 'やり直し (Ctrl+Y)' },
+    'hist.done': { en: a => `${a.which}: ${a.label} ✓`, ja: a => `${a.which}: ${a.label} ✓` },
+    'hist.fail': { en: a => `${a.which} failed: ${a.e}`, ja: a => `${a.which} に失敗: ${a.e}` },
+    // open / extract
+    'open.fail': { en: a => `open failed: ${a.e}`, ja: a => `オープンに失敗: ${a.e}` },
+    'time.sec': { en: a => `${a.s}s`, ja: a => `${a.s}秒` },
+    'time.minSec': { en: a => `${a.m}m${a.s}s`, ja: a => `${a.m}分${a.s}秒` },
+    'phase.starting': { en: 'starting SolidWorks', ja: 'SolidWorks を起動中' },
+    'phase.reuse': { en: 'reusing SolidWorks session', ja: 'SolidWorks セッション再利用' },
+    'phase.opening': { en: 'opening the assembly', ja: 'アセンブリ読込中' },
+    'phase.components': { en: 'reading components / mates', ja: '部品・メイト解析中' },
+    'phase.subMesh': { en: 'exporting sub-assembly mesh', ja: 'サブアセンブリのメッシュ出力中' },
+    'phase.subRead': { en: 'reading sub-assembly', ja: 'サブアセンブリ解析中' },
+    'phase.fullMesh': { en: 'exporting full assembly mesh', ja: '全体メッシュ出力中' },
+    'phase.savingGraph': { en: 'saving graph.json', ja: 'graph.json 保存中' },
+    'phase.buildUrdf': { en: 'building URDF', ja: 'URDF 生成中' },
+    'phase.extracting': { en: 'extracting', ja: '抽出中' },
+    'extract.request': { en: a => `requesting SolidWorks extraction: ${a.p}`, ja: a => `SolidWorks 抽出を要求: ${a.p}` },
+    'extract.statusRunning': { en: '⏳ extracting from SolidWorks …', ja: '⏳ SolidWorks から抽出中 …' },
+    'extract.startFail': { en: a => `extract failed to start: ${a.e}`, ja: a => `抽出の開始に失敗: ${a.e}` },
+    'extract.started': { en: 'extraction started (SolidWorks runs hidden) …', ja: '抽出を開始しました（SolidWorks は非表示で実行）…' },
+    'extract.bar': { en: 'extracting from SolidWorks …', ja: 'SolidWorks から抽出中 …' },
+    'extract.failed': { en: a => `extraction FAILED: ${a.e}`, ja: a => `抽出に失敗: ${a.e}` },
+    'extract.done': { en: a => `extraction finished in ${a.time} ✓`, ja: a => `抽出が ${a.time} で完了 ✓` },
+    'extract.statusElapsed': { en: a => `⏳ extracting … ${a.time}`, ja: a => `⏳ 抽出中 … ${a.time}` },
+    'extract.meshBar': { en: a => `mesh ${a.i}/${a.n}  ${a.name}`, ja: a => `メッシュ ${a.i}/${a.n}  ${a.name}` },
+    'extract.meshSub': { en: a => `exporting meshes — ${a.time}`, ja: a => `メッシュ出力中 — ${a.time}` },
+    'extract.alive': { en: a => `SolidWorks alive ✓ (${a.c} processes) — first run ~30s`,
+                       ja: a => `SolidWorks 稼働中 ✓ (${a.c} プロセス) — 初回は約30秒` },
+    'extract.coldStart': { en: 'first run: SolidWorks takes ~30s to start', ja: '初回は SolidWorks の起動に約30秒かかります' },
+    'extract.startingBar': { en: a => `starting SolidWorks … ${a.time}`, ja: a => `SolidWorks を起動中 … ${a.time}` },
+    'extract.aliveShort': { en: '  · SolidWorks alive ✓', ja: '  · SolidWorks稼働中 ✓' },
+    'extract.elapsed': { en: a => `${a.time} elapsed${a.alive}`, ja: a => `${a.time} 経過${a.alive}` },
+    'extract.phaseRunning': { en: a => `${a.phase} …`, ja: a => `${a.phase} …` },
+    // file browser
+    'fs.error': { en: a => `📁 ${a.e}`, ja: a => `📁 ${a.e}` },
+    'fs.driveSelect': { en: '(select a drive)', ja: '(ドライブ選択)' },
+    'fs.packageHint': { en: '(package — click to open)', ja: '(パッケージ — クリックで開く)' },
+    'fs.empty': { en: '(empty, or no matching files)', ja: '(空、または対象ファイルなし)' },
+    // drag & drop
+    'drop.count': { en: a => `dropped ${a.n} files`, ja: a => `${a.n} 個のファイルをドロップ` },
+    'drop.noUrdf': { en: 'no .urdf (or .sldasm) in the drop', ja: 'ドロップに .urdf（または .sldasm）がありません' },
+    'drop.converting': { en: a => `converting ${a.name} via /api/convert …`, ja: a => `${a.name} を /api/convert で変換中 …` },
+    'drop.convertFail': { en: a => `convert failed (${a.status}) for ${a.n}`, ja: a => `変換失敗 (${a.status}): ${a.n}` },
+    'drop.convertOk': { en: a => `3DXML conversions done ✓ (${a.n} files ready)`, ja: a => `3DXML 変換完了 ✓（${a.n} ファイル）` },
+    'drop.suffix': { en: ' (dropped)', ja: '（ドロップ）' },
+    'drop.fail': { en: a => `drop failed: ${a.e}`, ja: a => `ドロップに失敗: ${a.e}` },
+    // locate .sldasm
+    'locate.start': { en: a => `locating "${a.name}" (${a.size} B) on disk …`, ja: a => `「${a.name}」(${a.size} B) をディスク上で検索中 …` },
+    'locate.bar': { en: a => `searching for "${a.name}" on disk …`, ja: a => `「${a.name}」をディスク上で検索中 …` },
+    'locate.fail': { en: a => `locate failed: ${a.e}`, ja: a => `検索に失敗: ${a.e}` },
+    'locate.found': { en: a => `found on disk: ${a.path}`, ja: a => `ディスク上で発見: ${a.path}` },
+    'locate.building': { en: 'file index is still building (first run walks the CAD shares, a few minutes) — try the drop again shortly, or use 🗄',
+                         ja: 'ファイル索引を構築中です（初回は CAD 共有を走査、数分）— 少し待って再ドロップするか 🗄 を使ってください' },
+    'locate.notFound': { en: 'not found in the CAD shares or local Desktop/Downloads/Documents — open it via the 🗄 server browser instead',
+                         ja: 'CAD 共有やローカルの Desktop/Downloads/Documents に見つかりません — 🗄 サーバーブラウザから開いてください' },
+    'locate.candidates': { en: a => `${a.n} candidate file(s) — pick one`, ja: a => `${a.n} 件の候補 — 1つ選んでください` },
+    'locate.multiTitle': { en: a => `multiple matches for "${a.name}"`, ja: a => `「${a.name}」が複数見つかりました` },
+    'locate.multiHelp': { en: 'pick the file to load (≡ = same size as the one you dropped)',
+                          ja: '読み込むファイルを選んでください(≡ = ドロップしたものと同じサイズ)' },
+    'locate.sameSize': { en: 'same size', ja: '同じサイズ' },
+    'locate.diffSize': { en: 'same name, different size (older?)', ja: '同名・別サイズ(旧版?)' },
+    'locate.prepBar': { en: a => `preparing to extract "${a.name}" …`, ja: a => `「${a.name}」を抽出準備中 …` },
+    // SolidWorks status
+    'sw.unsaved': { en: '⚠️ unsaved changes — press Ctrl+S in SolidWorks first; ', ja: '⚠️ 未保存の変更 — まず SolidWorks で Ctrl+S を押してください; ' },
+    'sw.open': { en: a => `open: ${a.name}`, ja: a => `開いています: ${a.name}` },
+    'sw.unsavedLog': { en: 'the assembly has UNSAVED changes — extraction reads the saved file; press Ctrl+S in SolidWorks first',
+                       ja: 'アセンブリに未保存の変更があります — 抽出は保存済みファイルを読みます。まず SolidWorks で Ctrl+S を押してください' },
+    'sw.runningNotVisible': { en: '🟡 SolidWorks is running but not visible from this server (start the server from your own terminal to auto-detect the open assembly)',
+                              ja: '🟡 SolidWorks は起動中ですがこのサーバーから見えません（自分のターミナルからサーバーを起動すると開いているアセンブリを自動検出します）' },
+    'sw.notRunning': { en: '⚪ SolidWorks not running — extraction starts a hidden instance automatically',
+                       ja: '⚪ SolidWorks は未起動 — 抽出時に非表示インスタンスを自動起動します' },
+    // diagnostics + startup
+    'bug.sent': { en: '🐞 diagnostic report sent (server: _client_report.json)', ja: '🐞 診断レポートを送信しました（サーバー: _client_report.json）' },
+    'bug.fail': { en: a => `🐞 report failed: ${a.e}`, ja: a => `🐞 レポート送信に失敗: ${a.e}` },
+    'start.pick': { en: 'pick a package (or drag&drop)', ja: 'パッケージを選択（またはドラッグ&ドロップ）' },
+    'start.noPkg': { en: 'no package open yet — open via 📄/📁/🗄 or drop a folder/.sldasm',
+                     ja: 'まだパッケージが開かれていません — 📄/📁/🗄 で開くかフォルダ/.sldasm をドロップ' },
+    // ---- static HTML (data-i18n / data-i18n-title) ----
+    'ui.title': { en: 'sw2robot viewer', ja: 'sw2robot ビューア' },
+    'ui.droptip': { en: 'drop a module folder or a .sldasm here', ja: 'モジュールフォルダか .sldasm をここにドロップ' },
+    't.iso': { en: 'isometric', ja: '等角投影' },
+    't.axes': { en: 'joint axes', ja: '関節軸' },
+    't.origin': { en: 'root origin triad', ja: 'ルート原点の座標軸' },
+    't.tf': { en: 'TF view: frame triads at every link + parent lines, meshes dimmed',
+              ja: 'TF 表示: 各リンクにフレーム軸 + 親への線、メッシュを淡色化' },
+    't.align': { en: 'click a face: root origin moves there, +Z = face normal',
+                 ja: '面をクリック: ルート原点をそこへ、+Z = 面の法線' },
+    't.port': { en: 'click a face: add a coordinate-only link (dummy_link port) there, +Z = face normal; click a port marker to remove it',
+                ja: '面をクリック: 座標のみのリンク（dummy_link ポート）を追加、+Z = 面の法線。ポートマーカーをクリックで削除' },
+    't.vorigin': { en: 'move the whole CAD so base_link sits at the world origin (0,0,0)',
+                   ja: 'CAD全体を動かして base_link を世界原点(0,0,0)に合わせる' },
+    't.grid': { en: 'ground grid at root Z=0', ja: 'ルート Z=0 の地面グリッド' },
+    't.posedrag': { en: 'OFF: drag to orbit the view / ON: drag a link to move its joint',
+                    ja: 'OFF: ドラッグで視点回転 / ON: リンクをドラッグして関節を動かす' },
+    't.gridcap': { en: 'grid pitch', ja: 'グリッド間隔' },
+    'ui.emptyDrop': { en: 'Drag & Drop a .sldasm / package folder here',
+                      ja: 'ここに .sldasm / パッケージフォルダを Drag & Drop' },
+    'ui.emptyPick': { en: 'or use “📄 Open file…” / “📁 Folder…” on the right',
+                      ja: 'または右の「📄 ファイルを開く…」「📁 フォルダ…」から選択' },
+    't.selexclude': { en: 'exclude from the URDF (adds to yaml exclude:, Ctrl+Z to undo)',
+                      ja: 'URDFから除外する (yaml exclude: に追加、Ctrl+Zで戻る)' },
+    'ui.selroot': { en: '⌂ make root', ja: '⌂ ルート化' },
+    'ui.bulkArrow': { en: '→ bulk set:', ja: '→ 一括設定:' },
+    'ui.btFixed': { en: 'fixed', ja: '固定' },
+    'ui.btRevolute': { en: 'revolute', ja: '回転' },
+    'ui.btContinuous': { en: 'continuous', ja: '連続回転' },
+    'ui.btPrismatic': { en: 'prismatic', ja: '直動' },
+    'ui.useactive': { en: '🎯 Extract the assembly open in SolidWorks', ja: '🎯 SolidWorksで開いているアセンブリを抽出' },
+    't.openfile': { en: 'OS file dialog (.sldasm / .urdf)', ja: 'OSのファイルダイアログ (.sldasm / .urdf)' },
+    'ui.openfile': { en: '📄 Open file…', ja: '📄 ファイルを開く…' },
+    't.openfolder': { en: 'OS folder dialog (package folder)', ja: 'OSのフォルダダイアログ (パッケージフォルダ)' },
+    'ui.openfolder': { en: '📁 Folder…', ja: '📁 フォルダ…' },
+    't.fsbrowse': { en: 'server-side file browser (when the dialog can’t find it)',
+                    ja: 'サーバー側のファイルブラウザ (ダイアログで見つからない時)' },
+    'ui.reset': { en: 'Reset pose', ja: '姿勢リセット' },
+    't.renamelist': { en: 'rename joints/links in a list', ja: '関節名・リンク名を一覧で改名' },
+    'ui.renamelist': { en: '≣ rename', ja: '≣ 改名' },
+    't.bug': { en: 'broken? this sends the op-log + state to the server', ja: '壊れたらこれ: 操作ログ+状態をサーバーに送る' },
+    't.autolimits': { en: 'sweep each rotary joint over ±2π(±360°) to the self-collision angle (coarse scan + binary search) and auto-set lower/upper. Joints free over the full ±2π become continuous. Ctrl+Z to undo.',
+                      ja: '各回転関節を ±2π(±360°)の範囲で自己干渉が起きる角度まで掃引(粗スキャン+二分探索)して lower/upper を自動設定。±2π まで自由に回る関節は continuous に。Ctrl+Zで戻せます' },
+    'ui.autolimits': { en: '🛠 auto joint limits (self-collision, ±2π)', ja: '🛠 自動関節リミット (自己干渉, ±2π)' },
+    'ui.rootframe': { en: 'root frame (rotate about current axes / set numbers)',
+                      ja: 'root frame (rotate about current axes / set numbers)' },
+    'ui.enterApply': { en: '(Enter applies)', ja: '(Enter で即適用)' },
+    't.selall': { en: 'select all', ja: 'すべて選択' },
+    'ui.selectedArrow': { en: 'selected →', ja: '選択 →' },
+    'ui.set': { en: 'Set', ja: '適用' },
+    't.expdae': { en: 'portable ROS package (<name>_description): package:// URLs, visual = colour COLLADA .dae, collision = .stl (loads in RViz/Gazebo)',
+                  ja: 'ポータブルな ROS パッケージ (<name>_description): package:// URL、visual = カラー COLLADA .dae、collision = .stl（RViz/Gazebo で読込可）' },
+    'ui.expdae': { en: '⬇ ROS package', ja: '⬇ ROS パッケージ' },
+    't.expglb': { en: 'uniform .glb meshes (colour kept) for three.js / skrobot / native-mesh consumers (not RViz-loadable)',
+                  ja: '均一な .glb メッシュ（色は保持）three.js / skrobot / ネイティブメッシュ向け（RVizでは読込不可）' },
+    'ui.hint': { en: 'left-drag: orbit · right-drag: pan · wheel: zoom · click to select a link · move joints with the panel sliders (🖐 pose ON lets you drag a link to move its joint)',
+                 ja: 'left-drag: 視点回転 · right-drag: pan · wheel: zoom · クリックでリンク選択 · 関節はパネルのスライダーで操作（🖐 pose ON でリンクをドラッグして関節を動かせます）' },
+  };
+
+  function detectLang() {
+    // ?lang=ja|en wins (deep-linking / deterministic tests) and is remembered;
+    // otherwise a saved choice, otherwise the browser's UI language.
+    const q = new URLSearchParams(location.search).get('lang');
+    if (q === 'ja' || q === 'en') {
+      localStorage.setItem('sw2robot.lang', q);
+      return q;
+    }
+    const saved = localStorage.getItem('sw2robot.lang');
+    if (saved === 'ja' || saved === 'en') { return saved; }
+    return (navigator.language || '').toLowerCase().startsWith('ja') ? 'ja' : 'en';
+  }
+  window.__lang = detectLang();
+  document.documentElement.lang = window.__lang;
+
+  // t('some.key', {args}) -> translated string for the current language.
+  // A missing key returns the key itself (so the gap is visible, never silent).
+  function t(key, args) {
+    const entry = I18N[key];
+    if (!entry) { return key; }
+    const v = entry[window.__lang] ?? entry.en ?? key;
+    return typeof v === 'function' ? v(args ?? {}) : v;
+  }
+  window.t = t;
+
+  function applyStaticI18n(root) {
+    const r = root || document;
+    r.querySelectorAll('[data-i18n]').forEach(el => {
+      el.textContent = t(el.dataset.i18n);
+    });
+    r.querySelectorAll('[data-i18n-title]').forEach(el => {
+      el.title = t(el.dataset.i18nTitle);
+    });
+  }
+  window.applyStaticI18n = applyStaticI18n;
+
+  function setLang(lang) {
+    if (lang !== 'ja' && lang !== 'en') { return; }
+    window.__lang = lang;
+    localStorage.setItem('sw2robot.lang', lang);
+    document.documentElement.lang = lang;
+    document.querySelectorAll('#langbar button').forEach(b =>
+      b.classList.toggle('active', b.dataset.lang === lang));
+    applyStaticI18n();
+    window.onLangChange?.();        // module re-renders its dynamic bits
+  }
+  window.setLang = setLang;
+
   const logEl = document.getElementById('log');
   const statusEl = document.getElementById('status');
   const t0 = performance.now();
@@ -406,11 +868,19 @@ skrobot / native-mesh consumers (not RViz-loadable)">⬇ glb</button></a>
   }
   window.log = log;
   window.addEventListener('error', e =>
-    log(`JS error: ${e.message} (${(e.filename || '?').split('/').pop()}:` +
-        `${e.lineno})`, 'err'));
+    log(t('boot.jsError', { msg: e.message,
+        file: (e.filename || '?').split('/').pop(), line: e.lineno }), 'err'));
   window.addEventListener('unhandledrejection', e =>
-    log(`promise rejected: ${e.reason}`, 'err'));
-  log('page loaded; importing three.js + urdf-loader from unpkg.com …');
+    log(t('boot.promiseRejected', { reason: e.reason }), 'err'));
+  // translate the static chrome + reflect the active language button now
+  applyStaticI18n();
+  // #title / #status are dynamic (set from JS), so localize their placeholders
+  // here rather than via data-i18n (which would clobber them on a lang switch)
+  document.getElementById('title').textContent = t('ui.title');
+  statusEl.textContent = t('status.starting');
+  document.querySelectorAll('#langbar button').forEach(b =>
+    b.classList.toggle('active', b.dataset.lang === window.__lang));
+  log(t('boot.pageLoaded'));
 </script>
 
 <script type="module">
@@ -423,11 +893,11 @@ try {
       await import('three/examples/jsm/loaders/ColladaLoader.js'));
   const { default: URDFManipulator } = await import(
     'https://unpkg.com/urdf-loader@0.12.7/src/urdf-manipulator-element.js');
-  log('three.js + urdf-loader loaded ✓', 'ok');
+  log(t('load.ok'), 'ok');
   customElements.define('urdf-manipulator', URDFManipulator);
 } catch (e) {
-  log(`CDN import failed: ${e.message ?? e}`, 'err');
-  log('→ check internet access / proxy for unpkg.com, then reload', 'wrn');
+  log(t('load.fail', { e: e.message ?? e }), 'err');
+  log(t('load.failHint'), 'wrn');
   throw e;
 }
 
@@ -509,8 +979,8 @@ async function refreshCompMeta() {
       excludedList = r.excluded ?? [];
       const chip = document.getElementById('exclchip');
       chip.style.display = excludedList.length ? '' : 'none';
-      chip.textContent = `🗑 excluded: ${excludedList.length} ↩`;
-      chip.title = excludedList.join('\n') + '\n(クリックで全部復元)';
+      chip.textContent = t('excl.chip', { n: excludedList.length });
+      chip.title = excludedList.join('\n') + '\n' + t('excl.restoreAll');
     }
   } catch { /* no package yet */ }
 }
@@ -555,15 +1025,15 @@ function hideLoadbar() {
 const meshStats = { want: 0, done: 0, fail: 0 };
 function meshTick(name, ok, detail) {
   if (ok) { meshStats.done += 1; } else { meshStats.fail += 1; }
-  log(`mesh ${meshStats.done + meshStats.fail}/${meshStats.want} ` +
-      `${ok ? '✓' : '✗'} ${name}${detail ? ' — ' + detail : ''}`,
+  const i = meshStats.done + meshStats.fail;
+  log(t('mesh.tick', { i, n: meshStats.want, mark: ok ? '✓' : '✗', name,
+                       detail: detail ? ' — ' + detail : '' }),
       ok ? '' : 'err');
-  statusEl.textContent =
-    `loading meshes ${meshStats.done + meshStats.fail}/${meshStats.want}` +
-    (meshStats.fail ? ` (${meshStats.fail} failed)` : '');
-  updateLoadbar((meshStats.done + meshStats.fail) / (meshStats.want || 1),
-                `mesh ${meshStats.done + meshStats.fail}/${meshStats.want}`
-                + `  ${name}`, 'メッシュ読み込み中 …');
+  statusEl.textContent = t('mesh.status', { i, n: meshStats.want,
+    fail: meshStats.fail ? t('mesh.statusFail', { n: meshStats.fail }) : '' });
+  updateLoadbar(i / (meshStats.want || 1),
+                t('mesh.barText', { i, n: meshStats.want, name }),
+                t('mesh.barSub'));
 }
 
 // NOTE: the element property is loadMeshFunc (NOT the loader's loadMeshCb)
@@ -587,7 +1057,7 @@ viewer.loadMeshFunc = (path, manager, done) => {
   };
   const fail = err => {
     meshTick(name, false, err?.message ?? String(err));
-    done(null, err ?? new Error('load failed'));
+    done(null, err ?? new Error(t('mesh.loadFailed')));
   };
   if (lower.endsWith('.3dxml')) {
     const url = dropMode ? path : path + '?glb=1';
@@ -600,7 +1070,7 @@ viewer.loadMeshFunc = (path, manager, done) => {
   } else if (lower.endsWith('.dae')) {
     new ColladaLoader(manager).load(path, dae => ok(dae.scene), null, fail);
   } else {
-    fail(new Error('unsupported mesh format'));
+    fail(new Error(t('mesh.unsupported')));
   }
 };
 
@@ -645,8 +1115,8 @@ async function doRename(kind, oldName, newName) {
       body: JSON.stringify({ kind, old: oldName, new: newName }) });
     const r = await resp.json();
     if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
-    log(reset ? `${kind} 名をデフォルトに戻しました: ${oldName}`
-              : `改名 ${kind}: ${oldName} → ${newName}`, 'ok');
+    log(reset ? t('rename.resetOk', { kind, name: oldName })
+              : t('rename.ok', { kind, old: oldName, new: newName }), 'ok');
     refreshHistory();
     // a link rename invalidates the current selection (its name changed); clear
     // it so the reload doesn't reference a link that no longer exists
@@ -654,7 +1124,7 @@ async function doRename(kind, oldName, newName) {
     loadRobot(currentInfo, { keepPose: true });   // rebuild with the new name
     return true;
   } catch (e) {
-    log(`${reset ? 'リセット' : '改名'}失敗: ${e.message ?? e}`, 'err');
+    log(t('rename.fail', { reset, e: e.message ?? e }), 'err');
     return false;
   }
 }
@@ -662,18 +1132,18 @@ async function doRename(kind, oldName, newName) {
 // revert ALL joint/link names to their defaults (one rebuild)
 async function resetAllNames() {
   if (!currentInfo) { return; }
-  if (!confirm('すべての joint 名・link 名をデフォルトに戻しますか？')) { return; }
+  if (!confirm(t('rename.confirmResetAll'))) { return; }
   try {
     const resp = await fetch('/api/reset_names', { method: 'POST' });
     const r = await resp.json();
     if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
-    log('すべての名前をデフォルトに戻しました', 'ok');
+    log(t('rename.resetAllOk'), 'ok');
     refreshHistory();
     selectLink(null);
     document.getElementById('renamelist')?.remove();
     loadRobot(currentInfo, { keepPose: true });
   } catch (e) {
-    log(`リセット失敗: ${e.message ?? e}`, 'err');
+    log(t('rename.resetAllFail', { e: e.message ?? e }), 'err');
   }
 }
 
@@ -681,7 +1151,7 @@ async function resetAllNames() {
 function attachInlineRename(el, kind, getOld) {
   el.classList.add('renamable');
   if (!el.title) {
-    el.title = 'ダブルクリックで改名（空にして Enter でデフォルト名に戻す）';
+    el.title = t('rename.inlineTitle');
   }
   let editing = false, commit = true, oldVal = '';
   el.addEventListener('dblclick', ev => {
@@ -712,7 +1182,7 @@ function attachInlineRename(el, kind, getOld) {
 
 // the ≣ 改名 list: every joint with its (editable) joint name + child link name
 function openRenameList() {
-  if (!viewer.robot) { log('まずパッケージを開いてください', 'wrn'); return; }
+  if (!viewer.robot) { log(t('common.openFirst'), 'wrn'); return; }
   document.getElementById('renamelist')?.remove();
   const linkOf = (j, tag) => [...(j.urdfNode?.children ?? [])]
     .find(e => e.tagName === tag)?.getAttribute('link') ?? '';
@@ -720,15 +1190,17 @@ function openRenameList() {
   ov.id = 'renamelist';
   const card = document.createElement('div');
   card.className = 'card';
-  const ttl = '空にして Enter でデフォルト名に戻す';
+  const ttl = t('rename.emptyResetTitle');
   let html =
     '<div style="font-size:14px;margin-bottom:2px;color:#9fe0a8">' +
-    '関節名・リンク名の改名</div>' +
+    t('rename.listTitle') + '</div>' +
     '<div style="font-size:11px;color:#8a93a3;margin-bottom:8px">' +
-    '値を編集して Enter（英数字と _、先頭は数字不可）・空にするとデフォルトに戻る' +
+    t('rename.listHelp') +
     '</div>' +
-    '<table class="rntable"><thead><tr><th>joint 名</th><th>parent</th>' +
-    '<th>child link 名</th><th>type</th></tr></thead><tbody>';
+    '<table class="rntable"><thead><tr><th>' + t('rename.thJoint') +
+    '</th><th>' + t('rename.thParent') + '</th>' +
+    '<th>' + t('rename.thChild') + '</th><th>' + t('rename.thType') +
+    '</th></tr></thead><tbody>';
   for (const j of Object.values(viewer.robot.joints)) {
     const c = linkOf(j, 'child');
     html +=
@@ -744,11 +1216,11 @@ function openRenameList() {
   const bar = document.createElement('div');
   bar.style.cssText = 'display:flex;gap:8px;margin-top:10px';
   const resetAll = document.createElement('button');
-  resetAll.textContent = '↺ 全デフォルト名に戻す';
-  resetAll.title = 'すべての joint 名・link 名を元の名前に戻す';
+  resetAll.textContent = t('rename.resetAllBtn');
+  resetAll.title = t('rename.resetAllBtnTitle');
   resetAll.addEventListener('click', resetAllNames);
   const close = document.createElement('button');
-  close.textContent = '閉じる';
+  close.textContent = t('common.close');
   close.addEventListener('click', () => ov.remove());
   bar.append(resetAll, close);
   card.appendChild(bar);
@@ -807,7 +1279,8 @@ function buildJointRows(robot) {
       `<span class="caret">${kids.length
         ? (collapsed.has(child) ? '▸' : '▾') : '·'}</span>` +
       `<input type="checkbox" class="pick">` +
-      `<span class="jname" title="joint: ${j.name}\n${parent} → ${child}">` +
+      `<span class="jname" title="${t('row.jnameTitle',
+        { name: j.name, parent, child })}">` +
       `${child}</span>` +
       (isMimic ? `<span class="mimictag">mimic</span>` : '') +
       `<select class="jtypesel t-${j.jointType}">` +
@@ -817,9 +1290,8 @@ function buildJointRows(robot) {
       `</select>` +
       `<span class="jval">${isMov ? fmt(Number(j.angle)) : ''}</span>` +
       `<button class="eye${hiddenLinks.has(child) ? ' off' : ''}" ` +
-      `title="show/hide this link">👁</button>` +
-      `<button class="mkroot" title="make this link the root ` +
-      `(re-roots the tree + rebuilds)">⌂</button>` +
+      `title="${t('row.eyeTitle')}">👁</button>` +
+      `<button class="mkroot" title="${t('row.mkrootTitle')}">⌂</button>` +
       `</div>` +
       (isMov && !isMimic
         ? `<input type="range" min="${lo}" max="${hi}" step="0.01" ` +
@@ -883,7 +1355,7 @@ function buildJointRows(robot) {
     head.className = 'joint root';
     head.innerHTML = `<div class="row1"><span class="caret">⌂</span>` +
       `<span class="jname" style="color:#fff;font-weight:bold;` +
-      `cursor:pointer" title="root link">${rootName}</span>` +
+      `cursor:pointer" title="${t('row.rootLinkTitle')}">${rootName}</span>` +
       `<span class="rootcomp" style="color:#6b7480;font-size:10px;` +
       `overflow:hidden;text-overflow:ellipsis;white-space:nowrap">` +
       `${rootBaseName && rootName === 'base_link'
@@ -891,7 +1363,7 @@ function buildJointRows(robot) {
       `<span class="jtype" style="background:#2d4a35;color:#8fd99f">root` +
       `</span>` +
       `<button class="eye${hiddenLinks.has(rootName) ? ' off' : ''}" ` +
-      `title="show/hide this link">👁</button></div>`;
+      `title="${t('row.eyeTitle')}">👁</button></div>`;
     head.classList.toggle('hiddenlink', hiddenLinks.has(rootName));
     head.querySelector('.eye').addEventListener('click', ev => {
       ev.stopPropagation();
@@ -1015,10 +1487,8 @@ function addAxisMarkers(robot) {
     }
   }
   setAxesVisible(axesOn());
-  log(`${axisMarkers.size - ghosts} joint axes drawn, sized per link ` +
-      `(red=revolute orange=continuous blue=prismatic purple=mimic)`
-      + (ghosts ? `; ${ghosts} ghost axes on fixed joints (hover to see)`
-                : ''), 'ok');
+  log(t('axes.drawn', { k: axisMarkers.size - ghosts })
+      + (ghosts ? t('axes.ghostSuffix', { g: ghosts }) : ''), 'ok');
 }
 
 const axesBtn = document.getElementById('axes');
@@ -1076,8 +1546,7 @@ function applyPoseDrag() {
 poseBtn.addEventListener('click', () => {
   poseDrag = poseBtn.classList.toggle('active');
   applyPoseDrag();
-  log(poseDrag ? 'pose: リンクをドラッグで関節を動かす'
-               : 'orbit: ドラッグで視点回転（関節はパネルのスライダーで）', 'ok');
+  log(poseDrag ? t('pose.on') : t('pose.off'), 'ok');
 });
 
 // ---- RGB triads (red=X green=Y blue=Z) -----------------------------------
@@ -1380,8 +1849,8 @@ function applyCollision(links, pairs) {
         : `${deg.toFixed(1)}°`;
       at = `${lastActiveJoint} = ${u} → `;
     }
-    colstatEl.textContent = '⚠ ' + at + 'collision: ' +
-      pairs.map(p => p.join(' × ')).join(',  ');
+    colstatEl.textContent = t('col.label', { at,
+      list: pairs.map(p => p.join(' × ')).join(',  ') });
     colstatEl.style.display = 'block';
   } else {
     colstatEl.style.display = 'none';
@@ -1426,11 +1895,10 @@ async function initCollision() {
   if (dropMode) { return; }       // server has no matching model to query
   try {
     const r = await (await fetch('/api/collision/init')).json();
-    if (r.error) { log(`collision model: ${r.error}`, 'wrn'); return; }
+    if (r.error) { log(t('col.modelErr', { e: r.error }), 'wrn'); return; }
     if (!r.ready) { colPoll = setTimeout(initCollision, 2000); return; }
     colReady = true;
-    log(`collision model ready — ${r.baseline} rest-pose contact pairs ` +
-        'form the ignored baseline', 'ok');
+    log(t('col.ready', { n: r.baseline }), 'ok');
     collisionCheck();
   } catch { /* server gone; harmless */ }
 }
@@ -1571,29 +2039,30 @@ function jointPanelHtml(j, parentLink, childLink) {
       `<div class="jp-snaps">` +
         snaps.map(s => `<button data-v="${s}">${s}${um.unit}</button>`).join('') +
       `</div>` +
-      `<div class="jp-lim">limit ${dLo.toFixed(um.dec)} … ${dHi.toFixed(um.dec)} ` +
-        `${um.unit}${ang ? ` &nbsp;(${lo.toFixed(2)} … ${hi.toFixed(2)} rad)` : ''}</div>`;
+      `<div class="jp-lim">${t('jp.limit', {
+        lo: dLo.toFixed(um.dec), hi: dHi.toFixed(um.dec), unit: um.unit,
+        rad: ang ? ` &nbsp;(${lo.toFixed(2)} … ${hi.toFixed(2)} rad)` : '' })}</div>`;
   } else if (mimic) {
     const mn = j.mimicJoint?.name ?? j.mimicJoint;
-    body = `<div class="jp-lim">driven by <b>${mn}</b> (mimic)</div>`;
+    body = `<div class="jp-lim">${t('jp.mimic', { mn })}</div>`;
   } else {
-    body = `<div class="jp-lim">fixed — pick a type above to add motion</div>`;
+    body = `<div class="jp-lim">${t('jp.fixed')}</div>`;
   }
   return (
     `<div class="jpanel">` +
       `<div class="jp-title" title="${parentLink} → ${childLink}">` +
-        `🔧 関節エディタ` +
+        t('jp.title') +
         (mimic ? ` <span class="mimictag">mimic</span>` : '') +
       `</div>` +
       // editable names (double-click): link = the child link, joint = the joint
-      `<div class="jp-row"><span class="jp-lbl">link</span>` +
+      `<div class="jp-row"><span class="jp-lbl">${t('jp.lblLink')}</span>` +
         `<span class="jp-rename jp-name" data-kind="link" ` +
         `data-old="${childLink}">${childLink}</span></div>` +
-      `<div class="jp-row"><span class="jp-lbl">joint</span>` +
+      `<div class="jp-row"><span class="jp-lbl">${t('jp.lblJoint')}</span>` +
         `<span class="jp-rename jp-name" data-kind="joint" ` +
         `data-old="${j.name}">${j.name}</span></div>` +
       `<div class="jp-row">` +
-        `<span class="jp-lbl">type</span>` +
+        `<span class="jp-lbl">${t('jp.lblType')}</span>` +
         `<select class="jp-type t-${j.jointType}">${typeOpts}</select>` +
       `</div>` + body +
     `</div>`);
@@ -1673,7 +2142,7 @@ function fillLinkInfo(name) {
   const vis = [...(link.urdfNode?.children ?? [])]
     .find(e => e.tagName === 'visual');
   meshFile = vis?.querySelector('mesh')?.getAttribute('filename')
-    ?.split('/').pop() ?? '(none)';
+    ?.split('/').pop() ?? t('common.none');
   const inert = parseInertial(link);
   const mm = v => (v * 1000).toFixed(1);
   const rowsHtml = [];
@@ -1686,48 +2155,52 @@ function fillLinkInfo(name) {
       .find(e => e.tagName === 'parent')?.getAttribute('link')
       ?? (j.parent?.name ?? '');
     if (j.jointType !== 'fixed' && j.axis) {
-      add('joint axis', `(${[...j.axis.toArray()]
+      add(t('li.jointAxis'), `(${[...j.axis.toArray()]
         .map(x => x.toFixed(2)).join(', ')})`);
     }
   } else {
-    add('parent joint', '(root link)');
+    add(t('li.parentJoint'), t('li.rootLink'));
   }
   if (size) {
-    add('bbox', `${mm(size.x)} × ${mm(size.y)} × ${mm(size.z)} mm`);
+    add(t('li.bbox'), `${mm(size.x)} × ${mm(size.y)} × ${mm(size.z)} mm`);
   }
   if (inert) {
-    add('mass', inert.mass >= 0.1
+    add(t('li.mass'), inert.mass >= 0.1
       ? `${inert.mass.toFixed(3)} kg` : `${(inert.mass * 1000).toFixed(1)} g`);
-    add('CoM 🟣', `(${inert.com.map(mm).join(', ')}) mm`);
+    add(t('li.com'), `(${inert.com.map(mm).join(', ')}) mm`);
     if (inert.inertia) {
       const ii = inert.inertia;
-      add('inertia', `ixx=${ii.ixx.toExponential(2)} ` +
+      add(t('li.inertia'), `ixx=${ii.ixx.toExponential(2)} ` +
           `iyy=${ii.iyy.toExponential(2)} izz=${ii.izz.toExponential(2)}`);
     }
   }
   const c = mat?.color?.getHexString?.();
-  add('color', (c ? `<span class="sw" style="background:#${c}"></span> ` +
-                    `#${c}` : '(n/a)'));
+  add(t('li.color'), (c ? `<span class="sw" style="background:#${c}"></span> ` +
+                    `#${c}` : t('common.na')));
   // SolidWorks material + density (with web override), editable below
   const meta = compMeta[name];
   const matTxt = meta?.override
-    ? `${meta.override} kg/m³ <span style="color:#e8c468">(override)</span>`
+    ? `${meta.override} kg/m³ <span style="color:#e8c468">${t('li.override')}</span>`
     : meta?.material
       ? `${meta.material}${meta.density
           ? ` · ${meta.density.toFixed(0)} kg/m³` : ''}`
-      : meta ? '(SWで未設定)' : '(再抽出で取得)';
-  add('material', matTxt);
-  add('mesh', `${meshFile} · ${Math.round(tris)} tris`);
+      : meta ? t('li.swUnset') : t('li.reextract');
+  add(t('li.material'), matTxt);
+  add(t('li.mesh'), `${meshFile} · ${Math.round(tris)} tris`);
+  // value 'custom' triggers the prompt; everything else is a density number
+  const matChoices = [['PLA', '1240'], ['ABS', '1040'], ['PETG', '1270'],
+    [t('li.matNylon'), '1140'], ['POM', '1410'], [t('li.matFR4'), '1850'],
+    [t('li.matAlu'), '2700'], [t('li.matSteel'), '7850'],
+    [t('li.matTitanium'), '4500'], [t('li.matCustom'), 'custom']];
   rowsHtml.push(
-    `<tr><td>set 材質</td><td><select id="li_mat" style="width:100%;` +
+    `<tr><td>${t('li.setMaterial')}</td><td><select id="li_mat" style="width:100%;` +
     `background:#15171a;color:#ddd;border:1px solid #444;` +
     `border-radius:3px;font-size:11px">` +
-    `<option value="">— 密度を上書き —</option>` +
-    `<option value="">SW値に戻す (上書き解除)</option>` +
-    ['PLA 1240', 'ABS 1040', 'PETG 1270', 'ナイロン 1140', 'POM 1410',
-     'FR4基板 1850', 'アルミ6061 2700', '鉄/鋼 7850', 'チタン 4500',
-     'カスタム…'].map(s =>
-      `<option value="${s.split(' ').pop()}">${s}</option>`).join('') +
+    `<option value="">${t('li.densityPlaceholder')}</option>` +
+    `<option value="">${t('li.densityReset')}</option>` +
+    matChoices.map(([label, val]) =>
+      `<option value="${val}">${val === 'custom' ? label : label + ' ' + val}` +
+      `</option>`).join('') +
     `</select></td></tr>`);
   const jointHtml = j ? jointPanelHtml(j, jParentLink, name) : '';
   el.innerHTML = jointHtml +
@@ -1737,12 +2210,12 @@ function fillLinkInfo(name) {
   sel.addEventListener('change', async () => {
     let d = sel.value;
     if (sel.selectedIndex === 1) { d = null; }            // remove override
-    else if (sel.options[sel.selectedIndex].text.startsWith('カスタム')) {
-      d = prompt('密度 (kg/m³):');
+    else if (d === 'custom') {
+      d = prompt(t('li.densityPrompt'));
       if (!d) { sel.selectedIndex = 0; return; }
     } else if (!d) { return; }
     op('setMaterial', { link: name, density: d });
-    log(`setting density of ${name} -> ${d ?? '(SW値)'} + rebuilding …`);
+    log(t('li.settingDensity', { name, d: d ?? t('li.swValue') }));
     try {
       const resp = await fetch('/api/set_material', {
         method: 'POST',
@@ -1751,13 +2224,13 @@ function fillLinkInfo(name) {
                                density: d ? Number(d) : null }) });
       const r = await resp.json();
       if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
-      log('density updated ✓ (mass/inertia rebuilt)', 'ok');
+      log(t('li.densityOk'), 'ok');
       loadRobot(currentInfo, { keepPose: true });
       refreshHistory();
       const reselect = name;
       setTimeout(() => selectLink(reselect), 1500);
     } catch (e) {
-      log(`set material failed: ${e.message ?? e}`, 'err');
+      log(t('li.densityFail', { e: e.message ?? e }), 'err');
     }
   });
   el.style.display = 'block';   // '' would fall back to the stylesheet's
@@ -1773,7 +2246,7 @@ function selectLink(linkName) {
   const bar = document.getElementById('selbar');
   if (linkName) {
     _tintLink(linkName, baseTint(linkName));   // red survives selection
-    statusEl.textContent = `selected: ${linkName}`;
+    statusEl.textContent = t('sel.status', { name: linkName });
     document.getElementById('selname').textContent = linkName;
     document.getElementById('seleye').classList.toggle(
       'off', hiddenLinks.has(linkName));
@@ -1807,7 +2280,7 @@ document.getElementById('seleye').addEventListener('click', () => {
 // 🗑 = REALLY remove from the built URDF (yaml exclude:), not just hide
 async function setExclude(body, what) {
   op('exclude', body);
-  log(`${what} + rebuilding …`);
+  log(t('common.rebuilding', { what }));
   try {
     const resp = await fetch('/api/set_exclude', {
       method: 'POST',
@@ -1815,12 +2288,11 @@ async function setExclude(body, what) {
       body: JSON.stringify(body) });
     const r = await resp.json();
     if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
-    log(`URDF exclude list now: ${r.excluded.length} item(s) ✓ (Ctrl+Z`
-        + ` で復元可)`, 'ok');
+    log(t('excl.now', { n: r.excluded.length }), 'ok');
     loadRobot(currentInfo, { keepPose: true });
     refreshHistory();
   } catch (e) {
-    log(`exclude failed: ${e.message ?? e}`, 'err');
+    log(t('excl.fail', { e: e.message ?? e }), 'err');
   }
 }
 document.getElementById('selexclude').addEventListener('click', () => {
@@ -1828,10 +2300,10 @@ document.getElementById('selexclude').addEventListener('click', () => {
   const comp = compMeta[selectedLink]?.name ?? selectedLink;
   const l = selectedLink;
   selectLink(null);
-  setExclude({ name: comp, on: true }, `excluding ${l} from the URDF`);
+  setExclude({ name: comp, on: true }, t('excl.excluding', { l }));
 });
 document.getElementById('exclchip').addEventListener('click', () =>
-  setExclude({ clear: true }, 'restoring all excluded components'));
+  setExclude({ clear: true }, t('excl.restoring')));
 
 function highlightJoint(name, on) {
   const m = axisMarkers.get(name);
@@ -1876,7 +2348,7 @@ document.getElementById('bulkset').addEventListener('click', () => {
     }
   });
   if (!changes.length) {
-    log('no joints selected (use the checkboxes / select-all)', 'wrn');
+    log(t('bulk.noneSelected'), 'wrn');
     return;
   }
   applyTypeChanges(changes);             // the whole batch in ONE rebuild
@@ -1889,8 +2361,8 @@ async function applyTypeChanges(changes) {
     reselectAfterLoad = null;
     return false;
   }
-  log(`applying ${changes.length} type change(s) + rebuilding URDF …`);
-  statusEl.textContent = '⏳ rebuilding URDF …';
+  log(t('types.applying', { n: changes.length }));
+  statusEl.textContent = t('status.rebuilding');
   try {
     const resp = await fetch('/api/set_types', {
       method: 'POST',
@@ -1899,21 +2371,19 @@ async function applyTypeChanges(changes) {
     const r = await resp.json();
     if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
     if (r.missed?.length) {
-      log(`not found in joints.yaml: ${r.missed.join(', ')}`, 'wrn');
+      log(t('types.notFound', { list: r.missed.join(', ') }), 'wrn');
     }
     if (!r.applied?.length) {
-      log('NO change matched joints.yaml — nothing was rebuilt ' +
-          '(joint naming mismatch; see missed list above)', 'err');
+      log(t('types.noneMatched'), 'err');
       reselectAfterLoad = null;
       return false;
     }
-    log(`rebuilt ✓ (${r.applied.length} change(s)) — reloading (meshes ` +
-        `come from cache, pose+camera kept)`, 'ok');
+    log(t('types.rebuilt', { n: r.applied.length }), 'ok');
     loadRobot(currentInfo, { keepPose: true });
     refreshHistory();
     return true;
   } catch (e) {
-    log(`apply failed: ${e.message ?? e}`, 'err');
+    log(t('types.applyFail', { e: e.message ?? e }), 'err');
     reselectAfterLoad = null;
     return false;
   }
@@ -1923,17 +2393,15 @@ async function applyTypeChanges(changes) {
 const autolimitsBtn = document.getElementById('autolimits');
 autolimitsBtn.addEventListener('click', async () => {
   if (!currentInfo || dropMode) {
-    log('auto-limits needs a server package (open via 📄/📁, not drop)',
-        'wrn');
+    log(t('auto.needPkg'), 'wrn');
     return;
   }
   autolimitsBtn.disabled = true;
   op('autoLimits', {});
-  log('self-collision limit sweep (coarse scan + binary search) — '
-      + 'this takes a few seconds …');
+  log(t('auto.sweepStart'));
   // ONE blocking request, no progress polling: polling during the CPU-bound
   // sweep thrashes the server's GIL and balloons it ~20x (8s -> 200s).
-  showLoadbar('関節リミットを探索中 …', { indet: true });
+  showLoadbar(t('auto.sweepBar'), { indet: true });
   try {
     const resp0 = await fetch('/api/auto_limits');
     const data = await resp0.json();
@@ -1941,15 +2409,14 @@ autolimitsBtn.addEventListener('click', async () => {
     const results = data.results || [];
     const limited = results.filter(r => !r.continuous);
     const cont = results.filter(r => r.continuous);
-    log(`sweep done: ${limited.length} joint(s) get limits, ` +
-        `${cont.length} stay continuous — applying …`, 'ok');
+    log(t('auto.sweepDone', { l: limited.length, c: cont.length }), 'ok');
     if (!results.length) {
-      log('no rotational joints to limit', 'wrn');
+      log(t('auto.noRot'), 'wrn');
       hideLoadbar();
       autolimitsBtn.disabled = false;
       return;
     }
-    showLoadbar('リミットを書き込み・再ビルド中 …', { indet: true });
+    showLoadbar(t('auto.writeBar'), { indet: true });
     const resp = await fetch('/api/set_limits', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1957,15 +2424,14 @@ autolimitsBtn.addEventListener('click', async () => {
     const r = await resp.json();
     if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
     if (r.missed?.length) {
-      log(`not matched in joints.yaml: ${r.missed.join(', ')}`, 'wrn');
+      log(t('auto.notMatched', { list: r.missed.join(', ') }), 'wrn');
     }
-    log(`applied limits to ${r.applied.length} joint(s) ✓ — reloading ` +
-        '(Ctrl+Z で元に戻せます)', 'ok');
+    log(t('auto.applied', { n: r.applied.length }), 'ok');
     loadRobot(currentInfo, { keepPose: true });
     refreshHistory();
   } catch (e) {
     hideLoadbar();
-    log(`auto-limits failed: ${e.message ?? e}`, 'err');
+    log(t('auto.fail', { e: e.message ?? e }), 'err');
   } finally {
     autolimitsBtn.disabled = false;
   }
@@ -2012,7 +2478,7 @@ function seatModel() {
   viewer.controls.target.set(0, 0, 0);   // look at the (fixed) origin
   viewer.controls.update();
   viewer.redraw();
-  log('base_link を世界原点に合わせました ⌖', 'ok');
+  log(t('origin.seated'), 'ok');
 }
 document.getElementById('vorigin').addEventListener('click', seatModel);
 
@@ -2064,11 +2530,11 @@ document.querySelectorAll('#views button[data-v]').forEach(b =>
 async function reRoot(link) {
   op('reRoot', { link });
   if (!currentInfo) {
-    log('root change needs a server-side package (not a drop)', 'wrn');
+    log(t('reroot.needPkg'), 'wrn');
     return;
   }
-  log(`re-rooting at ${link} + rebuilding …`);
-  statusEl.textContent = '⏳ re-rooting …';
+  log(t('reroot.start', { link }));
+  statusEl.textContent = t('reroot.status');
   try {
     const resp = await fetch('/api/set_base', {
       method: 'POST',
@@ -2076,11 +2542,11 @@ async function reRoot(link) {
       body: JSON.stringify({ link }) });
     const r = await resp.json();
     if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
-    log(`root is now ${r.base} (${r.flipped} edges re-rooted) ✓`, 'ok');
+    log(t('reroot.ok', { base: r.base, flipped: r.flipped }), 'ok');
     loadRobot(currentInfo, { keepPose: true, followCamera: true });
     refreshHistory();
   } catch (e) {
-    log(`re-root failed: ${e.message ?? e}`, 'err');
+    log(t('reroot.fail', { e: e.message ?? e }), 'err');
   }
 }
 
@@ -2178,8 +2644,7 @@ alignBtn.addEventListener('click', () => {
   const on = alignBtn.classList.toggle('active');
   if (on) {
     portBtn.classList.remove('active');   // the two face modes are exclusive
-    log('align mode: hover highlights the face; click = root origin at ' +
-        'the FACE CENTER, +Z along its normal; Esc to cancel', 'wrn');
+    log(t('align.modeOn'), 'wrn');
   } else {
     clearFaceOverlay();
   }
@@ -2196,9 +2661,7 @@ portBtn.addEventListener('click', () => {
   if (on) {
     alignBtn.classList.remove('active');  // the two face modes are exclusive
     clearFaceOverlay();
-    log('port mode: hover a face, click = add a dummy_link there (+Z along ' +
-        'its normal); click a magenta port marker to remove it; Esc to cancel',
-        'wrn');
+    log(t('port.modeOn'), 'wrn');
   } else {
     clearFaceOverlay();
   }
@@ -2207,7 +2670,7 @@ portBtn.addEventListener('click', () => {
 async function alignRootTo(hit) {
   op('align');
   if (!currentInfo) {
-    log('align needs a server-side package (not a drop)', 'wrn');
+    log(t('align.needPkg'), 'wrn');
     return;
   }
   // prefer the detected face (centroid + plane normal); fall back to the
@@ -2218,7 +2681,7 @@ async function alignRootTo(hit) {
       faceOverlay.centroidLocal.clone());
     nWorld = faceOverlay.normalLocal.clone()
       .transformDirection(faceOverlay.host.matrixWorld);
-    log(`face center used (area ${(faceOverlay.area * 1e6).toFixed(0)} mm²)`);
+    log(t('align.faceCenter', { area: (faceOverlay.area * 1e6).toFixed(0) }));
   } else {
     wPoint = hit.point.clone();
     nWorld = hit.face.normal.clone()
@@ -2233,11 +2696,10 @@ async function alignRootTo(hit) {
     new THREE.Quaternion()).invert();
   const nLocal = nWorld.applyQuaternion(qInv)
     .transformDirection(inv).normalize();
-  log(`aligning root: origin=(${pLocal.x.toFixed(4)}, ` +
-      `${pLocal.y.toFixed(4)}, ${pLocal.z.toFixed(4)}) ` +
-      `+Z=(${nLocal.x.toFixed(2)}, ${nLocal.y.toFixed(2)}, ` +
-      `${nLocal.z.toFixed(2)}) + rebuilding …`);
-  statusEl.textContent = '⏳ aligning root frame …';
+  log(t('align.aligning', {
+    origin: `${pLocal.x.toFixed(4)}, ${pLocal.y.toFixed(4)}, ${pLocal.z.toFixed(4)}`,
+    zdir: `${nLocal.x.toFixed(2)}, ${nLocal.y.toFixed(2)}, ${nLocal.z.toFixed(2)}` }));
+  statusEl.textContent = t('align.status');
   try {
     const resp = await fetch('/api/set_root_pose', {
       method: 'POST',
@@ -2246,19 +2708,18 @@ async function alignRootTo(hit) {
                              zdir: nLocal.toArray() }) });
     const r = await resp.json();
     if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
-    log('root frame aligned ✓ (root_rpy/root_xyz written to joints.yaml)',
-        'ok');
+    log(t('align.ok'), 'ok');
     applyRootPose(r.rpy, r.xyz);     // in-place: no reload, no flash
     refreshHistory();
   } catch (e) {
-    log(`align failed: ${e.message ?? e}`, 'err');
+    log(t('align.fail', { e: e.message ?? e }), 'err');
   }
 }
 
 async function addPortAt(ph) {
   op('add_port');
   if (!currentInfo) {
-    log('add port needs a server-side package (not a drop)', 'wrn');
+    log(t('port.needPkg'), 'wrn');
     return;
   }
   // recompute the face overlay from THIS click: the hover that drew it is
@@ -2281,17 +2742,16 @@ async function addPortAt(ph) {
   // link's frame (its matrixWorld already reflects the current pose; a rebuild
   // reproduces the same link-relative frame -- no rootDelta juggling needed)
   const lo = viewer.robot.links[ph.link];
-  if (!lo) { log(`add port: link '${ph.link}' not found`, 'err'); return; }
+  if (!lo) { log(t('port.linkNotFound', { link: ph.link }), 'err'); return; }
   lo.updateMatrixWorld(true);
   const pLocal = lo.worldToLocal(wPoint.clone());
   const nLocal = nWorld.clone()
     .applyQuaternion(lo.getWorldQuaternion(new THREE.Quaternion()).invert())
     .normalize();
-  log(`adding port on ${ph.link}: origin=(${pLocal.x.toFixed(4)}, ` +
-      `${pLocal.y.toFixed(4)}, ${pLocal.z.toFixed(4)}) ` +
-      `+Z=(${nLocal.x.toFixed(2)}, ${nLocal.y.toFixed(2)}, ` +
-      `${nLocal.z.toFixed(2)}) + rebuilding …`);
-  statusEl.textContent = '⏳ adding port …';
+  log(t('port.adding', { link: ph.link,
+    origin: `${pLocal.x.toFixed(4)}, ${pLocal.y.toFixed(4)}, ${pLocal.z.toFixed(4)}`,
+    zdir: `${nLocal.x.toFixed(2)}, ${nLocal.y.toFixed(2)}, ${nLocal.z.toFixed(2)}` }));
+  statusEl.textContent = t('port.status');
   try {
     const resp = await fetch('/api/add_port', {
       method: 'POST',
@@ -2300,20 +2760,19 @@ async function addPortAt(ph) {
                              zdir: nLocal.toArray() }) });
     const r = await resp.json();
     if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
-    log(`port added on ${r.parent} ✓ (ports: entry written to joints.yaml)`,
-        'ok');
+    log(t('port.added', { parent: r.parent }), 'ok');
     loadRobot(currentInfo, { keepPose: true });   // the dummy_link needs a rebuild
     refreshHistory();
   } catch (e) {
-    log(`add port failed: ${e.message ?? e}`, 'err');
+    log(t('port.addFail', { e: e.message ?? e }), 'err');
   }
 }
 
 async function removePort(name) {
   op('remove_port');
   if (!currentInfo) { return; }
-  log(`removing port ${name} + rebuilding …`);
-  statusEl.textContent = '⏳ removing port …';
+  log(t('port.removing', { name }));
+  statusEl.textContent = t('port.removeStatus');
   try {
     const resp = await fetch('/api/remove_port', {
       method: 'POST',
@@ -2321,11 +2780,11 @@ async function removePort(name) {
       body: JSON.stringify({ name }) });
     const r = await resp.json();
     if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
-    log(`port ${name} removed ✓`, 'ok');
+    log(t('port.removed', { name }), 'ok');
     loadRobot(currentInfo, { keepPose: true });
     refreshHistory();
   } catch (e) {
-    log(`remove port failed: ${e.message ?? e}`, 'err');
+    log(t('port.removeFail', { e: e.message ?? e }), 'err');
   }
 }
 
@@ -2346,7 +2805,7 @@ viewer.addEventListener('pointerup', ev => {
     const ph = pickHit(ev);
     alignBtn.classList.remove('active');
     if (ph?.hit?.face) { alignRootTo(ph.hit); }
-    else { log('align cancelled (no face under the cursor)', 'wrn'); }
+    else { log(t('align.cancelNoFace'), 'wrn'); }
     return;
   }
   if (portOn()) {                                  // stays on: add several
@@ -2354,7 +2813,7 @@ viewer.addEventListener('pointerup', ev => {
     if (pn) { removePort(pn); return; }
     const ph = pickHit(ev);
     if (ph?.hit?.face) { addPortAt(ph); }
-    else { log('port: no face under the cursor', 'wrn'); }
+    else { log(t('port.noFace'), 'wrn'); }
     return;
   }
   const link = pickLink(ev);
@@ -2376,8 +2835,7 @@ viewer.addEventListener('pointermove', ev => {
     if (port) {
       clearFaceOverlay();
       const rect = viewer.getBoundingClientRect();
-      hovertip.innerHTML = `${port} — <span class="key">click</span> remove ` +
-        `this port`;
+      hovertip.innerHTML = t('hov.removePort', { port });
       hovertip.style.left = (ev.clientX - rect.left + 14) + 'px';
       hovertip.style.top = (ev.clientY - rect.top + 18) + 'px';
       hovertip.style.display = 'block';
@@ -2388,10 +2846,8 @@ viewer.addEventListener('pointermove', ev => {
       showFaceOverlay(ph.hit);
       const rect = viewer.getBoundingClientRect();
       hovertip.innerHTML = portOn()
-        ? `${ph.link} — <span class="key">click</span> add a port here ` +
-          `(+Z = face normal)`
-        : `${ph.link} — <span class="key">click</span> ` +
-          `align root to this face (origin = face center)`;
+        ? t('hov.addPort', { link: ph.link })
+        : t('hov.alignFace', { link: ph.link });
       hovertip.style.left = (ev.clientX - rect.left + 14) + 'px';
       hovertip.style.top = (ev.clientY - rect.top + 18) + 'px';
       hovertip.style.display = 'block';
@@ -2408,10 +2864,8 @@ viewer.addEventListener('pointermove', ev => {
   if (link) {
     const rect = viewer.getBoundingClientRect();
     hovertip.innerHTML = link === selectedLink
-      ? `✓ ${link} selected — <span class="key">R</span> make root`
-      : `${link} — <span class="key">click</span> select, ` +
-        `<span class="key">dbl-click</span> tree, ` +
-        `<span class="key">Shift+drag</span> 範囲選択`;
+      ? t('hov.selected', { link })
+      : t('hov.link', { link });
     hovertip.style.left = (ev.clientX - rect.left + 14) + 'px';
     hovertip.style.top = (ev.clientY - rect.top + 18) + 'px';
     hovertip.style.display = 'block';
@@ -2486,12 +2940,12 @@ function selectLinksInBox(rect) {
   op('boxSelect', { n: boxSelected.size });
   if (boxSelected.size) {
     document.getElementById('bulkcount').textContent =
-      `${boxSelected.size} 個のリンクを選択`;
+      t('bulk.count', { n: boxSelected.size });
     bulkbarEl.style.display = 'flex';
-    log(`box-select: ${boxSelected.size} links — 一括で type を設定できます`);
+    log(t('bulk.boxSelected', { n: boxSelected.size }));
   } else {
     bulkbarEl.style.display = 'none';
-    log('box-select: 範囲内にリンクなし', 'wrn');
+    log(t('bulk.boxNone'), 'wrn');
   }
 }
 
@@ -2509,22 +2963,22 @@ async function bulkSetType(type) {
   const links = [...boxSelected];
   if (!links.length || !currentInfo) { return; }
   bulkbarEl.querySelectorAll('button').forEach(b => b.disabled = true);
-  log(`一括設定: ${links.length} links → ${type} …`);
-  statusEl.textContent = '⏳ rebuilding URDF …';
+  log(t('bulk.applying', { n: links.length, type }));
+  statusEl.textContent = t('status.rebuilding');
   try {
     const resp = await fetch('/api/set_types', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ changes: links.map(c => ({ child: c, type })) }) });
     const r = await resp.json();
     if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
-    log(`一括設定 ✓ — ${r.applied?.length ?? 0} 件適用` +
-        (r.missed?.length ? ` (${r.missed.length} 件は対象外)` : '') +
-        ' — reloading (Ctrl+Z で戻せます)', 'ok');
+    log(t('bulk.applied', { n: r.applied?.length ?? 0 }) +
+        (r.missed?.length ? t('bulk.appliedMissed', { m: r.missed.length }) : '') +
+        t('bulk.reloadUndo'), 'ok');
     clearBoxSelection();
     loadRobot(currentInfo, { keepPose: true });
     refreshHistory();
   } catch (e) {
-    log(`一括設定 failed: ${e.message ?? e}`, 'err');
+    log(t('bulk.fail', { e: e.message ?? e }), 'err');
   } finally {
     bulkbarEl.querySelectorAll('button').forEach(b => b.disabled = false);
   }
@@ -2561,20 +3015,19 @@ viewer.addEventListener('dblclick', () => {
 function fitView() {
   const box = robotBox();
   if (!box) {
-    log('bounding box is EMPTY — meshes attached but no geometry?', 'err');
+    log(t('fit.emptyBox'), 'err');
     return;
   }
   const size = box.getSize(new THREE.Vector3());
-  log(`robot bbox: ${size.x.toFixed(3)} × ${size.y.toFixed(3)} × ` +
-      `${size.z.toFixed(3)} m`);
+  log(t('fit.bbox', { x: size.x.toFixed(3), y: size.y.toFixed(3),
+                      z: size.z.toFixed(3) }));
   if (size.length() > 100) {
-    log('bbox is >100 m — mesh units look wrong (mm leaking through?)',
-        'wrn');
+    log(t('fit.bigBox'), 'wrn');
   }
   const diag = size.length();
   viewer.controls.minDistance = Math.min(0.25, diag / 5);
   setView('iso');
-  log('camera fitted ✓', 'ok');
+  log(t('fit.ok'), 'ok');
 }
 
 // ---- ground grid with a "nice" pitch chosen from the model size ---------
@@ -2640,8 +3093,7 @@ gridBtn.addEventListener('click', () => {
 
 viewer.addEventListener('urdf-processed', () => {
   const n = buildJointRows(viewer.robot);
-  log(`URDF parsed ✓ — ${Object.keys(viewer.robot.links).length} links, ` +
-      `${n} movable joints`, 'ok');
+  log(t('urdf.parsed', { n: Object.keys(viewer.robot.links).length, m: n }), 'ok');
 });
 let pendingRestore = null;   // {angles} saved across an edit-rebuild reload
 let loadCover = null;        // visual clone shown while the URDF reloads,
@@ -2658,7 +3110,7 @@ function removeLoadCover() {
 viewer.addEventListener('geometry-loaded', () => {
   hideLoadbar();
   document.getElementById('loadbackdrop').style.display = 'none';  // new model in
-  log('all meshes loaded ✓', 'ok');
+  log(t('mesh.allLoaded'), 'ok');
   const restore = pendingRestore;
   pendingRestore = null;
   requestAnimationFrame(() => {
@@ -2701,14 +3153,14 @@ viewer.addEventListener('geometry-loaded', () => {
           viewer.camera.up.transformDirection(R);
           viewer.camera.updateProjectionMatrix();
           viewer.controls.update();
-          log('camera followed the model ✓', 'ok');
+          log(t('reroot.camFollow'), 'ok');
           break;
         }
       }
       buildJointRows(viewer.robot);
       removeLoadCover();           // new robot is in place: drop the ghost
       viewer.redraw();
-      log(`pose restored (${n} joints)`, 'ok');
+      log(t('pose.restored', { n }), 'ok');
     } else {
       removeLoadCover();
       fitView();
@@ -2718,17 +3170,18 @@ viewer.addEventListener('geometry-loaded', () => {
       if (viewer.robot.links[rl]) { selectLink(rl); }   // keep the panel open
     }
   });
-  statusEl.textContent =
-    `${Object.keys(viewer.robot.links).length} links · ` +
-    `${buildJointRows(viewer.robot)} movable joints · meshes ` +
-    `${meshStats.done}/${meshStats.want}` +
-    (meshStats.fail ? ` (${meshStats.fail} failed)` : ' ✓');
+  statusEl.textContent = t('status.summary', {
+    links: Object.keys(viewer.robot.links).length,
+    joints: buildJointRows(viewer.robot),
+    done: meshStats.done, want: meshStats.want,
+    tail: meshStats.fail ? t('status.summaryFail', { n: meshStats.fail })
+                         : t('status.summaryOk') });
 });
 viewer.addEventListener('urdf-error', e => {
   removeLoadCover();
   hideLoadbar();
   document.getElementById('loadbackdrop').style.display = 'none';
-  log(`URDF error: ${e.detail ?? '(see console)'}`, 'err');
+  log(t('urdf.error', { detail: e.detail ?? t('urdf.seeConsole') }), 'err');
 });
 
 document.getElementById('reset').addEventListener('click', () => {
@@ -2789,11 +3242,11 @@ function loadRobot(info, { drop = false, keepPose = false,
     refreshRootBox({ resetBaseline: true });
     refreshCompMeta();
   }
-  statusEl.textContent = 'loading URDF …';
-  log(`loading URDF ${info.urdf} …`);
+  statusEl.textContent = t('status.loadingUrdf');
+  log(t('urdf.loading', { urdf: info.urdf }));
   // centre bar only when the load is actually noticeable (300 ms grace:
   // cached edit-reloads finish before it ever appears)
-  showLoadbar(`${info.name} を読み込み中 …`, { indet: true, delay: 300 });
+  showLoadbar(t('urdf.loadingBar', { name: info.name }), { indet: true, delay: 300 });
   // cache-bust so a rebuilt URDF is never served stale by the browser
   viewer.urdf = drop ? info.urdf : info.urdf + '?v=' + Date.now();
 }
@@ -2860,10 +3313,10 @@ function applyRootPose(rpy, xyz) {
 async function postRootPose(body, what) {
   op('rootPose', { what });
   if (!currentInfo) {
-    log('root frame editing needs a server-side package', 'wrn');
+    log(t('root.needPkg'), 'wrn');
     return;
   }
-  log(`${what} …`);
+  log(t('root.doing', { what }));
   try {
     const resp = await fetch('/api/set_root_pose', {
       method: 'POST',
@@ -2873,10 +3326,10 @@ async function postRootPose(body, what) {
     if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
     applyRootPose(r.rpy, r.xyz);     // in-place: no reload, no flash
     refreshHistory();
-    log('root frame updated ✓ (no reload needed)', 'ok');
-    statusEl.textContent = 'root frame updated';
+    log(t('root.ok'), 'ok');
+    statusEl.textContent = t('root.okStatus');
   } catch (e) {
-    log(`root frame update failed: ${e.message ?? e}`, 'err');
+    log(t('root.fail', { e: e.message ?? e }), 'err');
   }
 }
 
@@ -2884,7 +3337,7 @@ document.querySelectorAll('#rootbox .rot').forEach(b =>
   b.addEventListener('click', () => {
     const rpy = [0, 0, 0];
     rpy[Number(b.dataset.ax)] = Number(b.dataset.s) * Math.PI / 2;
-    postRootPose({ rpy }, `rotating root ${b.textContent}`);
+    postRootPose({ rpy }, t('root.rotating', { dir: b.textContent }));
   }));
 // numeric fields apply LIVE (Enter / focus-out), no Set button needed
 function applyRootFields() {
@@ -2892,7 +3345,7 @@ function applyRootFields() {
   postRootPose({ absolute: {
     rpy: [deg('r_r') * D2R, deg('r_p') * D2R, deg('r_y') * D2R],
     xyz: [deg('r_x') / 1000, deg('r_yy') / 1000, deg('r_z') / 1000] } },
-    'setting root frame numerically');
+    t('root.settingNumeric'));
 }
 ['r_r', 'r_p', 'r_y', 'r_x', 'r_yy', 'r_z'].forEach(id =>
   document.getElementById(id).addEventListener('change', applyRootFields));
@@ -2907,9 +3360,11 @@ async function refreshHistory() {
     undoBtn.disabled = !h.undo?.length;
     redoBtn.disabled = !h.redo?.length;
     undoBtn.title = h.undo?.length
-      ? `undo: ${h.undo[h.undo.length - 1]} (Ctrl+Z)` : 'undo (Ctrl+Z)';
+      ? t('hist.undoTitle', { label: h.undo[h.undo.length - 1] })
+      : t('hist.undoEmpty');
     redoBtn.title = h.redo?.length
-      ? `redo: ${h.redo[h.redo.length - 1]} (Ctrl+Y)` : 'redo (Ctrl+Y)';
+      ? t('hist.redoTitle', { label: h.redo[h.redo.length - 1] })
+      : t('hist.redoEmpty');
   } catch { /* no package yet */ }
 }
 
@@ -2920,12 +3375,12 @@ async function doHistory(which) {
     const resp = await fetch('/api/' + which, { method: 'POST' });
     const r = await resp.json();
     if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
-    log(`${which}: ${r.label} ✓`, 'ok');
+    log(t('hist.done', { which, label: r.label }), 'ok');
     loadRobot(currentInfo, { keepPose: true });
     refreshRootBox();
     refreshHistory();
   } catch (e) {
-    log(`${which} failed: ${e.message ?? e}`, 'wrn');
+    log(t('hist.fail', { which, e: e.message ?? e }), 'wrn');
   }
 }
 undoBtn.addEventListener('click', () => doHistory('undo'));
@@ -2953,7 +3408,7 @@ async function openServerPath(p) {
   const resp = await fetch('/api/open?path=' + encodeURIComponent(p));
   const info = await resp.json();
   if (!resp.ok || info.error) {
-    log(`open failed: ${info.error ?? resp.status}`, 'err');
+    log(t('open.fail', { e: info.error ?? resp.status }), 'err');
     return;
   }
   loadRobot(info);
@@ -2963,40 +3418,41 @@ async function openServerPath(p) {
 // not "0.2 min")
 function fmtSecs(s) {
   s = Math.round(s);
-  return s < 60 ? `${s}秒`
-                : `${Math.floor(s / 60)}分${String(s % 60).padStart(2, '0')}秒`;
+  return s < 60 ? t('time.sec', { s })
+                : t('time.minSec', { m: Math.floor(s / 60),
+                                     s: String(s % 60).padStart(2, '0') });
 }
 // put the loadbar back into the indeterminate (sweeping) state
 function loadbarIndet() {
   loadbarEl.classList.add('indet');
   loadbarEl.querySelector('.lb-fill').style.width = '30%';
 }
-// map an extract log line to a short Japanese phase label
+// map an extract log line to a short, localised phase label
 function extractPhase(line) {
-  if (/starting SolidWorks/.test(line)) return 'SolidWorks を起動中';
-  if (/reusing the warm/.test(line))    return 'SolidWorks セッション再利用';
-  if (/opening copy|loading the assembly/.test(line)) return 'アセンブリ読込中';
-  if (/components.*mate|reading components/.test(line)) return '部品・メイト解析中';
-  if (/sub-assembly internal mesh/.test(line)) return 'サブアセンブリのメッシュ出力中';
-  if (/reading sub-assembly/.test(line)) return 'サブアセンブリ解析中';
-  if (/full assembly mesh/.test(line))   return '全体メッシュ出力中';
-  if (/saving graph/.test(line))         return 'graph.json 保存中';
-  if (/model from graph|build/.test(line)) return 'URDF 生成中';
-  return '抽出中';
+  if (/starting SolidWorks/.test(line)) return t('phase.starting');
+  if (/reusing the warm/.test(line))    return t('phase.reuse');
+  if (/opening copy|loading the assembly/.test(line)) return t('phase.opening');
+  if (/components.*mate|reading components/.test(line)) return t('phase.components');
+  if (/sub-assembly internal mesh/.test(line)) return t('phase.subMesh');
+  if (/reading sub-assembly/.test(line)) return t('phase.subRead');
+  if (/full assembly mesh/.test(line))   return t('phase.fullMesh');
+  if (/saving graph/.test(line))         return t('phase.savingGraph');
+  if (/model from graph|build/.test(line)) return t('phase.buildUrdf');
+  return t('phase.extracting');
 }
 
 // SolidWorks extraction: start the job, stream its progress into the log
 async function extractFlow(p) {
-  log(`requesting SolidWorks extraction: ${p}`, 'wrn');
-  statusEl.textContent = '⏳ SolidWorks から抽出中 …';
+  log(t('extract.request', { p }), 'wrn');
+  statusEl.textContent = t('extract.statusRunning');
   const resp = await fetch('/api/extract?path=' + encodeURIComponent(p));
   const r = await resp.json();
   if (!resp.ok || r.error) {
-    log(`extract failed to start: ${r.error ?? resp.status}`, 'err');
+    log(t('extract.startFail', { e: r.error ?? resp.status }), 'err');
     return;
   }
-  log('extraction started (SolidWorks runs hidden) …');
-  showLoadbar('SolidWorks から抽出中 …', { indet: true });
+  log(t('extract.started'));
+  showLoadbar(t('extract.bar'), { indet: true });
   const t0 = performance.now();
   let seen = 0;
   const poll = setInterval(async () => {
@@ -3012,10 +3468,10 @@ async function extractFlow(p) {
       if (st.error) {
         hideLoadbar();
         document.getElementById('loadbackdrop').style.display = 'none';
-        log(`extraction FAILED: ${st.error}`, 'err');
+        log(t('extract.failed', { e: st.error }), 'err');
         return;
       }
-      log(`extraction finished in ${fmtSecs(elapsed)} ✓`, 'ok');
+      log(t('extract.done', { time: fmtSecs(elapsed) }), 'ok');
       openServerPath(st.package);   // its own loadbar takes over
       return;
     }
@@ -3027,15 +3483,15 @@ async function extractFlow(p) {
       .find(l => l.startsWith('... still'));
     const alive = heartbeat &&
       heartbeat.match(/(\d+) SolidWorks process/);
-    statusEl.textContent = `⏳ 抽出中 … ${fmtSecs(elapsed)}`;
+    statusEl.textContent = t('extract.statusElapsed', { time: fmtSecs(elapsed) });
 
     // B: determinate bar while exporting the per-link meshes (the bulk)
     const mesh = lastReal.match(/exporting mesh (\d+)\/(\d+)/);
     if (mesh) {
       const i = +mesh[1], n = +mesh[2];
       const name = lastReal.split(': ').slice(-1)[0] ?? '';
-      updateLoadbar(i / n, `メッシュ ${i}/${n}  ${name}`.slice(0, 64),
-                    `メッシュ出力中 — ${fmtSecs(elapsed)}`);
+      updateLoadbar(i / n, t('extract.meshBar', { i, n, name }).slice(0, 64),
+                    t('extract.meshSub', { time: fmtSecs(elapsed) }));
       return;
     }
     // C: cold-start reassurance -- "starting SolidWorks" can be ~30 s of
@@ -3044,15 +3500,15 @@ async function extractFlow(p) {
     loadbarIndet();
     if (/starting SolidWorks/.test(lastReal)) {
       const sub = alive
-        ? `SolidWorks 稼働中 ✓ (${alive[1]} プロセス) — 初回は約30秒`
-        : '初回は SolidWorks の起動に約30秒かかります';
-      updateLoadbar(null, sub, `SolidWorks を起動中 … ${fmtSecs(elapsed)}`);
+        ? t('extract.alive', { c: alive[1] })
+        : t('extract.coldStart');
+      updateLoadbar(null, sub, t('extract.startingBar', { time: fmtSecs(elapsed) }));
       return;
     }
     // other phases: indeterminate with a phase label + elapsed
-    const aliveTxt = alive ? `  · SolidWorks稼働中 ✓` : '';
-    updateLoadbar(null, `${fmtSecs(elapsed)} 経過${aliveTxt}`,
-                  `${extractPhase(lastReal)} …`);
+    const aliveTxt = alive ? t('extract.aliveShort') : '';
+    updateLoadbar(null, t('extract.elapsed', { time: fmtSecs(elapsed), alive: aliveTxt }),
+                  t('extract.phaseRunning', { phase: extractPhase(lastReal) }));
   }, 1000);
 }
 
@@ -3067,9 +3523,9 @@ let fsCur = '';
 async function fsShow(path) {
   const r = await (await fetch(
     '/api/fs?path=' + encodeURIComponent(path ?? ''))).json();
-  if (r.error) { log(`📁 ${r.error}`, 'err'); return; }
+  if (r.error) { log(t('fs.error', { e: r.error }), 'err'); return; }
   fsCur = r.path;
-  document.getElementById('fspath').textContent = r.path || '(ドライブ選択)';
+  document.getElementById('fspath').textContent = r.path || t('fs.driveSelect');
   document.getElementById('fsup').disabled = !r.parent && !r.path;
   document.getElementById('fsup').dataset.parent = r.parent ?? '';
   const list = document.getElementById('fslist');
@@ -3089,7 +3545,7 @@ async function fsShow(path) {
     if (dir.package) {
       row('📦', dir.name, () => { fsmodal.style.display = 'none';
                                   openServerPath(dir.path); },
-          '(パッケージ — クリックで開く)');
+          t('fs.packageHint'));
     } else {
       row('📁', dir.name, () => fsShow(dir.path));
     }
@@ -3099,7 +3555,7 @@ async function fsShow(path) {
         () => { fsmodal.style.display = 'none'; openAny(f.path); });
   }
   if (!r.dirs.length && !r.files.length) {
-    row('·', '(空、または対象ファイルなし)', () => {});
+    row('·', t('fs.empty'), () => {});
   }
   fsmodal.style.display = 'flex';
 }
@@ -3169,22 +3625,22 @@ const cleanPath = p => p.replace(/\\/g, '/').split('/').reduce((a, el) => {
 
 async function handleDrop(files) {
   const names = Object.keys(files);
-  log(`dropped ${names.length} files`);
+  log(t('drop.count', { n: names.length }));
   const urdfPath = names.find(n => n.toLowerCase().endsWith('.urdf'));
   if (!urdfPath) {
     const sld = names.find(n => n.toLowerCase().endsWith('.sldasm'));
     if (sld) { return locateAndExtract(sld, files[sld]); }
-    log('no .urdf (or .sldasm) in the drop', 'err');
+    log(t('drop.noUrdf'), 'err');
     return;
   }
   const blobs = new Map();
   for (const n of names) {
     const f = files[n];
     if (n.toLowerCase().endsWith('.3dxml')) {
-      log(`converting ${n.split('/').pop()} via /api/convert …`);
+      log(t('drop.converting', { name: n.split('/').pop() }));
       const resp = await fetch('/api/convert', { method: 'POST', body: f });
       if (!resp.ok) {
-        log(`convert failed (${resp.status}) for ${n}`, 'err');
+        log(t('drop.convertFail', { status: resp.status, n }), 'err');
         continue;
       }
       blobs.set(cleanPath(n), URL.createObjectURL(await resp.blob()));
@@ -3192,7 +3648,7 @@ async function handleDrop(files) {
       blobs.set(cleanPath(n), URL.createObjectURL(f));
     }
   }
-  log(`3DXML conversions done ✓ (${blobs.size} files ready)`, 'ok');
+  log(t('drop.convertOk', { n: blobs.size }), 'ok');
   viewer.urlModifierFunc = url => {
     const cleaned = cleanPath(url);
     for (const [name, blob] of blobs) {
@@ -3202,7 +3658,7 @@ async function handleDrop(files) {
     return url;
   };
   const name = urdfPath.split('/').pop().replace(/\.urdf$/i, '');
-  loadRobot({ name: name + ' (dropped)', urdf: cleanPath(urdfPath) },
+  loadRobot({ name: name + t('drop.suffix'), urdf: cleanPath(urdfPath) },
             { drop: true });
 }
 
@@ -3222,8 +3678,8 @@ function hideLoadOverlay() {
 // dropped .sldasm: fingerprint (basename+size) -> server finds the real path
 async function locateAndExtract(droppedPath, file) {
   const name = droppedPath.split('/').pop();
-  log(`locating "${name}" (${file.size} B) on disk …`);
-  showLoadOverlay(`「${name}」をディスク上で検索中 …`);
+  log(t('locate.start', { name, size: file.size }));
+  showLoadOverlay(t('locate.bar', { name }));
   let r;
   try {
     const resp = await fetch(`/api/locate?name=${encodeURIComponent(name)}` +
@@ -3232,7 +3688,7 @@ async function locateAndExtract(droppedPath, file) {
     if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
   } catch (e) {
     hideLoadOverlay();
-    log(`locate failed: ${e.message ?? e}`, 'err');
+    log(t('locate.fail', { e: e.message ?? e }), 'err');
     return;
   }
   const hits = r.hits ?? [];
@@ -3242,21 +3698,17 @@ async function locateAndExtract(droppedPath, file) {
   const auto = exact.length === 1 ? exact[0]
              : hits.length === 1 ? hits[0] : null;
   if (auto) {
-    log(`found on disk: ${auto.path}`, 'ok');
+    log(t('locate.found', { path: auto.path }), 'ok');
     extractFlow(auto.path);                // keeps the overlay; shows progress
     return;
   }
   if (hits.length === 0) {
     hideLoadOverlay();
-    log(r.building
-        ? 'file index is still building (first run walks the CAD shares, ' +
-          'a few minutes) — try the drop again shortly, or use 🗄'
-        : 'not found in the CAD shares or local Desktop/Downloads/Documents ' +
-          '— open it via the 🗄 server browser instead', 'wrn');
+    log(r.building ? t('locate.building') : t('locate.notFound'), 'wrn');
     return;
   }
   // multiple candidates: a prominent centered picker (the dim stays behind it)
-  log(`${hits.length} candidate file(s) — pick one`, 'wrn');
+  log(t('locate.candidates', { n: hits.length }), 'wrn');
   hideLoadbar();                           // pause the spinner while we wait
   showCandidatePicker(name, hits);
 }
@@ -3270,25 +3722,25 @@ function showCandidatePicker(name, hits) {
     'border-radius:8px;padding:16px 18px;max-width:82%;color:#dde;' +
     'box-shadow:0 8px 30px #000a';
   card.innerHTML =
-    `<div style="font-size:14px;margin-bottom:3px">「${name}」が複数見つかりました</div>` +
+    `<div style="font-size:14px;margin-bottom:3px">${t('locate.multiTitle', { name })}</div>` +
     `<div style="font-size:11px;color:#8a93a3;margin-bottom:10px">` +
-    `読み込むファイルを選んでください(≡ = ドロップしたものと同じサイズ)</div>`;
+    `${t('locate.multiHelp')}</div>`;
   for (const h of hits) {
     const b = document.createElement('button');
     b.style.cssText = 'display:block;width:100%;margin:3px 0;text-align:left;' +
       'font-size:12px;padding:7px 9px';
     b.textContent = (h.size_match ? '≡ ' : '≠ ') + h.path +
                     (h.size_match ? '' : `  (${h.size} B)`);
-    b.title = h.size_match ? '同じサイズ' : '同名・別サイズ(旧版?)';
+    b.title = h.size_match ? t('locate.sameSize') : t('locate.diffSize');
     b.addEventListener('click', () => {
       ov.remove();
-      showLoadbar(`「${name}」を抽出準備中 …`, { indet: true });
+      showLoadbar(t('locate.prepBar', { name }), { indet: true });
       extractFlow(h.path);
     });
     card.appendChild(b);
   }
   const cancel = document.createElement('button');
-  cancel.textContent = 'キャンセル';
+  cancel.textContent = t('common.cancel');
   cancel.style.cssText = 'margin-top:10px;font-size:11px';
   cancel.addEventListener('click', () => { ov.remove(); hideLoadOverlay(); });
   card.appendChild(cancel);
@@ -3313,37 +3765,39 @@ document.addEventListener('drop', e => {
   dragDepth = 0;
   document.body.classList.remove('dragging');
   dataTransferToFiles(e.dataTransfer).then(handleDrop)
-    .catch(err => log(`drop failed: ${err.message ?? err}`, 'err'));
+    .catch(err => log(t('drop.fail', { e: err.message ?? err }), 'err'));
 });
 
 // ---- kick off -----------------------------------------------------------
 // live SolidWorks session: only attachable when THIS SERVER was started
 // from the user's own terminal (same login session); otherwise we show why
+let _swStatus = null;          // last /api/swstatus payload, for re-rendering
+function renderSwStatus() {
+  const st = _swStatus;
+  if (!st) { return; }
+  const el = document.getElementById('swstat');
+  const btn = document.getElementById('useactive');
+  if (st.active_assembly) {
+    btn.style.display = '';
+    btn.title = st.active_assembly;
+    // the path/filename is a real on-disk identifier -- never translated
+    el.textContent = (st.dirty ? t('sw.unsaved') : '') +
+      t('sw.open', { name: st.active_assembly.split(/[\\/]/).pop() });
+  } else if (st.running && !st.attachable) {
+    el.textContent = t('sw.runningNotVisible');
+  } else if (!st.running) {
+    el.textContent = t('sw.notRunning');
+  }
+}
 (async () => {
   try {
-    const st = await (await fetch('/api/swstatus')).json();
-    const el = document.getElementById('swstat');
-    const btn = document.getElementById('useactive');
-    if (st.active_assembly) {
-      btn.style.display = '';
-      btn.title = st.active_assembly;
-      el.textContent = (st.dirty
-        ? '⚠️ unsaved changes — press Ctrl+S in SolidWorks first; ' : '') +
-        'open: ' + st.active_assembly.split(/[\\/]/).pop();
-      btn.addEventListener('click', () => {
-        if (st.dirty) {
-          log('the assembly has UNSAVED changes — extraction reads the ' +
-              'saved file; press Ctrl+S in SolidWorks first', 'wrn');
-        }
-        extractFlow(st.active_assembly);
+    _swStatus = await (await fetch('/api/swstatus')).json();
+    renderSwStatus();
+    if (_swStatus.active_assembly) {
+      document.getElementById('useactive').addEventListener('click', () => {
+        if (_swStatus.dirty) { log(t('sw.unsavedLog'), 'wrn'); }
+        extractFlow(_swStatus.active_assembly);
       });
-    } else if (st.running && !st.attachable) {
-      el.textContent = '🟡 SolidWorks is running but not visible from this ' +
-        'server (start the server from your own terminal to auto-detect ' +
-        'the open assembly)';
-    } else if (!st.running) {
-      el.textContent = '⚪ SolidWorks not running — extraction starts a ' +
-        'hidden instance automatically';
     }
   } catch { /* status is best-effort */ }
 })();
@@ -3405,9 +3859,9 @@ window.sw2robot = {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(d) });
-      log('🐞 diagnostic report sent (server: _client_report.json)', 'ok');
+      log(t('bug.sent'), 'ok');
     } catch (e) {
-      log(`🐞 report failed: ${e.message}`, 'err');
+      log(t('bug.fail', { e: e.message }), 'err');
     }
     return d;
   },
@@ -3415,13 +3869,33 @@ window.sw2robot = {
 document.getElementById('bug').addEventListener('click',
   () => window.sw2robot.report());
 
+// re-render the dynamic (JS-built) UI in the new language when toggled.
+// data-i18n static chrome is handled by applyStaticI18n in the loader script.
+window.onLangChange = () => {
+  refreshHistory();              // undo/redo titles
+  renderSwStatus();             // SolidWorks status line
+  refreshCompMeta();            // 🗑 excluded chip text
+  // #title shows the package name when one is open (language-neutral); only
+  // the empty placeholder needs re-localizing.  #status is transient -- just
+  // refresh the no-package case.
+  if (!currentInfo) {
+    document.getElementById('title').textContent = t('ui.title');
+    if (!viewer.robot) { statusEl.textContent = t('start.pick'); }
+  }
+  if (viewer.robot) {
+    buildJointRows(viewer.robot);
+    if (selectedLink) { fillLinkInfo(selectedLink); }
+  }
+};
+document.querySelectorAll('#langbar button').forEach(b =>
+  b.addEventListener('click', () => setLang(b.dataset.lang)));
+
 const info = await (await fetch('/api/info')).json();
 if (info.urdf) { loadRobot(info); }
 else {
-  statusEl.textContent = 'pick a package (or drag&drop)';
+  statusEl.textContent = t('start.pick');
   document.getElementById('emptyprompt').style.display = 'block';
-  log('no package open yet — open via 📄/📁/🗄 or drop a folder/.sldasm',
-      'wrn');
+  log(t('start.noPkg'), 'wrn');
 }
 </script>
 </body>

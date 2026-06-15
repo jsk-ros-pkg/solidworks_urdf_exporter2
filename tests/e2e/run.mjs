@@ -13,7 +13,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const URL = process.argv[2] ?? 'http://localhost:8090';
+// force Japanese so the suite's display-text assertions are deterministic
+// regardless of the test machine's browser locale (?lang= overrides detection)
+const BASE = process.argv[2] ?? 'http://localhost:8090';
+const URL = BASE + (BASE.includes('?') ? '&' : '?') + 'lang=ja';
 const CHROME = process.env.CHROME_PATH
   ?? 'C:/Program Files/Google/Chrome/Application/chrome.exe';
 
@@ -35,7 +38,7 @@ await page.goto(URL, { waitUntil: 'networkidle2', timeout: 60000 });
 await sleep(9000);
 const logText = await page.evaluate(() =>
   [...document.querySelectorAll('#log div')].map(d => d.textContent).join('\n'));
-check('load: camera fitted', logText.includes('camera fitted'));
+check('load: camera fitted', logText.includes('カメラを調整しました'));
 check('load: no page errors', pageErrors.length === 0, pageErrors[0] ?? '');
 
 const rootPose = async () =>
@@ -195,7 +198,7 @@ if (fs.existsSync(pkgUrdf)) {
   await sleep(4000);
   const fileLog = await logAfter(mark);
   check('open-file: picked .urdf reaches the drop pipeline',
-        /dropped 1 files/.test(fileLog) && fileLog.includes('URDF parsed'),
+        /ファイルをドロップ/.test(fileLog) && fileLog.includes('URDF を解析'),
         fileLog.split('\n')[0]);
 
   mark = await logLen();
@@ -207,7 +210,7 @@ if (fs.existsSync(pkgUrdf)) {
   await sleep(30000);
   const dirLog = await logAfter(mark);
   check('open-folder: package folder loads fully',
-        /dropped \d+ files/.test(dirLog) && dirLog.includes('camera fitted'),
+        /\d+ 個のファイルをドロップ/.test(dirLog) && dirLog.includes('カメラを調整しました'),
         (dirLog.match(/dropped \d+ files/) ?? ['?'])[0]);
 } else {
   console.log(`SKIP  open-file/open-folder (no local ${pkgUrdf})`);
@@ -315,7 +318,7 @@ if (colReady) {
     contAfter = await countContinuous();
     if (contAfter > contBefore) { break; }
     failed = await page.evaluate(() => [...document.querySelectorAll('#log div')]
-      .some(d => /auto-limits failed/.test(d.textContent)));
+      .some(d => /自動リミットに失敗/.test(d.textContent)));
     if (failed) { break; }
   }
   check('auto-limits: free joints became continuous',

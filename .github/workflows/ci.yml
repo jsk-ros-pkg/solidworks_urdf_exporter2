@@ -1,0 +1,68 @@
+name: CI
+
+# Runs on every push to main and on every PR, so problems are caught
+# BEFORE a release tag is cut (the release workflow only runs on a vX.Y.Z
+# tag, so without this the PyInstaller freeze would fail at release time
+# with no earlier warning).
+#
+#   test        -- the pytest suite (Linux, no SolidWorks needed)
+#   build-check -- freezes the web editor .exe on Windows x64 exactly like
+#                  release.yml, but does NOT upload or release it; it just
+#                  proves the freeze still succeeds.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: pytest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install ".[ui]" pytest
+
+      - name: Run tests
+        run: pytest -q
+
+  build-check:
+    name: PyInstaller freeze (x64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install . pyinstaller pycollada scipy networkx
+          pip install scikit-robot python-fcl
+
+      - name: Freeze the web editor .exe (no release)
+        run: |
+          python build_exe.py --editor-ui --name sw2robot-web-ci
+          if (!(Test-Path dist\sw2robot-web-ci.exe)) {
+            Write-Error "PyInstaller did not produce the expected .exe"
+            exit 1
+          }

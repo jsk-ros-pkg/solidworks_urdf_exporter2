@@ -1,0 +1,102 @@
+name: Build & Release
+
+# Tag-driven release: push a vX.Y.Z tag and this builds the PyInstaller
+# .exe and attaches it to a GitHub Release.  workflow_dispatch builds the
+# binary WITHOUT releasing (handy for smoke-testing the freeze; grab it
+# from the run's artifacts).
+#
+#   after the bump-version PR is merged:
+#     git switch main && git pull
+#     git tag v0.1.0 && git push origin v0.1.0
+#
+# NOTE: PyInstaller cannot cross-compile, so each arch builds on its own
+# native runner.  The x64 build bundles the editor-ui extra (live
+# self-collision + auto joint-limits via skrobot/fcl).  The Windows ARM64
+# build is currently commented out in the matrix below (windows-11-arm
+# hosted runners aren't available on a private repo) -- re-enable it once
+# the repo is public; it would ship the base web editor only, since
+# python-fcl has no win-arm64 wheel.  fail-fast is off so one arch failing
+# never blocks the others.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build ${{ matrix.arch }} exe
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            arch: x64
+            build_args: '--editor-ui'
+          # ARM64 is disabled while the repo is private (windows-11-arm
+          # hosted runners are limited/unavailable on private repos).
+          # Re-enable once public, or swap in a self-hosted ARM runner.
+          # - runner: windows-11-arm
+          #   arch: arm64
+          #   build_args: ''
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install . pyinstaller pycollada scipy networkx
+
+      - name: Install editor-ui dependencies (x64 only)
+        if: matrix.arch == 'x64'
+        # latest scikit-robot (the pyproject floor of 0.0.30 is just a minimum;
+        # it predates the FK/collision API used here) + python-fcl
+        run: pip install scikit-robot python-fcl
+
+      - name: Build the web editor .exe
+        run: python build_exe.py ${{ matrix.build_args }} --name sw2robot-web-windows-${{ matrix.arch }}
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sw2robot-web-windows-${{ matrix.arch }}
+          path: dist/sw2robot-web-windows-${{ matrix.arch }}.exe
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    # Only cut a Release on a vX.Y.Z tag (workflow_dispatch just leaves
+    # artifacts).  always() so a failed ARM build doesn't block the x64
+    # release -- we publish whatever artifacts did build.
+    if: ${{ always() && !cancelled() && startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create / update the GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: artifacts/*.exe
