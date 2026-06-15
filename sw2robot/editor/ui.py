@@ -905,7 +905,7 @@ def mount_module(server, state: RobotCompilerState, export_dir: Path):
 
     robot = RobotModelFromURDF(urdf_file=state.urdf_path)
     refresh, handles = render_robot(server, robot)
-    watcher = autoinit.SelfCollision(robot, handles.meshes)
+    watcher = autoinit.SelfCollision(robot, handles.meshes, confirm=True)
     build_gui(server, refresh, handles, watcher, robot, state, export_dir)
     print(f"[sw2robot.ui] mounted '{state.robot_name}': {len(state.joints)} joints "
           f"({len(state.movable_joints())} movable), root={state.root_link}")
