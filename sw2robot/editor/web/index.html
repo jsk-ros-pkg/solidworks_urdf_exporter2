@@ -82,6 +82,28 @@
   .joint .jval { color: #7fd0ff; font-variant-numeric: tabular-nums;
                  font-size: 11px; min-width: 38px; text-align: right; }
   .joint input[type=range] { width: 100%; }
+  /* slider + round-value guide marks.  The thumb is a FIXED 12px so the ticks
+     can be placed at the exact thumb-centre positions (calc below), otherwise
+     the native thumb inset makes them look a few px off and snapping feels
+     loose.  --thumb must match the ::-webkit-slider-thumb width. */
+  .joint .jslider { position: relative; padding: 4px 0 12px; --thumb: 12px; }
+  .joint .jslider input[type=range] { -webkit-appearance: none; appearance: none;
+                  display: block; width: 100%; height: 4px; margin: 0;
+                  background: #2a2f36; border-radius: 2px; outline: none; }
+  .joint .jslider input[type=range]::-webkit-slider-thumb {
+                  -webkit-appearance: none; appearance: none;
+                  width: var(--thumb); height: var(--thumb); border-radius: 50%;
+                  background: #2d6acc; cursor: pointer; }
+  .joint .jslider input[type=range]::-moz-range-thumb {
+                  width: var(--thumb); height: var(--thumb); border: none;
+                  border-radius: 50%; background: #2d6acc; cursor: pointer; }
+  .joint .jticks { position: relative; height: 0; }
+  .joint .jtick { position: absolute; top: 1px; height: 4px;
+                  border-left: 1px solid #5f6b78; }
+  .joint .jtick.zero { border-left-color: #9ab0c4; height: 6px; top: 0; }
+  .joint .jtick i { position: absolute; top: 5px; left: 0; font-style: normal;
+                    transform: translateX(-50%); font-size: 8px; line-height: 1;
+                    color: #7c8a98; white-space: nowrap; pointer-events: none; }
   .joint select { font-size: 11px; background: #15171a; color: #ddd;
                   border: 1px solid #444; border-radius: 3px; }
   .joint select.t-revolute, .jpanel select.t-revolute     { color: #ff9d9d; }
@@ -1097,7 +1119,7 @@ function previewJoint(name, val) {
   const rec = rows.get(name);
   if (rec) {
     if (rec.slider) { rec.slider.value = val; }
-    if (rec.val) { rec.val.textContent = fmt(val); }
+    if (rec.val) { rec.val.textContent = rec.fmtDisp ? rec.fmtDisp(val) : fmt(val); }
   }
   if (jpSync && jpSync.name === name) { jpSync.set(val); }
 }
@@ -1277,6 +1299,41 @@ function buildJointRows(robot) {
     if (j.jointType === 'continuous' || (lo === 0 && hi === 0)) {
       lo = -3.14; hi = 3.14;
     }
+    // show the angle in DEGREES (mm for a slide), and draw ruler ticks at the
+    // cardinal values (0, ±45, ±90 …) inside the range so the slider can be
+    // eyeballed to a round angle.
+    const um = _jointUnit(j.jointType);
+    const fmtDisp = v => {
+      let d = um.toDisp(v);
+      if (Object.is(d, -0) || Math.abs(d) < Math.pow(10, -um.dec) / 2) { d = 0; }
+      return d.toFixed(um.dec) + um.unit;
+    };
+    const dLo = um.toDisp(lo), dHi = um.toDisp(hi);
+    const tickDisp = um.pris ? [dLo, 0, dHi]
+      : [-180, -135, -90, -45, 0, 45, 90, 135, 180];
+    const ticks = [...new Set(tickDisp
+      .filter(d => d >= dLo - 1e-6 && d <= dHi + 1e-6)
+      .map(d => Math.round(d * 1e4) / 1e4))].sort((a, b) => a - b);
+    // guide marks (label + tick) at the round values, positioned along the
+    // track -- a visible version of an <input list> ruler (Chrome draws that one
+    // almost invisibly).  cardinal angles get a label; ±45/±135 stay tick-only
+    // so a tight row doesn't get crowded.
+    const span = (dHi - dLo) || 1;
+    const labelAt = d => um.pris || d === 0 || Math.abs(d) === 90
+      || Math.abs(d) === 180 || d === dLo || d === dHi;
+    // place each tick at the THUMB CENTRE for its value: the thumb centre travels
+    // from thumb/2 to width-thumb/2, so left = f*100% + (0.5-f)*thumb  (the 12px
+    // must match --thumb in the CSS).  This is what makes the marks line up
+    // exactly under the thumb so the magnet feels snug.
+    const THUMB = 12;
+    const tickBar = (isMov && !isMimic && ticks.length)
+      ? `<div class="jticks">` + ticks.map(d => {
+          const f = (d - dLo) / span;                  // 0..1 along the track
+          const off = ((0.5 - f) * THUMB).toFixed(2);  // thumb-inset compensation
+          return `<span class="jtick${d === 0 ? ' zero' : ''}" ` +
+            `style="left:calc(${(f * 100).toFixed(3)}% + ${off}px)">` +
+            (labelAt(d) ? `<i>${d}${um.unit}</i>` : '') + `</span>`;
+        }).join('') + `</div>` : '';
     row.innerHTML =
       `<div class="row1">` +
       `<span class="caret">${kids.length
@@ -1291,23 +1348,37 @@ function buildJointRows(robot) {
         `<option value="${t}" ${t === j.jointType ? 'selected' : ''}>${t}` +
         `</option>`).join('') +
       `</select>` +
-      `<span class="jval">${isMov ? fmt(Number(j.angle)) : ''}</span>` +
+      `<span class="jval">${isMov ? fmtDisp(Number(j.angle)) : ''}</span>` +
       `<button class="eye${hiddenLinks.has(child) ? ' off' : ''}" ` +
       `title="${t('row.eyeTitle')}">👁</button>` +
       `<button class="mkroot" title="${t('row.mkrootTitle')}">⌂</button>` +
       `</div>` +
       (isMov && !isMimic
-        ? `<input type="range" min="${lo}" max="${hi}" step="0.01" ` +
-          `value="${Number(j.angle)}">` : '');
+        ? `<div class="jslider">` +
+          `<input type="range" min="${lo}" max="${hi}" step="0.01" ` +
+          `value="${Number(j.angle)}">` + tickBar + `</div>` : '');
     const slider = row.querySelector('input[type=range]');
     if (slider) {
-      slider.addEventListener('input', () =>
-        previewJoint(j.name, parseFloat(slider.value)));
+      // magnetic snap: when the thumb lands within a small tolerance of a guide
+      // mark (0, ±45, ±90 …) stick to that exact round value.  For a finer value
+      // inside the snap zone, use the in-viewer panel's number field.
+      const snapTol = um.pris ? 2 : 8;            // display units (mm / °)
+      slider.addEventListener('input', () => {
+        let v = parseFloat(slider.value);
+        const d = um.toDisp(v);
+        let best = null, bd = snapTol;
+        for (const td of ticks) {
+          const dist = Math.abs(td - d);
+          if (dist <= bd) { bd = dist; best = td; }
+        }
+        if (best !== null) { v = um.toNat(best); slider.value = v; }
+        previewJoint(j.name, v);
+      });
     }
     const rec = { joint: j, row, parent, child, origType: j.jointType,
                   typeSel: row.querySelector('.jtypesel'),
                   pick: row.querySelector('.pick'),
-                  slider, val: row.querySelector('.jval') };
+                  slider, val: row.querySelector('.jval'), fmtDisp };
     rec.typeSel.addEventListener('change', () => {
       const t = rec.typeSel.value;
       rec.typeSel.className = 'jtypesel t-' + t;
