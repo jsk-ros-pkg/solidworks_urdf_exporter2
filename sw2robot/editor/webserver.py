@@ -869,7 +869,10 @@ def _build_collision(urdf_path, key):
         from . import autoinit
         robot = RobotModelFromURDF(urdf_file=urdf_path)
         meshes = autoinit.link_meshes(robot)
-        sc = autoinit.SelfCollision(robot, meshes)
+        # confirm=True: hull broadphase + exact-mesh verification, so the live
+        # red highlight matches the exact-mesh joint-limit sweep (fat hulls
+        # would otherwise light up red before the joint reaches its limit).
+        sc = autoinit.SelfCollision(robot, meshes, confirm=True)
         joints = {}
         for j in robot.joint_list:
             if type(j).__name__ in ("RotationalJoint", "LinearJoint"):

@@ -91,23 +91,40 @@ class SelfCollision:
     ``meshes`` maps link name -> local-frame trimesh (the UI already has these).
     """
 
-    def __init__(self, robot, meshes, margin=REST_MARGIN, hull=True):
+    def __init__(self, robot, meshes, margin=REST_MARGIN, hull=True,
+                 confirm=False):
         from trimesh.collision import CollisionManager
 
         self.robot = robot
         self.margin = float(margin)
+        self.confirm = bool(confirm)
         self._link = {l.name: l for l in robot.link_list}
         self.names = [n for n in meshes if n in self._link]
         # hull=True: convex-hull proxies (fast, ~2 ms/query) for the live drag
         # check.  hull=False: the ACTUAL meshes -- slower but exact, for the
         # limit sweep (hulls touch at rest and mask collisions that only the
         # real concave geometry develops, giving limits that are too wide).
-        self._hulls = {n: (_hull(meshes[n]) if hull else meshes[n])
+        #
+        # confirm=True: hulls for the cheap BROADPHASE, but every candidate pair
+        # is then verified on the EXACT mesh below -- so the live highlight
+        # reports the same collisions as the exact-mesh limit sweep, instead of
+        # the fatter hulls lighting up red well before the joint reaches its
+        # (mesh-derived) limit.
+        use_hull = hull or self.confirm
+        self._hulls = {n: (_hull(meshes[n]) if use_hull else meshes[n])
                        for n in self.names}
         self.cm = CollisionManager()
         for n in self.names:
             self.cm.add_object(n, self._hulls[n],
                                transform=self._link[n].worldcoords().T())
+        # second manager over the exact meshes, queried pairwise (not as a
+        # broadphase) only on the candidates the hull broadphase flags.
+        self._raw = None
+        if self.confirm:
+            self._raw = CollisionManager()
+            for n in self.names:
+                self._raw.add_object(
+                    n, meshes[n], transform=self._link[n].worldcoords().T())
         self.baseline = self._pairs(0.0)
         for j in robot.joint_list:
             if j.parent_link and j.child_link:
@@ -117,6 +134,24 @@ class SelfCollision:
     def _pairs(self, margin) -> set:
         _, names, data = self.cm.in_collision_internal(
             return_names=True, return_data=True)
+        if self.confirm:
+            # Candidates must be EVERY overlapping hull pair (boolean), not the
+            # depth-thresholded set: the hull penetration depth is NOT a sound
+            # upper bound on the mesh depth (deeply interlocking concave parts
+            # can have only shallow-touching hulls), so filtering candidates by
+            # hull depth would drop real collisions.  Boolean containment (mesh
+            # overlap => hull overlap) is what makes the candidate set complete;
+            # each is then verified on the exact mesh at the real margin.
+            cand = {frozenset(p) for p in names}
+            # new_pairs() subtracts the rest baseline anyway, so don't spend an
+            # exact-mesh query on the dozens of links that touch at rest -- drop
+            # them from the candidates first.  (During __init__, before the
+            # baseline exists, getattr returns None so every pair is verified,
+            # which is exactly what building the baseline needs.)
+            base = getattr(self, "baseline", None)
+            if base:
+                cand = cand - base
+            return self._confirm(cand, margin) if cand else cand
         if margin <= 0:
             return {frozenset(p) for p in names}
         depth = {}
@@ -124,6 +159,32 @@ class SelfCollision:
             k = frozenset(d.names)
             depth[k] = max(depth.get(k, 0.0), abs(d.depth))
         return {k for k, v in depth.items() if v > margin}
+
+    def _confirm(self, cand, margin) -> set:
+        """Keep only the candidate pairs whose EXACT meshes actually collide.  A
+        convex hull is a superset of its mesh, so the hull broadphase never
+        misses a real pair -- it only over-reports, and this verifies that away
+        with one pairwise exact-mesh query per candidate (candidates are few:
+        just the links whose hulls overlap right now)."""
+        import fcl
+        # enough contacts that the true max penetration depth isn't truncated
+        req = fcl.CollisionRequest(num_max_contacts=1000, enable_contact=True)
+        objs = self._raw._objs
+        for n in {n for p in cand for n in p}:        # sync only candidate links
+            self._raw.set_transform(n, self._link[n].worldcoords().T())
+        out = set()
+        for pair in cand:
+            a, b = tuple(pair)
+            res = fcl.CollisionResult()
+            fcl.collide(objs[a]["obj"], objs[b]["obj"], req, res)
+            if margin > 0:
+                hit = max((abs(c.penetration_depth) for c in res.contacts),
+                          default=0.0) > margin
+            else:
+                hit = len(res.contacts) > 0
+            if hit:
+                out.add(pair)
+        return out
 
     def _sync(self):
         for n in self.names:
