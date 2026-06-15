@@ -44,7 +44,9 @@ jobs:
           bump_type: ${{ github.event.inputs.bump_type }}
           github_token: ${{ secrets.AUTO_MERGE_PAT || secrets.GITHUB_TOKEN }}
           base_branch: 'main'
-          labels: 'release'
+          # auto-merge-ok -> auto-release.yml merges the PR once CI passes;
+          # release       -> then tags vX.Y.Z, which triggers the build+release.
+          labels: 'auto-merge-ok,release'
 
       - name: Print versions
         run: |

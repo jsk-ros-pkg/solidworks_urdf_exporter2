@@ -1,0 +1,92 @@
+name: Auto-merge & tag
+
+# Closes the loop after "Bump Version and Create PR": when CI passes on the
+# bump PR, auto-merge it and push the matching vX.Y.Z tag, which triggers
+# release.yml (build the .exe + create the GitHub Release).
+#
+#   bump (manual) -> PR (labels: auto-merge-ok, release) -> CI green
+#     -> auto-merge -> tag vX.Y.Z (pushed with AUTO_MERGE_PAT so it cascades)
+#     -> release.yml builds & publishes the Release
+#
+# The tag MUST be pushed with a PAT, not GITHUB_TOKEN: a tag pushed by
+# GITHUB_TOKEN does not trigger other workflows, so release.yml wouldn't run.
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+
+jobs:
+  auto-merge:
+    # only PR-triggered CI runs that went green
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      merged: ${{ steps.merge.outputs.mergeResult }}
+      labels: ${{ steps.labels.outputs.labels }}
+    steps:
+      - name: Get the PR's labels
+        id: labels
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prs = context.payload.workflow_run.pull_requests;
+            if (!prs || prs.length === 0) {
+              core.info("no pull_requests on this workflow_run");
+              core.setOutput("labels", "[]");
+              return;
+            }
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prs[0].number,
+            });
+            core.setOutput("labels", JSON.stringify(pr.labels.map(l => l.name)));
+
+      - name: Auto-merge when labelled auto-merge-ok
+        id: merge
+        if: contains(fromJson(steps.labels.outputs.labels || '[]'), 'auto-merge-ok')
+        uses: pascalgn/automerge-action@v0.16.4
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MERGE_LABELS: "auto-merge-ok"
+          MERGE_METHOD: squash
+          MERGE_DELETE_BRANCH: "true"
+
+  tag:
+    needs: auto-merge
+    # only after a real merge of a `release`-labelled PR
+    if: >-
+      needs.auto-merge.outputs.merged == 'merged' &&
+      contains(fromJson(needs.auto-merge.outputs.labels || '[]'), 'release')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          # PAT so the pushed tag triggers release.yml
+          token: ${{ secrets.AUTO_MERGE_PAT }}
+
+      - name: Read version from pyproject.toml
+        id: ver
+        run: |
+          V=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
+      - name: Tag and push (skip if the tag already exists)
+        run: |
+          TAG="v${{ steps.ver.outputs.version }}"
+          if git ls-remote --tags --exit-code origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "$TAG already exists -- nothing to do"
+            exit 0
+          fi
+          git tag "$TAG"
+          git push origin "$TAG"
