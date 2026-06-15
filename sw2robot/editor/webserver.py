@@ -1816,13 +1816,52 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 # reverse-map the on-screen (display) name so resolve_ports'
                 # _match_component finds the tip link
                 comp = _link_names_inverse(txt).get(link, link)
-                xyz = body.get("xyz") or [0, 0, 0]
-                rpy = _zdir_to_rpy(body.get("zdir") or [0, 0, 1])
+                import math
+
+                def _vec3(v, default):
+                    v = default if v is None else v
+                    try:
+                        v = [float(x) for x in v]
+                    except (TypeError, ValueError):
+                        return None
+                    return v if len(v) == 3 \
+                        and all(math.isfinite(x) for x in v) else None
+
+                xyz = _vec3(body.get("xyz"), [0, 0, 0])
+                if xyz is None:
+                    return self._send_json(
+                        {"error": "xyz must be 3 finite numbers"}, 400)
+                # full orientation: prefer an explicit rpy (the gizmo sends one),
+                # else derive it from the +Z direction (the click-on-face flow)
+                if body.get("rpy") is not None:
+                    rpy = _vec3(body.get("rpy"), None)
+                    if rpy is None:
+                        return self._send_json(
+                            {"error": "rpy must be 3 finite numbers"}, 400)
+                else:
+                    zdir = _vec3(body.get("zdir"), [0, 0, 1])
+                    if zdir is None:
+                        return self._send_json(
+                            {"error": "zdir must be 3 finite numbers"}, 400)
+                    rpy = _zdir_to_rpy(zdir)
+                # optional user-chosen names for the dummy_link + its fixed joint
+                pname = (body.get("name") or "").strip()
+                jname = (body.get("joint_name") or "").strip()
+                for label, nm in (("name", pname), ("joint_name", jname)):
+                    if nm and not _VALID_NAME.match(nm):
+                        return self._send_json(
+                            {"error": f"invalid {label} '{nm}' -- letters / "
+                                      f"digits / underscore, not starting with a "
+                                      f"digit"}, 400)
                 fmt = lambda v: "[" + ", ".join(f"{x:.6g}" for x in v) + "]"
                 _snapshot(cls.pkg_dir, yml, f"add port on {comp[:30]}")
-                txt = _append_yaml_list_item(txt, "ports", [
-                    f"parent: {_yaml_scalar(comp)}",
-                    f"xyz: {fmt(xyz)}", f"rpy: {fmt(rpy)}"])
+                item = [f"parent: {_yaml_scalar(comp)}",
+                        f"xyz: {fmt(xyz)}", f"rpy: {fmt(rpy)}"]
+                if pname:
+                    item.append(f"name: {_yaml_scalar(pname)}")
+                if jname:
+                    item.append(f"joint_name: {_yaml_scalar(jname)}")
+                txt = _append_yaml_list_item(txt, "ports", item)
                 with open(yml, "w", encoding="utf-8") as f:
                     f.write(txt)
                 from sw2robot.exporter.export import build
@@ -1832,9 +1871,10 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                     return self._send_json(
                         {"error": f"rebuild failed: {e}"}, 500)
                 print(f"[sw2robot.web] add_port: parent={comp} "
-                      f"xyz={list(xyz)} rpy={rpy}")
+                      f"name={pname or '(auto)'} xyz={xyz} rpy={rpy}")
                 return self._send_json(
-                    {"ok": True, "parent": comp, "xyz": list(xyz), "rpy": rpy})
+                    {"ok": True, "parent": comp, "name": pname,
+                     "xyz": xyz, "rpy": rpy})
             if parsed.path == "/api/remove_port":
                 # drop a previously-added dummy_link port by its emitted name
                 cls = type(self)

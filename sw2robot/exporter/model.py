@@ -101,6 +101,9 @@ class Port:
     parent_link: str
     xyz: list = field(default_factory=lambda: [0, 0, 0])
     rpy: list = field(default_factory=lambda: [0, 0, 0])
+    # optional explicit fixed-joint name; the URDF writer auto-derives one from
+    # ``name`` when this is empty.
+    joint_name: str = ""
 
 
 @dataclass
@@ -174,7 +177,8 @@ def resolve_ports(comps, ports_cfg):
         name = p.get("name") or ("dummy_link" if i == 0 else f"dummy_link{i + 1}")
         out.append(Port(name=name, parent_link=parent_link,
                         xyz=list(p.get("xyz", [0.0, 0.0, 0.0])),
-                        rpy=list(p.get("rpy", [0.0, 0.0, 0.0]))))
+                        rpy=list(p.get("rpy", [0.0, 0.0, 0.0])),
+                        joint_name=p.get("joint_name") or ""))
     return out
 
 

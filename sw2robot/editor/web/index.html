@@ -202,6 +202,38 @@
              border: 3px dashed #6db3ff; font-size: 22px; color: #fff;
              pointer-events: none; z-index: 10; }
   body.dragging #droptip { display: flex; }
+  /* end-coords placement panel (Blender-style gizmo HUD) */
+  #ecpanel { position: absolute; left: 8px; top: 44px; z-index: 8;
+             display: none; width: 212px; background: #1b2128f2;
+             border: 1px solid #3a5168; border-radius: 8px; padding: 9px 10px;
+             color: #dde; font-size: 11px; box-shadow: 0 4px 18px #0008; }
+  #ecpanel .ec-hd { font-size: 13px; color: #9fd0ff; margin-bottom: 3px; }
+  #ecpanel .ec-parent { color: #9aa7b3; margin-bottom: 6px;
+                        overflow: hidden; text-overflow: ellipsis;
+                        white-space: nowrap; }
+  #ecpanel .ec-l { display: flex; align-items: center; gap: 6px;
+                   margin-bottom: 4px; }
+  #ecpanel .ec-l input { flex: 1; min-width: 0; background: #11151a;
+                   color: #fff; border: 1px solid #3a4750; border-radius: 3px;
+                   padding: 2px 4px; font: inherit; }
+  #ecpanel .ec-seg { display: flex; align-items: center; gap: 4px;
+                     margin: 5px 0; flex-wrap: wrap; }
+  #ecpanel button { background: #232c34; color: #cdd6df;
+                    border: 1px solid #3a4750; border-radius: 3px;
+                    padding: 2px 7px; font: inherit; cursor: pointer; }
+  #ecpanel button:hover { background: #2d4a55; }
+  #ecpanel button.on { background: #2d6acc; color: #fff; border-color: #2d6acc; }
+  #ecpanel .ec-num { display: flex; align-items: center; gap: 3px;
+                     margin-top: 4px; }
+  #ecpanel .ec-num span { color: #8aa; width: 10px; text-align: center; }
+  #ecpanel .ec-num b { color: #8aa; font-weight: normal; margin-left: 2px; }
+  #ecpanel .ec-num input { width: 100%; min-width: 0; background: #11151a;
+                   color: #fff; border: 1px solid #3a4750; border-radius: 3px;
+                   padding: 2px 2px; font: inherit; text-align: right; }
+  #ecpanel .ec-act { display: flex; gap: 6px; margin-top: 9px; }
+  #ecpanel .ec-act button { flex: 1; padding: 4px; }
+  #ecpanel .ec-place { background: #2d7d46 !important; color: #fff;
+                       border-color: #2d7d46 !important; }
 </style>
 <script type="importmap">
 {
@@ -640,8 +672,8 @@ skrobot / native-mesh consumers (not RViz-loadable)">⬇ glb</button></a>
     'align.fail': { en: a => `align failed: ${a.e}`, ja: a => `align に失敗: ${a.e}` },
     'align.cancelNoFace': { en: 'align cancelled (no face under the cursor)', ja: 'align 取消（カーソル下に面がありません）' },
     // port mode
-    'port.modeOn': { en: 'port mode: hover a face, click = add a dummy_link there (+Z along its normal); click a magenta port marker to remove it; Esc to cancel',
-                     ja: 'port モード: 面にホバーしてクリックで dummy_link を追加（+Z は法線方向）。マゼンタのポートマーカーをクリックで削除。Esc で取消' },
+    'port.modeOn': { en: 'end-coords mode: click a face to place an end-coords there, then drag the gizmo (g=move r=rotate), set a name and Place; click a magenta marker to remove a port; Esc to cancel',
+                     ja: 'end-coords モード: 面をクリックで仮置き → ギズモで調整（g=移動 r=回転）・名前を入れて「配置」。マゼンタのマーカーをクリックで既存ポート削除。Esc で取消' },
     'port.needPkg': { en: 'add port needs a server-side package (not a drop)',
                       ja: 'ポート追加にはサーバー側パッケージが必要です（ドロップ不可）' },
     'port.linkNotFound': { en: a => `add port: link '${a.link}' not found`, ja: a => `ポート追加: リンク '${a.link}' が見つかりません` },
@@ -659,8 +691,31 @@ skrobot / native-mesh consumers (not RViz-loadable)">⬇ glb</button></a>
     // hover tips
     'hov.removePort': { en: a => `${a.port} — <span class="key">click</span> remove this port`,
                         ja: a => `${a.port} — <span class="key">click</span> このポートを削除` },
-    'hov.addPort': { en: a => `${a.link} — <span class="key">click</span> add a port here (+Z = face normal)`,
-                     ja: a => `${a.link} — <span class="key">click</span> ここにポートを追加（+Z = 面の法線）` },
+    'hov.addPort': { en: a => `${a.link} — <span class="key">click</span> place an end-coords here, then adjust with the gizmo`,
+                     ja: a => `${a.link} — <span class="key">click</span> ここに end-coords を仮置き → ギズモで調整` },
+    // end-coords placement gizmo
+    'ec.title': { en: 'end-coords', ja: 'end-coords' },
+    'ec.parent': { en: a => `parent: ${a.link}`, ja: a => `親リンク: ${a.link}` },
+    'ec.name': { en: 'name', ja: '名前' },
+    'ec.jname': { en: 'joint', ja: 'joint名' },
+    'ec.mode': { en: 'gizmo', ja: 'ギズモ' },
+    'ec.move': { en: 'move', ja: '移動' },
+    'ec.rot': { en: 'rotate', ja: '回転' },
+    'ec.space': { en: 'axes', ja: '軸' },
+    'ec.local': { en: 'local', ja: 'ローカル' },
+    'ec.world': { en: 'world', ja: 'ワールド' },
+    'ec.snapStep': { en: 'snap 1mm/15°', ja: '1mm/15°刻み' },
+    'ec.snapFace': { en: 'snap→face', ja: '面に吸着' },
+    'ec.snapVert': { en: 'snap→vertex', ja: '頂点に吸着' },
+    'ec.place': { en: 'place', ja: '配置' },
+    'ec.cancel': { en: 'cancel', ja: 'キャンセル' },
+    'ec.started': { en: a => `end-coords on ${a.link}: click a face to fit it there, drag the gizmo to fine-tune, name it, then Place (Esc to cancel)`,
+                    ja: a => `${a.link} に end-coords: 面クリックでそこにフィット / ギズモで微調整 / 名前を入れて「配置」（Esc で取消）` },
+    'ec.placed': { en: a => `end-coords '${a.name}' placed ✓`, ja: a => `end-coords '${a.name}' を配置 ✓` },
+    'ec.placeFail': { en: a => `place failed: ${a.e}`, ja: a => `配置に失敗: ${a.e}` },
+    'ec.snapArmed': { en: a => `click a ${a.kind} to snap the origin there`,
+                      ja: a => `${a.kind === 'vertex' ? '頂点' : '面'} をクリックで原点を吸着` },
+    'ec.snapOff': { en: 'surface snap off', ja: '吸着オフ' },
     'hov.alignFace': { en: a => `${a.link} — <span class="key">click</span> align root to this face (origin = face center)`,
                        ja: a => `${a.link} — <span class="key">click</span> この面にルートを整列（原点 = 面の中心）` },
     'hov.selected': { en: a => `✓ ${a.link} selected — <span class="key">R</span> make root`,
@@ -909,13 +964,15 @@ skrobot / native-mesh consumers (not RViz-loadable)">⬇ glb</button></a>
 </script>
 
 <script type="module">
-let THREE, GLTFLoader, STLLoader, ColladaLoader;
+let THREE, GLTFLoader, STLLoader, ColladaLoader, TransformControls;
 try {
   THREE = await import('three');
   ({ GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js'));
   ({ STLLoader } = await import('three/examples/jsm/loaders/STLLoader.js'));
   ({ ColladaLoader } =
       await import('three/examples/jsm/loaders/ColladaLoader.js'));
+  ({ TransformControls } =
+      await import('three/examples/jsm/controls/TransformControls.js'));
   const { default: URDFManipulator } = await import(
     'https://unpkg.com/urdf-loader@0.12.7/src/urdf-manipulator-element.js');
   log(t('load.ok'), 'ok');
@@ -2752,6 +2809,7 @@ portBtn.addEventListener('click', () => {
     clearFaceOverlay();
     log(t('port.modeOn'), 'wrn');
   } else {
+    cancelEndcoords();                    // close any open placement session
     clearFaceOverlay();
   }
 });
@@ -2805,58 +2863,6 @@ async function alignRootTo(hit) {
   }
 }
 
-async function addPortAt(ph) {
-  op('add_port');
-  if (!currentInfo) {
-    log(t('port.needPkg'), 'wrn');
-    return;
-  }
-  // recompute the face overlay from THIS click: the hover that drew it is
-  // throttled, so a quick move+click could otherwise place the port at the
-  // previously-hovered face while parenting it to the newly clicked link
-  if (ph.hit?.face) { showFaceOverlay(ph.hit); }
-  // same face center + normal extraction as alignRootTo
-  let wPoint, nWorld;
-  if (faceOverlay) {
-    wPoint = faceOverlay.host.localToWorld(faceOverlay.centroidLocal.clone());
-    nWorld = faceOverlay.normalLocal.clone()
-      .transformDirection(faceOverlay.host.matrixWorld);
-  } else {
-    wPoint = ph.hit.point.clone();
-    nWorld = ph.hit.face.normal.clone()
-      .transformDirection(ph.hit.object.matrixWorld);
-  }
-  clearFaceOverlay();
-  // the port hangs off the CLICKED link, so resolve the point/normal in THAT
-  // link's frame (its matrixWorld already reflects the current pose; a rebuild
-  // reproduces the same link-relative frame -- no rootDelta juggling needed)
-  const lo = viewer.robot.links[ph.link];
-  if (!lo) { log(t('port.linkNotFound', { link: ph.link }), 'err'); return; }
-  lo.updateMatrixWorld(true);
-  const pLocal = lo.worldToLocal(wPoint.clone());
-  const nLocal = nWorld.clone()
-    .applyQuaternion(lo.getWorldQuaternion(new THREE.Quaternion()).invert())
-    .normalize();
-  log(t('port.adding', { link: ph.link,
-    origin: `${pLocal.x.toFixed(4)}, ${pLocal.y.toFixed(4)}, ${pLocal.z.toFixed(4)}`,
-    zdir: `${nLocal.x.toFixed(2)}, ${nLocal.y.toFixed(2)}, ${nLocal.z.toFixed(2)}` }));
-  statusEl.textContent = t('port.status');
-  try {
-    const resp = await fetch('/api/add_port', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ link: ph.link, xyz: pLocal.toArray(),
-                             zdir: nLocal.toArray() }) });
-    const r = await resp.json();
-    if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
-    log(t('port.added', { parent: r.parent }), 'ok');
-    loadRobot(currentInfo, { keepPose: true });   // the dummy_link needs a rebuild
-    refreshHistory();
-  } catch (e) {
-    log(t('port.addFail', { e: e.message ?? e }), 'err');
-  }
-}
-
 async function removePort(name) {
   op('remove_port');
   if (!currentInfo) { return; }
@@ -2877,13 +2883,269 @@ async function removePort(name) {
   }
 }
 
+// ===== Blender-style end-coords (port) placement gizmo =====================
+// A port/end-coords is a fixed-joint dummy_link; the editor places it with a
+// TransformControls gizmo so the user can freely set its offset + rotation and
+// a name, then commits via /api/add_port.  The frame is parented UNDER the link
+// object, so its LOCAL transform is exactly the port's xyz/rpy in the link frame
+// (URDF convention) -- no Y-up<->Z-up juggling.
+let ecTool = null;                 // active placement session, or null
+
+function quatToRpy(q) {             // quaternion -> URDF roll/pitch/yaw (XYZ fixed)
+  const e = new THREE.Matrix4().makeRotationFromQuaternion(q).elements;
+  const r00 = e[0], r10 = e[1], r20 = e[2], r21 = e[6], r22 = e[10];
+  return [Math.atan2(r21, r22),
+          Math.atan2(-r20, Math.hypot(r00, r10)),
+          Math.atan2(r10, r00)];
+}
+function rpyToQuat(r, p, y) {
+  return new THREE.Quaternion().setFromEuler(new THREE.Euler(r, p, y, 'ZYX'));
+}
+
+function startEndcoords(link, originWorld, zdirWorld) {
+  cancelEndcoords();
+  const lo = viewer.robot?.links?.[link];
+  if (!lo) { log(t('port.linkNotFound', { link }), 'err'); return; }
+  clearFaceOverlay();
+  lo.updateMatrixWorld(true);
+  const frame = new THREE.Object3D();
+  lo.add(frame);
+  frame.position.copy(lo.worldToLocal(originWorld.clone()));
+  if (zdirWorld) {                 // orient +Z along the clicked face normal
+    const zl = zdirWorld.clone()
+      .applyQuaternion(lo.getWorldQuaternion(new THREE.Quaternion()).invert())
+      .normalize();
+    frame.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), zl);
+  }
+  const axes = new THREE.AxesHelper(0.05);
+  axes.material.depthTest = false;
+  axes.material.transparent = true;
+  axes.renderOrder = 999;
+  frame.add(axes);
+  lo.updateMatrixWorld(true);
+  const dom = viewer.renderer?.domElement || viewer.querySelector('canvas');
+  const tc = new TransformControls(viewer.camera, dom);
+  tc.setSize(0.85);
+  tc.setSpace('local');
+  tc.attach(frame);
+  viewer.scene.add(tc);
+  tc.addEventListener('dragging-changed',
+    e => { viewer.controls.enabled = !e.value; });
+  tc.addEventListener('objectChange',
+    () => { ecSyncPanelFromFrame(); viewer.redraw?.(); });
+  tc.addEventListener('change', () => viewer.redraw?.());
+  ecTool = { link, lo, frame, axes, tc, mode: 'translate', space: 'local',
+             snap: false, faceSnap: null };
+  ecShowPanel();
+  ecSyncPanelFromFrame();
+  viewer.redraw?.();
+  log(t('ec.started', { link }));
+}
+
+function cancelEndcoords() {
+  if (!ecTool) { return; }
+  const { tc, frame, lo } = ecTool;
+  try { tc.detach(); tc.dispose(); viewer.scene.remove(tc); } catch (e) { /**/ }
+  try { lo.remove(frame); } catch (e) { /**/ }
+  ecTool = null;
+  ecHidePanel();
+  viewer.controls.enabled = true;
+  viewer.redraw?.();
+}
+
+async function commitEndcoords() {
+  if (!ecTool) { return; }
+  ecApplyPanelToFrame();                 // fold in any unsynced numeric edits
+  const { link, frame } = ecTool;
+  const xyz = frame.position.toArray();
+  const rpy = quatToRpy(frame.quaternion);
+  const name = ecPanel.querySelector('.ec-name').value.trim();
+  const jname = ecPanel.querySelector('.ec-jname').value.trim();
+  op('add_port');
+  try {
+    const resp = await fetch('/api/add_port', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ link, name, joint_name: jname, xyz, rpy }) });
+    const r = await resp.json();
+    if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
+    log(t('ec.placed', { name: r.name || r.parent }), 'ok');
+    cancelEndcoords();
+    portBtn.classList.remove('active');
+    loadRobot(currentInfo, { keepPose: true });
+    refreshHistory();
+  } catch (e) {
+    log(t('ec.placeFail', { e: e.message ?? e }), 'err');
+  }
+}
+
+// ---- gizmo option toggles -------------------------------------------------
+function ecSetMode(m) {
+  if (!ecTool) { return; }
+  ecTool.mode = m;
+  ecTool.tc.setMode(m);
+  ecPanel.querySelectorAll('.ec-mode').forEach(b =>
+    b.classList.toggle('on', b.dataset.m === m));
+}
+function ecSetSpace(s) {
+  if (!ecTool) { return; }
+  ecTool.space = s;
+  ecTool.tc.setSpace(s);
+  ecPanel.querySelectorAll('.ec-space').forEach(b =>
+    b.classList.toggle('on', b.dataset.s === s));
+}
+function ecSetSnap(on) {
+  if (!ecTool) { return; }
+  ecTool.snap = on;
+  ecTool.tc.setTranslationSnap(on ? 0.001 : null);          // 1 mm
+  ecTool.tc.setRotationSnap(on ? THREE.MathUtils.degToRad(15) : null);  // 15°
+  ecTool.tc.setScaleSnap(on ? 0.1 : null);
+  ecPanel.querySelector('.ec-snap').classList.toggle('on', on);
+}
+function ecArmFaceSnap(kind) {
+  if (!ecTool) { return; }
+  ecTool.faceSnap = ecTool.faceSnap === kind ? null : kind;
+  ecPanel.querySelectorAll('.ec-fsnap').forEach(b =>
+    b.classList.toggle('on', b.dataset.k === ecTool.faceSnap));
+  log(t(ecTool.faceSnap ? 'ec.snapArmed' : 'ec.snapOff',
+        { kind: ecTool.faceSnap || '' }), 'wrn');
+}
+
+// snap the frame ORIGIN (and, for a face, +Z) to a clicked surface point
+function ecDoFaceSnap(hit) {
+  if (!ecTool || !hit?.face) { return; }
+  const lo = ecTool.lo;
+  let wPoint, nWorld = null;
+  if (ecTool.faceSnap === 'vertex') {
+    const g = hit.object.geometry, pos = g.attributes.position;
+    const idx = [hit.face.a, hit.face.b, hit.face.c];
+    let best = null, bd = Infinity;
+    for (const i of idx) {
+      const v = new THREE.Vector3().fromBufferAttribute(pos, i)
+        .applyMatrix4(hit.object.matrixWorld);
+      const d = v.distanceTo(hit.point);
+      if (d < bd) { bd = d; best = v; }
+    }
+    wPoint = best;
+  } else {                               // face: centre + normal
+    if (faceOverlay) {
+      wPoint = faceOverlay.host.localToWorld(faceOverlay.centroidLocal.clone());
+      nWorld = faceOverlay.normalLocal.clone()
+        .transformDirection(faceOverlay.host.matrixWorld);
+    } else {
+      wPoint = hit.point.clone();
+      nWorld = hit.face.normal.clone().transformDirection(hit.object.matrixWorld);
+    }
+  }
+  lo.updateMatrixWorld(true);
+  ecTool.frame.position.copy(lo.worldToLocal(wPoint.clone()));
+  if (nWorld) {
+    const zl = nWorld.clone()
+      .applyQuaternion(lo.getWorldQuaternion(new THREE.Quaternion()).invert())
+      .normalize();
+    ecTool.frame.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), zl);
+  }
+  ecTool.faceSnap = null;
+  ecPanel.querySelectorAll('.ec-fsnap').forEach(b => b.classList.remove('on'));
+  clearFaceOverlay();
+  ecSyncPanelFromFrame();
+  viewer.redraw?.();
+}
+
+// ---- panel ----------------------------------------------------------------
+let ecPanel = null;
+function ecBuildPanel() {
+  if (ecPanel) { return ecPanel; }
+  ecPanel = document.createElement('div');
+  ecPanel.id = 'ecpanel';
+  ecPanel.innerHTML =
+    `<div class="ec-hd">${t('ec.title')}</div>` +
+    `<div class="ec-parent"></div>` +
+    `<label class="ec-l">${t('ec.name')}<input class="ec-name" ` +
+      `placeholder="end_coords"></label>` +
+    `<label class="ec-l">${t('ec.jname')}<input class="ec-jname" ` +
+      `placeholder="(auto)"></label>` +
+    `<div class="ec-seg">${t('ec.mode')}` +
+      `<button class="ec-mode on" data-m="translate">${t('ec.move')}</button>` +
+      `<button class="ec-mode" data-m="rotate">${t('ec.rot')}</button></div>` +
+    `<div class="ec-seg">${t('ec.space')}` +
+      `<button class="ec-space on" data-s="local">${t('ec.local')}</button>` +
+      `<button class="ec-space" data-s="world">${t('ec.world')}</button></div>` +
+    `<div class="ec-seg">` +
+      `<button class="ec-snap">${t('ec.snapStep')}</button>` +
+      `<button class="ec-fsnap" data-k="vertex">${t('ec.snapVert')}</button>` +
+      `</div>` +
+    `<div class="ec-num"><span>X</span><input class="ec-x" type="number" step="1">` +
+      `<span>Y</span><input class="ec-y" type="number" step="1">` +
+      `<span>Z</span><input class="ec-z" type="number" step="1"><b>mm</b></div>` +
+    `<div class="ec-num"><span>R</span><input class="ec-r" type="number" step="1">` +
+      `<span>P</span><input class="ec-p" type="number" step="1">` +
+      `<span>Y</span><input class="ec-yaw" type="number" step="1"><b>°</b></div>` +
+    `<div class="ec-act">` +
+      `<button class="ec-place">${t('ec.place')}</button>` +
+      `<button class="ec-cancel">${t('ec.cancel')}</button></div>`;
+  // inside the viewer pane (left), not the far-right sidebar
+  document.getElementById('viewwrap').appendChild(ecPanel);
+  ecPanel.querySelectorAll('.ec-mode').forEach(b =>
+    b.addEventListener('click', () => ecSetMode(b.dataset.m)));
+  ecPanel.querySelectorAll('.ec-space').forEach(b =>
+    b.addEventListener('click', () => ecSetSpace(b.dataset.s)));
+  ecPanel.querySelector('.ec-snap').addEventListener('click',
+    () => ecSetSnap(!ecTool?.snap));
+  ecPanel.querySelectorAll('.ec-fsnap').forEach(b =>
+    b.addEventListener('click', () => ecArmFaceSnap(b.dataset.k)));
+  ecPanel.querySelector('.ec-place').addEventListener('click', commitEndcoords);
+  ecPanel.querySelector('.ec-cancel').addEventListener('click', cancelEndcoords);
+  ['x', 'y', 'z', 'r', 'p', 'yaw'].forEach(k =>
+    ecPanel.querySelector('.ec-' + k).addEventListener('change',
+      ecApplyPanelToFrame));
+  return ecPanel;
+}
+function ecShowPanel() {
+  ecBuildPanel();
+  ecPanel.querySelector('.ec-parent').textContent =
+    t('ec.parent', { link: ecTool.link });
+  ecPanel.querySelector('.ec-name').value = '';
+  ecPanel.querySelector('.ec-jname').value = '';
+  ecSetMode('translate'); ecSetSpace('local'); ecSetSnap(false);
+  ecPanel.style.display = 'block';
+}
+function ecHidePanel() { if (ecPanel) { ecPanel.style.display = 'none'; } }
+function ecSyncPanelFromFrame() {
+  if (!ecTool || !ecPanel) { return; }
+  const f = ecTool.frame;
+  const mm = v => (Math.abs(v) < 5e-7 ? 0 : v * 1000).toFixed(1);
+  const dg = v => { let d = v * 180 / Math.PI;
+    if (Math.abs(d) < 0.05) { d = 0; } return d.toFixed(1); };
+  ecPanel.querySelector('.ec-x').value = mm(f.position.x);
+  ecPanel.querySelector('.ec-y').value = mm(f.position.y);
+  ecPanel.querySelector('.ec-z').value = mm(f.position.z);
+  const [r, p, y] = quatToRpy(f.quaternion);
+  ecPanel.querySelector('.ec-r').value = dg(r);
+  ecPanel.querySelector('.ec-p').value = dg(p);
+  ecPanel.querySelector('.ec-yaw').value = dg(y);
+}
+function ecApplyPanelToFrame() {
+  if (!ecTool || !ecPanel) { return; }
+  const num = c => parseFloat(ecPanel.querySelector('.ec-' + c).value) || 0;
+  ecTool.frame.position.set(num('x') / 1000, num('y') / 1000, num('z') / 1000);
+  const d2r = d => d * Math.PI / 180;
+  ecTool.frame.quaternion.copy(
+    rpyToQuat(d2r(num('r')), d2r(num('p')), d2r(num('yaw'))));
+  ecTool.lo.updateMatrixWorld(true);
+  viewer.redraw?.();
+}
+
 // clicking the view moves keyboard focus to it (so R works even after
 // typing in the path box) and a no-drag click selects the link
 viewer.setAttribute('tabindex', '-1');
 let downAt = null;
+let ecDownOnGizmo = false;        // did this press start on a gizmo handle?
 viewer.addEventListener('pointerdown', ev => {
   viewer.focus();
   downAt = [ev.clientX, ev.clientY];
+  // capture it NOW: TransformControls may clear .axis/.dragging before our
+  // bubbling pointerup runs, so a no-drag handle click would otherwise re-fit
+  ecDownOnGizmo = !!(ecTool && (ecTool.tc.dragging || ecTool.tc.axis));
 });
 viewer.addEventListener('pointerup', ev => {
   if (!downAt) { return; }
@@ -2897,12 +3159,32 @@ viewer.addEventListener('pointerup', ev => {
     else { log(t('align.cancelNoFace'), 'wrn'); }
     return;
   }
-  if (portOn()) {                                  // stays on: add several
+  if (ecTool) {                                    // a placement session is open
+    // clicking the gizmo itself (a handle) is for editing -- don't re-fit then
+    if (ecDownOnGizmo || ecTool.tc.dragging) { return; }
+    // clicking a FACE re-fits the frame to it (origin = face centre, +Z =
+    // normal), just like the align tool; vertex if vertex-snap is armed
+    const ph = pickHit(ev);
+    if (ph?.hit?.face) { ecDoFaceSnap(ph.hit); }
+    return;                                         // empty space: leave it be
+  }
+  if (portOn()) {                                  // click a face -> start gizmo
     const pn = pickPort(ev);                       // an existing port? remove it
     if (pn) { removePort(pn); return; }
     const ph = pickHit(ev);
-    if (ph?.hit?.face) { addPortAt(ph); }
-    else { log(t('port.noFace'), 'wrn'); }
+    if (!ph?.hit?.face) { log(t('port.noFace'), 'wrn'); return; }
+    showFaceOverlay(ph.hit);
+    let wPoint, nWorld;
+    if (faceOverlay) {
+      wPoint = faceOverlay.host.localToWorld(faceOverlay.centroidLocal.clone());
+      nWorld = faceOverlay.normalLocal.clone()
+        .transformDirection(faceOverlay.host.matrixWorld);
+    } else {
+      wPoint = ph.hit.point.clone();
+      nWorld = ph.hit.face.normal.clone()
+        .transformDirection(ph.hit.object.matrixWorld);
+    }
+    startEndcoords(ph.link, wPoint, nWorld);
     return;
   }
   const link = pickLink(ev);
@@ -3078,6 +3360,12 @@ window.addEventListener('keydown', ev => {
   if (/INPUT|SELECT|TEXTAREA/.test(document.activeElement?.tagName)
       || document.activeElement?.isContentEditable) {
     return;                       // typing in a field, not a command
+  }
+  if (ecTool) {                   // a placement session owns the shortcuts
+    if (ev.key === 'Escape') { cancelEndcoords(); }
+    else if (ev.key === 'g' || ev.key === 'G') { ecSetMode('translate'); }
+    else if (ev.key === 'r' || ev.key === 'R') { ecSetMode('rotate'); }
+    return;
   }
   const target = selectedLink ?? hoveredLink;
   if ((ev.key === 'r' || ev.key === 'R') && target) {
@@ -3285,6 +3573,7 @@ document.getElementById('reset').addEventListener('click', () => {
 function loadRobot(info, { drop = false, keepPose = false,
                            followCamera = false } = {}) {
   op('loadRobot', { name: info?.name, keepPose, drop });
+  cancelEndcoords();        // a rebuild invalidates any open placement session
   document.getElementById('emptyprompt').style.display = 'none';
   if ((keepPose || followCamera) && viewer.robot) {
     const angles = {};
