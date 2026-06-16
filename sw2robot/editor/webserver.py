@@ -801,6 +801,35 @@ def _warm_sw(progress):
     return None
 
 
+def _start_sw_session(progress, timeout=300):
+    """Start a fresh hidden SolidWorks, but never hang forever: if the launch
+    has not finished within ``timeout`` s -- the classic symptom of an
+    unreachable license server, where SolidWorks sits waiting on a license it
+    cannot get -- stop with a clear warning instead of blocking the job
+    indefinitely.  A timed-out launch thread is left to die on its own; the
+    next extraction starts clean (no session is cached)."""
+    from sw2robot.exporter.swcom import SolidWorks, SolidWorksUnavailable
+    box = {}
+
+    def work():
+        try:
+            box["sw"] = SolidWorks(visible=False)
+        except BaseException as e:       # carry the failure to the caller
+            box["err"] = e
+
+    th = threading.Thread(target=work, daemon=True)
+    th.start()
+    th.join(timeout)
+    if th.is_alive():
+        raise SolidWorksUnavailable(
+            f"SolidWorks did not start within {timeout}s -- the license "
+            f"server is almost certainly unreachable. Stopping. Restart the "
+            f"extraction once SolidWorks can acquire a license.")
+    if "err" in box:
+        raise box["err"]
+    return box["sw"]
+
+
 def _keepalive_loop():
     """Ping the warm session once a minute while idle, so Windows doesn't
     page it out and the next extraction starts instantly.
@@ -898,10 +927,9 @@ def _run_extract(sldasm):
                  f"(the original is never modified)")
         sw = _warm_sw(progress)
         if sw is None:
-            from sw2robot.exporter.swcom import SolidWorks
             progress("starting SolidWorks (this can take a minute; later "
                      "extractions reuse this session) ...")
-            sw = SolidWorks(visible=False)
+            sw = _start_sw_session(progress)   # bounded; warns if it can't start
             _sw["sess"] = sw
         state = core.extract_and_import(
             sldasm, out_dir=_Handler.root_dir, progress=progress, sw=sw)
@@ -910,10 +938,19 @@ def _run_extract(sldasm):
         progress(f"done -> {state.package_dir} (SolidWorks kept warm for "
                  f"the next extraction)")
     except Exception as e:
+        from sw2robot.exporter.swcom import SolidWorksUnavailable
         _job["error"] = f"{type(e).__name__}: {e}"
         print(f"[sw2robot.web] extract FAILED: {e!r}")
-        if "-2147417848" in repr(e) or "-2147417856" in repr(e):
-            _sw["sess"] = None     # session died; next run starts fresh
+        # Drop the cached session on anything that smells like a lost/failed
+        # SolidWorks connection -- a couldn't-start/license error, a COM RPC
+        # failure, or a dead instance -- so the NEXT extraction starts clean
+        # and recovers the moment the license server is back (instead of
+        # forever reusing a wedged session).
+        if (isinstance(e, SolidWorksUnavailable)
+                or "-2147417848" in repr(e) or "-2147417856" in repr(e)
+                or "com_error" in type(e).__name__.lower()
+                or "-21474" in repr(e)):
+            _shutdown_sw()         # tear the wedged session down, then forget it
     finally:
         hb_stop.set()
         _job["running"] = False

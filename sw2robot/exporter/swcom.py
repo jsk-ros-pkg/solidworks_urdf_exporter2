@@ -182,6 +182,14 @@ def doc_type_for(path):
     return SW_DOC_PART
 
 
+class SolidWorksUnavailable(RuntimeError):
+    """SolidWorks could not be reached/started -- not installed, no running
+    instance to attach to, or (most often) it launched but cannot check out a
+    license because the license server is unreachable.  Raised instead of
+    caching a dead instance that would never recover even once the license is
+    restored."""
+
+
 class SolidWorks:
     """Owns a private SolidWorks instance; opens docs read-only; never saves.
 
@@ -203,10 +211,20 @@ class SolidWorks:
             except Exception:
                 pass
             ensure_typelibs()
-            self.app = win32com.client.GetActiveObject("SldWorks.Application")
+            try:
+                self.app = win32com.client.GetActiveObject(
+                    "SldWorks.Application")
+            except Exception as e:
+                raise SolidWorksUnavailable(
+                    "no running SolidWorks to attach to -- start SolidWorks "
+                    "(and check its license) first.") from e
             self.visible = True
             self._open_docs = []
             self._tempdirs = []
+            if not self._responds():     # attached app is the USER's: don't quit
+                raise SolidWorksUnavailable(
+                    "the running SolidWorks is not responding (license "
+                    "issue?).")
             return
         # Each Dispatch creates a brand-new process that we own outright.
         # Use the makepy/gencache typelib wrappers so that methods with [out]
@@ -233,6 +251,30 @@ class SolidWorks:
         self.visible = visible
         self._open_docs = []
         self._tempdirs = []
+        # A SolidWorks that launched but can't acquire a license comes back as
+        # a COM object that fails every real call.  Catch a wholly unresponsive
+        # instance here -- with a clear license warning -- and tear it down, so
+        # a dead/zombie process is never cached and handed to the next job.
+        if not self._responds():
+            try:
+                self.shutdown()
+            except Exception:
+                pass
+            raise SolidWorksUnavailable(
+                "SolidWorks launched but is not responding -- it most likely "
+                "cannot check out a license (is the license server "
+                "reachable?). Fix the license and retry; nothing was cached.")
+
+    def _responds(self):
+        """True if the app answers a trivial, license-free call.  Lenient on
+        purpose: a healthy instance always answers ``Visible`` (or, failing
+        that, ``RevisionNumber``); only a wholly dead/zombie object fails both,
+        so this never false-rejects a working SolidWorks."""
+        if self.app is None:
+            return False
+        if safe_prop(self.app, "Visible") is not None:
+            return True
+        return safe_call(self.app, "RevisionNumber") not in (None, "")
 
     # -- document handling ------------------------------------------------
     def open_copy(self, path):
