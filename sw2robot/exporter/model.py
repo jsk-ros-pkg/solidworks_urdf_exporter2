@@ -232,6 +232,10 @@ def extract_components(doc, exclude=None):
         state = safe_call(ct, "GetSuppression")
         if not name or state == 0:
             n_skipped += 1
+            # name a dropped part so a missing link (e.g. a suppressed finger)
+            # is diagnosable instead of silently vanishing from the tree
+            print(f"      skip component: name={name!r} "
+                  f"suppression={state} (0=suppressed)")
             continue
         if any(e in name.lower() for e in exclude):
             n_excluded += 1
