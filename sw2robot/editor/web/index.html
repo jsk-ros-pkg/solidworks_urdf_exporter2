@@ -356,6 +356,16 @@
       <button id="selroot" data-i18n="ui.selroot">⌂ make root</button>
       <button id="seldesel">✕</button>
     </div>
+    <div id="mimicbar" style="position:absolute;left:50%;top:8px;
+         transform:translateX(-50%);z-index:7;display:none;align-items:center;
+         gap:8px;background:#33255edd;color:#e9ddff;border:1px solid #8c6fd0;
+         border-radius:6px;padding:5px 12px;font-size:12px;
+         box-shadow:0 2px 10px #0006">
+      <span id="mimicbartext"></span>
+      <button id="mimicapply" style="background:#6a4fb0;color:#fff;
+              border-color:#9b80e0">適用 (Enter)</button>
+      <button id="mimiccancel">✕</button>
+    </div>
     <div id="boxsel" style="position:absolute;z-index:6;display:none;
          border:1px dashed #7ad; background:#7ad2; pointer-events:none"></div>
     <div id="bulkbar" style="position:absolute;bottom:14px;left:50%;
@@ -608,7 +618,28 @@ skrobot / native-mesh consumers (not RViz-loadable)">⬇ glb</button></a>
     'jp.limit': { en: a => `limit ${a.lo} … ${a.hi} ${a.unit}${a.rad}`,
                   ja: a => `可動域 ${a.lo} … ${a.hi} ${a.unit}${a.rad}` },
     'jp.mimic': { en: a => `driven by <b>${a.mn}</b> (mimic)`, ja: a => `<b>${a.mn}</b> に追従 (mimic)` },
+    'jp.mimicMult': { en: 'multiplier', ja: '倍率' },
+    'jp.mimicOff': { en: 'offset', ja: 'オフセット' },
+    'jp.mimicUnlink': { en: '✕ unlink mimic', ja: '✕ mimic 解除' },
     'jp.fixed': { en: 'fixed — pick a type above to add motion', ja: 'fixed — 上で種類を選ぶと可動になります' },
+    // mimic linking (m): master + follower joints
+    'mimic.bar': { en: a => `mimic: master <b>${a.master}</b> — click joints to add followers (<b>${a.n}</b>) · Enter apply · Esc cancel`,
+                   ja: a => `mimic: master <b>${a.master}</b> — 関節をクリックで follower 追加 (<b>${a.n}</b>) · Enter 適用 · Esc 取消` },
+    'mimic.needMaster': { en: 'select a movable joint first, then press m to make others mimic it',
+                          ja: '先に可動関節を選択してから m を押すと、他をそれに追従させられます' },
+    'mimic.start': { en: a => `mimic mode: ${a.master} is the master — click joints to add followers`,
+                     ja: a => `mimic モード: master = ${a.master} — 関節をクリックで follower 追加` },
+    'mimic.followerFixed': { en: 'a fixed joint cannot be a follower — make it movable first (t)',
+                             ja: 'fixed 関節は follower にできません — 先に可動にしてください (t)' },
+    'mimic.cancel': { en: 'mimic linking cancelled', ja: 'mimic 設定をキャンセルしました' },
+    'mimic.applying': { en: a => `linking ${a.n} follower(s) to ${a.master} + rebuilding …`,
+                        ja: a => `${a.n} 件の follower を ${a.master} に連結して再ビルド中 …` },
+    'mimic.done': { en: a => `mimic linked ✓ (${a.n}) — move the master to drive the followers`,
+                    ja: a => `mimic 連結完了 ✓（${a.n} 件）— master を動かすと follower も連動します` },
+    'mimic.missed': { en: a => `not matched in joints.yaml: ${a.list}`, ja: a => `joints.yaml で未一致: ${a.list}` },
+    'mimic.fail': { en: a => `mimic apply failed: ${a.e}`, ja: a => `mimic 適用に失敗: ${a.e}` },
+    'mimic.unlinking': { en: a => `unlinking mimic on ${a.child} + rebuilding …`, ja: a => `${a.child} の mimic を解除して再ビルド中 …` },
+    'mimic.unlinked': { en: 'mimic unlinked ✓', ja: 'mimic を解除しました ✓' },
     // link info
     'li.jointAxis': { en: 'joint axis', ja: '関節軸' },
     'li.parentJoint': { en: 'parent joint', ja: '親関節' },
@@ -661,6 +692,10 @@ skrobot / native-mesh consumers (not RViz-loadable)">⬇ glb</button></a>
     'types.rebuilt': { en: a => `rebuilt ✓ (${a.n} change(s)) — reloading (meshes come from cache, pose+camera kept)`,
                        ja: a => `再ビルド完了 ✓（${a.n} 件）— reloading（メッシュはキャッシュ、姿勢・カメラ維持）` },
     'types.applyFail': { en: a => `apply failed: ${a.e}`, ja: a => `適用に失敗: ${a.e}` },
+    'jtype.toggle': { en: a => `${a.joint}: ${a.from} → ${a.to} (t)`,
+                      ja: a => `${a.joint}: ${a.from} → ${a.to} に変更 (t)` },
+    'jtype.noTarget': { en: 'press t with a joint selected (or hover its axis) to toggle fixed/revolute',
+                        ja: 't で fixed/revolute を切替: 関節を選択（または軸にホバー）してから押してください' },
     // auto limits
     'auto.needPkg': { en: 'auto-limits needs a server package (open via 📄/📁, not drop)',
                       ja: '自動リミットにはサーバー側パッケージが必要です（📄/📁 で開く。ドロップ不可）' },
@@ -749,10 +784,12 @@ skrobot / native-mesh consumers (not RViz-loadable)">⬇ glb</button></a>
     'ec.snapOff': { en: 'surface snap off', ja: '吸着オフ' },
     'hov.alignFace': { en: a => `${a.link} — <span class="key">click</span> align root to this face (origin = face center)`,
                        ja: a => `${a.link} — <span class="key">click</span> この面にルートを整列（原点 = 面の中心）` },
-    'hov.selected': { en: a => `✓ ${a.link} selected — <span class="key">R</span> make root`,
-                      ja: a => `✓ ${a.link} を選択中 — <span class="key">R</span> でルート化` },
+    'hov.selected': { en: a => `✓ ${a.link} selected — <span class="key">t</span> fixed/revolute, <span class="key">m</span> mimic, <span class="key">R</span> make root`,
+                      ja: a => `✓ ${a.link} を選択中 — <span class="key">t</span> 固定/回転、<span class="key">m</span> mimic 連動、<span class="key">R</span> ルート化` },
     'hov.link': { en: a => `${a.link} — <span class="key">click</span> select, <span class="key">dbl-click</span> tree, <span class="key">Shift+drag</span> box-select`,
                   ja: a => `${a.link} — <span class="key">click</span> 選択、<span class="key">dbl-click</span> ツリー、<span class="key">Shift+drag</span> 範囲選択` },
+    'hov.axis': { en: a => `⊕ ${a.joint} (joint axis) — <span class="key">click</span> select, <span class="key">t</span> fixed/revolute`,
+                  ja: a => `⊕ ${a.joint}（関節軸） — <span class="key">click</span> 選択、<span class="key">t</span> 固定/回転` },
     // camera fit
     'fit.emptyBox': { en: 'bounding box is EMPTY — meshes attached but no geometry?',
                       ja: '境界ボックスが空です — メッシュは付いているがジオメトリがない？' },
@@ -1664,7 +1701,10 @@ const axesOn = () => axesBtn.classList.contains('active');
 const originOn = () => originBtn.classList.contains('active');
 
 function setAxesVisible(on) {
-  axisMarkers.forEach(m => { m.mesh.visible = on && !m.ghost; });
+  // keep the selected link's joint axis shown even with the global toggle off
+  axisMarkers.forEach((m, name) => {
+    m.mesh.visible = (on && !m.ghost) || name === selAxisJoint;
+  });
   viewer.redraw();
 }
 axesBtn.addEventListener('click', () => {
@@ -1918,8 +1958,10 @@ const savedMats = new Map();    // mesh -> original material
 let selectedLink = null;
 let collisionLinks = new Set(); // links in a NEW (non-rest) self-collision
 
-const TINT_GLOW = { sel: 0x0e5d80, hov: 0x7a5500, col: 0x8a0e0e };
-const TINT_FLAT = { sel: 0x55d6ff, hov: 0xffc94d, col: 0xff3030 };
+const TINT_GLOW = { sel: 0x0e5d80, hov: 0x7a5500, col: 0x8a0e0e,
+                    mim: 0x4a2e8a, mas: 0x267a3a };
+const TINT_FLAT = { sel: 0x55d6ff, hov: 0xffc94d, col: 0xff3030,
+                    mim: 0xb38cff, mas: 0x66e08a };
 
 function _tintedClone(orig, kind) {
   let entry = tintClones.get(orig);
@@ -1941,6 +1983,10 @@ function _tintedClone(orig, kind) {
 // the tint a link should wear when neither hovered nor freshly (de)selected:
 // collision red wins over the selection blue
 function baseTint(name) {
+  if (mimicMode) {                 // mimic session: master=green, follower=purple
+    if (name === mimicMasterChild) { return 'mas'; }
+    if (mimicFollowers.has(name)) { return 'mim'; }
+  }
   return collisionLinks.has(name) ? 'col'
        : (name === selectedLink ? 'sel' : null);
 }
@@ -2105,6 +2151,37 @@ function toggleLinkVisible(name, row) {
 
 // ---- selection visuals: link frame triad + centre-of-mass marker --------
 let selVis = null;
+let selAxisJoint = null;          // joint whose axis is force-shown while its
+                                  // child link is selected (incl. fixed joints)
+// ---- mimic-linking session (master joint + follower joints) state -----------
+let mimicMode = false;
+let mimicMaster = null;           // master joint name (the driver)
+let mimicMasterChild = null;      // master's child link (can't follow itself)
+const mimicFollowers = new Set(); // follower child-link names chosen this run
+
+// resting visibility of an axis marker (no hover): a fixed joint's ghost is
+// normally hidden and a live axis follows the global toggle, BUT the selected
+// link's joint axis is always shown -- so you can see where a fixed joint would
+// turn and what `t` will toggle.
+function _markerRestVisible(name, m) {
+  if (name === selAxisJoint) { return true; }
+  return m.ghost ? false : axesOn();
+}
+// reveal the selected link's joint axis (and restore the previously shown one)
+function revealSelectedJointAxis(linkName) {
+  const prev = selAxisJoint;
+  selAxisJoint = null;
+  if (prev) {
+    const pm = axisMarkers.get(prev);
+    if (pm) { pm.mesh.visible = _markerRestVisible(prev, pm); }
+  }
+  if (linkName) {
+    const rec = [...rows.values()].find(r => r.child === linkName);
+    const m = rec && axisMarkers.get(rec.joint.name);
+    if (m) { m.mesh.visible = true; selAxisJoint = rec.joint.name; }
+  }
+  viewer.redraw();
+}
 
 function parseInertial(link) {
   const inert = [...(link.urdfNode?.children ?? [])]
@@ -2210,8 +2287,23 @@ function jointPanelHtml(j, parentLink, childLink) {
         lo: dLo.toFixed(um.dec), hi: dHi.toFixed(um.dec), unit: um.unit,
         rad: ang ? ` &nbsp;(${lo.toFixed(2)} … ${hi.toFixed(2)} rad)` : '' })}</div>`;
   } else if (mimic) {
-    const mn = j.mimicJoint?.name ?? j.mimicJoint;
-    body = `<div class="jp-lim">${t('jp.mimic', { mn })}</div>`;
+    // read the live coupling from the URDF <mimic> element (the loader exposes
+    // only the master link, not multiplier/offset)
+    const mimEl = j.urdfNode?.querySelector?.('mimic');
+    const mn = mimEl?.getAttribute('joint')
+      ?? (j.mimicJoint?.name ?? j.mimicJoint);
+    const mult = mimEl?.getAttribute('multiplier') ?? '1';
+    const off = mimEl?.getAttribute('offset') ?? '0';
+    body =
+      `<div class="jp-lim">${t('jp.mimic', { mn })}</div>` +
+      `<div class="jp-row"><span class="jp-lbl">${t('jp.mimicMult')}</span>` +
+        `<input type="number" class="jp-num jp-mim-mult" step="0.01" ` +
+          `value="${mult}" data-master="${mn}"></div>` +
+      `<div class="jp-row"><span class="jp-lbl">${t('jp.mimicOff')}</span>` +
+        `<input type="number" class="jp-num jp-mim-off" step="0.01" ` +
+          `value="${off}"></div>` +
+      `<div class="jp-row"><button class="jp-mim-unlink">` +
+        `${t('jp.mimicUnlink')}</button></div>`;
   } else {
     body = `<div class="jp-lim">${t('jp.fixed')}</div>`;
   }
@@ -2255,6 +2347,24 @@ function wireJointPanel(el, j) {
       [{ name: j.name, parent: '', child, type: t }]);
     if (!reloading && typeSel.isConnected) { typeSel.disabled = false; }
   });
+
+  // mimic joint controls: edit multiplier/offset, or unlink the coupling
+  const childLink = [...(j.urdfNode?.children ?? [])]
+    .find(e => e.tagName === 'child')?.getAttribute('link') ?? '';
+  const mimMult = panel.querySelector('.jp-mim-mult');
+  const mimOff = panel.querySelector('.jp-mim-off');
+  if (mimMult) {
+    const apply = () => {
+      mimMult.disabled = mimOff.disabled = true;
+      updateMimic(childLink, mimMult.dataset.master,
+                  parseFloat(mimMult.value) || 0,
+                  parseFloat(mimOff.value) || 0);
+    };
+    mimMult.addEventListener('change', apply);
+    mimOff.addEventListener('change', apply);
+  }
+  panel.querySelector('.jp-mim-unlink')?.addEventListener('click',
+    () => clearMimic(childLink));
 
   const slider = panel.querySelector('.jp-slider');
   if (!slider) { return; }            // fixed / mimic: no angle control
@@ -2419,6 +2529,7 @@ function selectLink(linkName) {
       'off', hiddenLinks.has(linkName));
     bar.style.display = 'flex';
     showSelectionVisuals(linkName);
+    revealSelectedJointAxis(linkName);    // show this joint's axis (even fixed)
     fillLinkInfo(linkName);
     const rec = [...rows.values()].find(r => r.child === linkName);
     rec?.row.scrollIntoView({ block: 'nearest' });
@@ -2426,6 +2537,7 @@ function selectLink(linkName) {
     bar.style.display = 'none';
     selVis?.removeFromParent();
     selVis = null;
+    revealSelectedJointAxis(null);        // hide the de-selected joint's axis
     jpSync = null;
     document.getElementById('linkinfo').style.display = 'none';
     viewer.redraw();
@@ -2475,13 +2587,14 @@ document.getElementById('exclchip').addEventListener('click', () =>
 function highlightJoint(name, on) {
   const m = axisMarkers.get(name);
   if (m && m.ghost) {
-    // fixed joint: reveal the would-be axis while hovering
-    m.mesh.visible = on;
+    // fixed joint: reveal the would-be axis while hovering (or kept on if
+    // this joint's link is the current selection)
+    m.mesh.visible = on || _markerRestVisible(name, m);
     m.mesh.material.color.set(on ? 0xffe93d : m.baseColor);
     m.mesh.scale.set(on ? 2.0 : 1, 1, on ? 2.0 : 1);
   } else if (m) {
     // show the axis while hovering even when the global toggle is off
-    m.mesh.visible = on ? true : axesOn();
+    m.mesh.visible = on ? true : _markerRestVisible(name, m);
     m.mesh.material.color.set(on ? 0xffe93d : m.baseColor);
     m.mesh.material.opacity = on ? 1.0 : 0.85;
     m.mesh.scale.set(on ? 2.4 : 1, 1, on ? 2.4 : 1);
@@ -2554,6 +2667,26 @@ async function applyTypeChanges(changes) {
     reselectAfterLoad = null;
     return false;
   }
+}
+
+// `t` key: toggle the target joint between fixed and revolute -- the common
+// "is this joint rigid or does it turn?" pass.  Target = the selected link's
+// joint, else the axis currently under the cursor.  Non-fixed types
+// (continuous/prismatic) collapse to fixed; fixed becomes revolute.
+function toggleJointFixed() {
+  let rec = null;
+  if (selectedLink) {
+    rec = [...rows.values()].find(r => r.child === selectedLink);
+  } else if (hoveredAxis) {
+    rec = rows.get(hoveredAxis);
+  }
+  if (!rec) { log(t('jtype.noTarget'), 'wrn'); return; }
+  const cur = rec.joint.jointType;
+  const next = cur === 'fixed' ? 'revolute' : 'fixed';
+  reselectAfterLoad = rec.child;        // keep selection/panel after the rebuild
+  log(t('jtype.toggle', { joint: rec.joint.name, from: cur, to: next }));
+  applyTypeChanges([{ name: rec.joint.name, parent: rec.parent,
+                      child: rec.child, type: next }]);
 }
 
 // ---- 🛠 auto joint limits via the self-collision sweep -------------------
@@ -2737,6 +2870,7 @@ async function reRoot(link) {
 const hovertip = document.getElementById('hovertip');
 const raycaster = new THREE.Raycaster();
 let hoveredLink = null;
+let hoveredAxis = null;            // joint name whose axis the cursor is near
 
 function pickHit(ev) {
   if (!viewer.robot) { return null; }
@@ -2754,6 +2888,48 @@ function pickHit(ev) {
 
 function pickLink(ev) {
   return pickHit(ev)?.link ?? null;
+}
+
+// ---- axis-line picking: the joint axis markers draw on top (depthTest off)
+// but are inert to the mesh raycast, so an axis can be visible yet unclickable
+// when a mesh sits in front.  Instead we pick in SCREEN space: if the cursor is
+// within a few px of a visible axis line, select that joint -- even occluded.
+const AXIS_PICK_PX = 12;          // how close (px) the cursor must get to a line
+function _projToScreen(v, rect) {
+  const p = v.clone().project(viewer.camera);     // NDC; z>1 or <-1 = clipped
+  if (p.z < -1 || p.z > 1) { return null; }       // behind camera / off depth
+  return { x: rect.left + (p.x * 0.5 + 0.5) * rect.width,
+           y: rect.top + (-p.y * 0.5 + 0.5) * rect.height };
+}
+function _segDistPx(px, py, ax, ay, bx, by) {
+  const dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy;
+  let t = l2 ? ((px - ax) * dx + (py - ay) * dy) / l2 : 0;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+}
+const _axA = new THREE.Vector3(), _axB = new THREE.Vector3();
+// nearest VISIBLE joint axis within AXIS_PICK_PX of the cursor, or null
+function pickAxis(ev) {
+  if (!viewer.robot || !viewer.camera) { return null; }
+  const rect = viewer.getBoundingClientRect();
+  let best = null;
+  for (const [joint, m] of axisMarkers) {
+    if (!m.mesh.visible) { continue; }
+    const h = (m.mesh.geometry.parameters?.height ?? 0) / 2;
+    if (!h) { continue; }
+    m.mesh.updateWorldMatrix(true, false);
+    const sa = _projToScreen(_axA.set(0,  h, 0).applyMatrix4(m.mesh.matrixWorld),
+                             rect);
+    const sb = _projToScreen(_axB.set(0, -h, 0).applyMatrix4(m.mesh.matrixWorld),
+                             rect);
+    if (!sa || !sb) { continue; }
+    const d = _segDistPx(ev.clientX, ev.clientY, sa.x, sa.y, sb.x, sb.y);
+    if (d <= AXIS_PICK_PX && (!best || d < best.dist)) {
+      const child = rows.get(joint)?.child ?? null;
+      if (child) { best = { joint, child, dist: d }; }
+    }
+  }
+  return best;
 }
 
 // ---- ⊕ align mode: hover highlights the PLANAR FACE under the cursor
@@ -3188,6 +3364,7 @@ viewer.addEventListener('pointerup', ev => {
   const moved = Math.hypot(ev.clientX - downAt[0], ev.clientY - downAt[1]);
   downAt = null;
   if (moved > 8 || ev.button !== 0) { return; }    // it was a drag/orbit
+  if (mimicMode) { mimicPick(ev); return; }        // click = toggle a follower
   if (alignOn()) {
     const ph = pickHit(ev);
     alignBtn.classList.remove('active');
@@ -3223,7 +3400,10 @@ viewer.addEventListener('pointerup', ev => {
     startEndcoords(ph.link, wPoint, nWorld);
     return;
   }
-  const link = pickLink(ev);
+  // a visible joint axis under the cursor wins over the mesh behind it, so you
+  // can select an occluded joint by clicking its (always-on-top) axis line
+  const ax = pickAxis(ev);
+  const link = ax ? ax.child : pickLink(ev);
   if (link) { selectLink(link); }
   else { selectLink(null); }       // empty space: always clear selection
 });
@@ -3264,6 +3444,26 @@ viewer.addEventListener('pointermove', ev => {
     }
     return;
   }
+  // a visible joint axis near the cursor is clickable: emphasise it + name it,
+  // so the always-on-top axis line reads as an affordance (clears on move-away)
+  const ax = pickAxis(ev);
+  if (ax) {
+    if (hoveredAxis !== ax.joint) {
+      if (hoveredAxis) { highlightJoint(hoveredAxis, false); }
+      hoveredAxis = ax.joint;
+      highlightJoint(ax.joint, true);
+    }
+    if (hoveredLink) { hoveredLink = null; }
+    viewer.style.cursor = 'pointer';
+    const rect = viewer.getBoundingClientRect();
+    hovertip.innerHTML = t('hov.axis', { joint: ax.joint });
+    hovertip.style.left = (ev.clientX - rect.left + 14) + 'px';
+    hovertip.style.top = (ev.clientY - rect.top + 18) + 'px';
+    hovertip.style.display = 'block';
+    return;
+  }
+  if (hoveredAxis) { highlightJoint(hoveredAxis, false); hoveredAxis = null;
+                     viewer.style.cursor = ''; }
   // 3D hover highlighting is the ELEMENT's job (its drag-hover tints the
   // movable subtree); we only track the link name for the tooltip / R key
   const link = pickLink(ev);
@@ -3282,6 +3482,8 @@ viewer.addEventListener('pointermove', ev => {
 });
 viewer.addEventListener('pointerleave', () => {
   if (hoveredLink) { highlightLink(hoveredLink, false); hoveredLink = null; }
+  if (hoveredAxis) { highlightJoint(hoveredAxis, false); hoveredAxis = null;
+                     viewer.style.cursor = ''; }
   hovertip.style.display = 'none';
 });
 
@@ -3365,6 +3567,126 @@ function clearBoxSelection() {
 }
 document.getElementById('bulkclose').addEventListener('click', clearBoxSelection);
 
+// ---- mimic linking: select a MASTER joint, press m, then click other joints
+// to make them follow it; one URDF rebuild on apply.  For fingers: one driven
+// joint + several coupled phalanges. ----------------------------------------
+const mimicBar = document.getElementById('mimicbar');
+function jointRecForLink(child) {
+  return [...rows.values()].find(r => r.child === child) || null;
+}
+function updateMimicBar() {
+  document.getElementById('mimicbartext').innerHTML =
+    t('mimic.bar', { master: mimicMaster, n: mimicFollowers.size });
+}
+function enterMimicMode() {
+  const rec = selectedLink && jointRecForLink(selectedLink);
+  if (!rec || rec.joint.jointType === 'fixed') {
+    log(t('mimic.needMaster'), 'wrn');
+    return;
+  }
+  mimicMode = true;
+  mimicMaster = rec.joint.name;
+  mimicMasterChild = rec.child;
+  mimicFollowers.clear();
+  _tintLink(rec.child, 'mas');          // master = green
+  mimicBar.style.display = 'flex';
+  updateMimicBar();
+  log(t('mimic.start', { master: mimicMaster }));
+}
+// click a joint while in mimic mode: toggle it as a follower of the master
+function mimicPick(ev) {
+  const ax = pickAxis(ev);
+  const child = ax ? ax.child : pickLink(ev);
+  if (!child || child === mimicMasterChild) { return; }
+  const rec = jointRecForLink(child);
+  if (!rec || rec.joint.jointType === 'fixed') {
+    log(t('mimic.followerFixed'), 'wrn');
+    return;
+  }
+  if (mimicFollowers.has(child)) {
+    mimicFollowers.delete(child);
+    _tintLink(child, baseTint(child));
+  } else {
+    mimicFollowers.add(child);
+    _tintLink(child, 'mim');            // follower = purple
+  }
+  updateMimicBar();
+}
+function exitMimicMode() {
+  // drop session tints (a rebuild repaints from the URDF on apply anyway)
+  const mc = mimicMasterChild, fol = [...mimicFollowers];
+  mimicMode = false;
+  mimicMaster = mimicMasterChild = null;
+  mimicFollowers.clear();
+  if (mc) { _tintLink(mc, baseTint(mc)); }
+  for (const c of fol) { _tintLink(c, baseTint(c)); }
+  mimicBar.style.display = 'none';
+}
+function cancelMimic() { log(t('mimic.cancel'), 'wrn'); exitMimicMode(); }
+async function applyMimic() {
+  if (!mimicFollowers.size) { cancelMimic(); return; }
+  const master = mimicMaster, followers = [...mimicFollowers];
+  const changes = followers.map(child => ({
+    child, master, multiplier: 1.0, offset: 0.0 }));
+  op('setMimic', { master, n: changes.length });
+  exitMimicMode();
+  reselectAfterLoad = followers[0];     // keep a follower's panel open after
+  log(t('mimic.applying', { n: changes.length, master }));
+  statusEl.textContent = t('status.rebuilding');
+  try {
+    const resp = await fetch('/api/set_mimic', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ changes }) });
+    const r = await resp.json();
+    if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
+    if (r.missed?.length) {
+      log(t('mimic.missed', { list: r.missed.join(', ') }), 'wrn');
+    }
+    log(t('mimic.done', { n: r.applied?.length ?? 0 }), 'ok');
+    loadRobot(currentInfo, { keepPose: true });
+    refreshHistory();
+  } catch (e) {
+    log(t('mimic.fail', { e: e.message ?? e }), 'err');
+  }
+}
+// unlink one follower (called from the joint panel of a mimic joint)
+async function clearMimic(child) {
+  op('clearMimic', { child });
+  reselectAfterLoad = child;
+  log(t('mimic.unlinking', { child }));
+  statusEl.textContent = t('status.rebuilding');
+  try {
+    const resp = await fetch('/api/set_mimic', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ changes: [{ child, clear: true }] }) });
+    const r = await resp.json();
+    if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
+    log(t('mimic.unlinked'), 'ok');
+    loadRobot(currentInfo, { keepPose: true });
+    refreshHistory();
+  } catch (e) {
+    log(t('mimic.fail', { e: e.message ?? e }), 'err');
+  }
+}
+// change an existing mimic's multiplier/offset (from the joint panel)
+async function updateMimic(child, master, multiplier, offset) {
+  reselectAfterLoad = child;
+  try {
+    const resp = await fetch('/api/set_mimic', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ changes: [{ child, master, multiplier, offset }] }) });
+    const r = await resp.json();
+    if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
+    log(t('mimic.done', { n: 1 }), 'ok');
+    loadRobot(currentInfo, { keepPose: true });
+    refreshHistory();
+  } catch (e) {
+    log(t('mimic.fail', { e: e.message ?? e }), 'err');
+  }
+}
+mimicBar.querySelector('#mimicapply').addEventListener('click', applyMimic);
+mimicBar.querySelector('#mimiccancel').addEventListener('click', cancelMimic);
+
 // apply one joint type to every box-selected link's controlling joint
 async function bulkSetType(type) {
   const links = [...boxSelected];
@@ -3403,8 +3725,19 @@ window.addEventListener('keydown', ev => {
     else if (ev.key === 'r' || ev.key === 'R') { ecSetMode('rotate'); }
     return;
   }
+  if (mimicMode) {                // a mimic-linking session owns the shortcuts
+    if (ev.key === 'Escape') { cancelMimic(); }
+    else if (ev.key === 'Enter' || ev.key === 'm' || ev.key === 'M') {
+      applyMimic();
+    }
+    return;
+  }
   const target = selectedLink ?? hoveredLink;
-  if ((ev.key === 'r' || ev.key === 'R') && target) {
+  if ((ev.key === 't' || ev.key === 'T')) {
+    toggleJointFixed();                 // fixed <-> revolute on selected/hovered
+  } else if ((ev.key === 'm' || ev.key === 'M')) {
+    enterMimicMode();                   // start mimic linking from the selection
+  } else if ((ev.key === 'r' || ev.key === 'R') && target) {
     reRoot(target);
     selectLink(null);
   } else if (ev.key === 'Escape') {
@@ -3647,6 +3980,11 @@ function loadRobot(info, { drop = false, keepPose = false,
   selectedLink = null;
   jpSync = null;                  // the old #linkinfo panel died with robot
   selVis = null;                  // died with the old robot
+  selAxisJoint = null;            // markers are rebuilt by addAxisMarkers
+  if (mimicMode) {                // a reload ends any open mimic session
+    mimicMode = false; mimicMaster = mimicMasterChild = null;
+    mimicFollowers.clear(); mimicBar.style.display = 'none';
+  }
   clearFaceOverlay();
   document.getElementById('selbar').style.display = 'none';
   document.getElementById('linkinfo').style.display = 'none';
