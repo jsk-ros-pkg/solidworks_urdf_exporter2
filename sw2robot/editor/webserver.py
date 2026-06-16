@@ -457,13 +457,15 @@ def _read_root_pose(txt):
             float(m.group(1)) if m else 0.0)
 
 
-def _export_zip(pkg_dir, robot_name, mesh_fmt="dae"):
+def _export_zip(pkg_dir, robot_name, mesh_fmt="dae", ros_version=1):
     """ZIP a portable ``<robot_name>_description`` package (package:// URLs).
 
     ``mesh_fmt='dae'`` (default): ``<visual>`` as colour COLLADA ``.dae`` +
     ``<collision>`` as plain ``.stl`` -- the RViz/Gazebo-ready variant.
     ``mesh_fmt='glb'``: a uniform ``.glb`` package (colour kept) for three.js /
-    skrobot / native-mesh consumers (not RViz-loadable)."""
+    skrobot / native-mesh consumers (not RViz-loadable).
+
+    ``ros_version`` (1 = catkin, 2 = ament_cmake) selects the build files."""
     if mesh_fmt not in ("dae", "glb"):
         raise ValueError(f"unsupported mesh format: {mesh_fmt}")
 
@@ -474,7 +476,9 @@ def _export_zip(pkg_dir, robot_name, mesh_fmt="dae"):
     kwargs = {"ctx_fmt": GLB_CTX_FMT} if mesh_fmt == "glb" else {}
     buf = _io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        for arc, data in build_ros_description(pkg_dir, robot_name, **kwargs):
+        for arc, data in build_ros_description(pkg_dir, robot_name,
+                                               ros_version=ros_version,
+                                               **kwargs):
             z.writestr(arc, data)
     return buf.getvalue()
 
@@ -1322,7 +1326,13 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 if fmt not in ("dae", "glb"):
                     return self._send_json(
                         {"error": f"unsupported mesh format: {fmt}"}, 400)
-                data = _export_zip(cls.pkg_dir, cls.robot_name, fmt)
+                ros = (query.get("ros") or ["1"])[0]
+                if ros not in ("1", "2"):
+                    return self._send_json(
+                        {"error": f"unsupported ros version: {ros}"}, 400)
+                ros_version = int(ros)
+                data = _export_zip(cls.pkg_dir, cls.robot_name, fmt,
+                                   ros_version=ros_version)
                 fname = (f"{cls.robot_name}_glb.zip" if fmt == "glb"
                          else f"{cls.robot_name}_description.zip")
                 self.send_response(200)

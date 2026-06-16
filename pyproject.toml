@@ -29,6 +29,12 @@ ui = [
     "python-fcl>=0.7",
     "viser",
 ]
+# extra deps the test suite uses to validate exported ROS packages without a ROS
+# install: catkin_pkg parses/validates package.xml the way catkin/colcon do
+# (skrobot, used to load the exported URDF + resolve package:// meshes, is in ui).
+test = [
+    "catkin_pkg",
+]
 
 [project.scripts]
 sw2urdf = "sw2robot.exporter.export:main"     # extract + build (needs SolidWorks)

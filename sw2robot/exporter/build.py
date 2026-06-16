@@ -1,6 +1,6 @@
 """CLI: build URDF from a cached graph.json (fast, no SolidWorks).
 
-    uv run python -m sw2robot.exporter.build <pkg_dir> [--config c.yaml] [--base S] [--exclude a,b] [--ros-pkg]
+    uv run python -m sw2robot.exporter.build <pkg_dir> [--config c.yaml] [--base S] [--exclude a,b] [--ros-pkg] [--ros2]
 """
 from __future__ import annotations
 
@@ -16,10 +16,14 @@ def main():
     ap.add_argument("--base", default=None)
     ap.add_argument("--exclude", default=None)
     ap.add_argument("--ros-pkg", action="store_true")
+    ap.add_argument("--ros2", action="store_true",
+                    help="make --ros-pkg an ament_cmake (ROS 2) package with "
+                         "launch/ + rviz/ instead of catkin; implies --ros-pkg")
     args = ap.parse_args()
     exclude = [x.strip() for x in args.exclude.split(",")] if args.exclude else None
     build(args.pkg_dir, config_path=args.config, base_hint=args.base,
-          exclude=exclude, ros_pkg=args.ros_pkg)
+          exclude=exclude, ros_pkg=args.ros_pkg or args.ros2,
+          ros_version=2 if args.ros2 else 1)
 
 
 if __name__ == "__main__":

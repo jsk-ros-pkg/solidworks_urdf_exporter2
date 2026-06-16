@@ -52,7 +52,9 @@ jobs:
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          pip install ".[ui]" pytest
+          # ui -> skrobot (loads the exported URDF + resolves package:// meshes),
+          # test -> catkin_pkg (validates the exported package.xml)
+          pip install ".[ui,test]" pytest
 
       - name: Run tests
         run: pytest -q
@@ -143,3 +145,106 @@ jobs:
       - name: Server log (on failure)
         if: failure()
         run: cat server.log
+
+  # ----- the exported ROS packages must BUILD as real catkin / colcon packages,
+  # not just have the right files.  sw2robot needs Python >=3.12 but the ROS
+  # images ship 3.8 (Noetic) / 3.10 (Humble), so we split: generate the
+  # description packages here (3.12), then build each under its ROS toolchain.
+  ros-pkg-generate:
+    name: generate ROS description packages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install . pycollada    # pycollada: the .dae visual-mesh writer
+
+      - name: Build ROS 1 + ROS 2 <name>_description packages from the example
+        run: |
+          set -e
+          for ver in 1 2; do
+            rm -rf work && cp -r examples/fingertip work
+            flag=$([ "$ver" = 2 ] && echo --ros2 || echo --ros-pkg)
+            python -m sw2robot.exporter.build work \
+              --config work/fingertip.joints.yaml "$flag"
+            # build() writes <name>_description next to the package dir (here ./)
+            mkdir -p artifacts/ros$ver
+            mv fingertip_description artifacts/ros$ver/fingertip_description
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ros-desc-packages
+          path: artifacts/
+
+  ros1-build:
+    name: catkin build (ROS 1 Noetic)
+    needs: ros-pkg-generate
+    runs-on: ubuntu-latest
+    container: ros:noetic-ros-base
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ros-desc-packages
+          path: artifacts
+
+      - name: Install catkin_tools + urdf checker
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            python3-catkin-tools liburdfdom-tools
+
+      - name: catkin build + install + check_urdf
+        shell: bash
+        run: |
+          set -e
+          source /opt/ros/noetic/setup.bash
+          mkdir -p ws/src
+          cp -r artifacts/ros1/fingertip_description ws/src/
+          cd ws
+          catkin build --install --no-status     # configures + runs install rules
+          source install/setup.bash
+          # the URDF must parse with ROS's own urdfdom parser
+          check_urdf install/share/fingertip_description/urdf/fingertip.urdf
+          # the install rules must place the package's runtime files
+          test -d install/share/fingertip_description/meshes
+
+  ros2-build:
+    name: colcon build (ROS 2 Humble)
+    needs: ros-pkg-generate
+    runs-on: ubuntu-latest
+    container: ros:humble-ros-base
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ros-desc-packages
+          path: artifacts
+
+      - name: Install colcon + urdf checker
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            python3-colcon-common-extensions liburdfdom-tools
+
+      - name: colcon build + check_urdf + launch files installed
+        shell: bash
+        run: |
+          set -e
+          source /opt/ros/humble/setup.bash
+          mkdir -p ws/src
+          cp -r artifacts/ros2/fingertip_description ws/src/
+          cd ws
+          colcon build
+          source install/setup.bash
+          check_urdf src/fingertip_description/urdf/fingertip.urdf
+          share=install/fingertip_description/share/fingertip_description
+          test -f "$share/urdf/fingertip.urdf"
+          test -f "$share/launch/display.launch.py"
+          test -f "$share/rviz/fingertip.rviz"

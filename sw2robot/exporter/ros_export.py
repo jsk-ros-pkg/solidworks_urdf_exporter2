@@ -24,7 +24,14 @@ from __future__ import annotations
 import os
 import xml.etree.ElementTree as ET
 
-from .urdf_writer import CMAKELISTS, PACKAGE_XML
+from .urdf_writer import (
+    CMAKELISTS,
+    CMAKELISTS_ROS2,
+    DISPLAY_LAUNCH_ROS2,
+    PACKAGE_XML,
+    PACKAGE_XML_ROS2,
+    RVIZ_CONFIG_ROS2,
+)
 
 # extensions we convert; anything else (already .dae/.stl, abs URLs) is left alone
 _CONVERTIBLE = (".3dxml", ".glb")
@@ -144,7 +151,7 @@ def _resolve_mesh(pkg_dir, ref):
 
 
 def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
-                          ctx_fmt=_CTX_FMT):
+                          ctx_fmt=_CTX_FMT, ros_version=1):
     """``pkg_dir`` (a built package) -> ``[(arcname, bytes), ...]`` for a portable
     ``<robot_name>_description`` ROS package, all behind ``package://`` URLs.
 
@@ -152,9 +159,17 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
     ``<visual>`` as colour ``.dae`` and ``<collision>`` as plain ``.stl`` (the
     usual ROS split).  Pass :data:`GLB_CTX_FMT` for a uniform ``.glb`` package.
 
+    ``ros_version`` picks the build system: ``1`` (default) writes a catkin
+    ``package.xml`` (format 2) + ``CMakeLists.txt``; ``2`` writes an ament_cmake
+    ``package.xml`` (format 3) + ``CMakeLists.txt`` and bundles a
+    ``launch/display.launch.py`` + ``rviz/<name>.rviz`` so the package runs with
+    ``ros2 launch <name> display.launch.py``.
+
     Reads the on-disk ``urdf/<robot_name>.urdf`` (which already carries the
     editor's applied edits).  A missing/unconvertible mesh aborts the export
     before any entries are emitted, so a half-rewritten package never ships."""
+    if ros_version not in (1, 2):
+        raise ValueError(f"unsupported ros_version: {ros_version}")
     pkg = f"{robot_name}_description"
     urdf_path = os.path.join(pkg_dir, "urdf", robot_name + ".urdf")
     root = ET.parse(urdf_path).getroot()
@@ -196,18 +211,38 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
     if not new_urdf.endswith("\n"):
         new_urdf += "\n"
     files.append((f"{pkg}/urdf/{robot_name}.urdf", new_urdf.encode("utf-8")))
-    files.append((f"{pkg}/package.xml",
-                  PACKAGE_XML.format(name=pkg, email=email).encode("utf-8")))
-    files.append((f"{pkg}/CMakeLists.txt",
-                  CMAKELISTS.format(name=pkg).encode("utf-8")))
+
+    if ros_version == 2:
+        # the root (first) link is the natural RViz fixed frame
+        first_link = root.find("link")
+        fixed_frame = (first_link.get("name") if first_link is not None
+                       else "base_link") or "base_link"
+        files.append((f"{pkg}/package.xml",
+                      PACKAGE_XML_ROS2.format(name=pkg, email=email)
+                      .encode("utf-8")))
+        files.append((f"{pkg}/CMakeLists.txt",
+                      CMAKELISTS_ROS2.format(name=pkg).encode("utf-8")))
+        files.append((f"{pkg}/launch/display.launch.py",
+                      DISPLAY_LAUNCH_ROS2.format(name=pkg, robot=robot_name)
+                      .encode("utf-8")))
+        files.append((f"{pkg}/rviz/{robot_name}.rviz",
+                      RVIZ_CONFIG_ROS2.format(fixed_frame=fixed_frame)
+                      .encode("utf-8")))
+    else:
+        files.append((f"{pkg}/package.xml",
+                      PACKAGE_XML.format(name=pkg, email=email).encode("utf-8")))
+        files.append((f"{pkg}/CMakeLists.txt",
+                      CMAKELISTS.format(name=pkg).encode("utf-8")))
     return files
 
 
 def write_ros_description_package(pkg_dir, robot_name, dest_dir,
-                                  email="auto@example.com"):
+                                  email="auto@example.com", ros_version=1):
     """Write the ``<robot_name>_description`` package under ``dest_dir`` and return
-    its directory path."""
-    files = build_ros_description(pkg_dir, robot_name, email=email)
+    its directory path.  ``ros_version`` (1 = catkin, 2 = ament_cmake) is passed
+    through to :func:`build_ros_description`."""
+    files = build_ros_description(pkg_dir, robot_name, email=email,
+                                  ros_version=ros_version)
     root = os.path.abspath(dest_dir)
     for arc, data in files:
         dst = os.path.join(root, *arc.split("/"))

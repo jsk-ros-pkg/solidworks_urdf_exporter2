@@ -140,7 +140,7 @@ def extract(assembly_path, out_dir=None, robot_name=None, visible=False,
 
 # ---------------------------------------------------------------- build
 def build(pkg_dir, config_path=None, base_hint=None, exclude=None,
-          ros_pkg=False, density=None):
+          ros_pkg=False, density=None, ros_version=1):
     graph = GraphState.load(os.path.join(pkg_dir, GRAPH_FILE))
     robot_name = graph.robot_name
     urdf_path = os.path.join(pkg_dir, "urdf", robot_name + ".urdf")
@@ -171,15 +171,17 @@ def build(pkg_dir, config_path=None, base_hint=None, exclude=None,
     desc_dir = None
     if ros_pkg:
         # a standalone <robot_name>_description package next to pkg_dir:
-        # package:// URLs + COLLADA .dae meshes (RViz/Gazebo-ready)
+        # package:// URLs + COLLADA .dae meshes (RViz/Gazebo-ready).
+        # ros_version 2 also bundles launch/ + rviz/ for `ros2 launch`.
         from .ros_export import write_ros_description_package
         desc_dir = write_ros_description_package(
-            pkg_dir, robot_name, os.path.dirname(os.path.abspath(pkg_dir)))
+            pkg_dir, robot_name, os.path.dirname(os.path.abspath(pkg_dir)),
+            ros_version=ros_version)
 
     print(f"\nDONE. Package: {pkg_dir}")
     print(f"  URDF:   {urdf_path}")
     if desc_dir:
-        print(f"  ROS pkg: {desc_dir}  (package:// + .dae)")
+        print(f"  ROS pkg: {desc_dir}  (ROS {ros_version}, package:// + .dae)")
     if not config_path:
         print(f"  Config: {tmpl}  (edit, re-run: "
               "python -m sw2robot.exporter.build with --config)")
@@ -189,10 +191,11 @@ def build(pkg_dir, config_path=None, base_hint=None, exclude=None,
 
 # ---------------------------------------------------------------- export
 def export(assembly_path, out_dir=None, robot_name=None, visible=False,
-           config_path=None, base_hint=None, exclude=None, ros_pkg=False):
+           config_path=None, base_hint=None, exclude=None, ros_pkg=False,
+           ros_version=1):
     pkg_dir = extract(assembly_path, out_dir, robot_name, visible)
     return build(pkg_dir, config_path=config_path, base_hint=base_hint,
-                 exclude=exclude, ros_pkg=ros_pkg)
+                 exclude=exclude, ros_pkg=ros_pkg, ros_version=ros_version)
 
 
 def _exclude_list(s):
@@ -212,10 +215,16 @@ def main():
                     help="also write a portable <name>_description package "
                          "(package:// URLs + COLLADA .dae meshes) next to the "
                          "output; the working URDF stays mesh-relative")
+    ap.add_argument("--ros2", action="store_true",
+                    help="make the --ros-pkg an ament_cmake (ROS 2) package "
+                         "with launch/ + rviz/ instead of catkin (ROS 1); "
+                         "implies --ros-pkg")
     args = ap.parse_args()
     export(args.assembly, args.out, args.name, args.visible,
            config_path=args.config, base_hint=args.base,
-           exclude=_exclude_list(args.exclude), ros_pkg=args.ros_pkg)
+           exclude=_exclude_list(args.exclude),
+           ros_pkg=args.ros_pkg or args.ros2,
+           ros_version=2 if args.ros2 else 1)
 
 
 if __name__ == "__main__":

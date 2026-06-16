@@ -242,6 +242,104 @@ install(DIRECTORY urdf meshes
   DESTINATION ${{CATKIN_PACKAGE_SHARE_DESTINATION}})
 """
 
+# --- ROS 2 (ament_cmake) variants -------------------------------------------
+# Same description-package layout, but a format-3 manifest + ament_cmake build,
+# plus a ready-to-run display launch file and an RViz config so the package is
+# usable straight away: `ros2 launch <name> display.launch.py`.
+PACKAGE_XML_ROS2 = """<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>{name}</name>
+  <version>0.0.1</version>
+  <description>URDF generated from SolidWorks assembly {name}</description>
+  <maintainer email="{email}">auto</maintainer>
+  <license>TODO</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>joint_state_publisher_gui</exec_depend>
+  <exec_depend>rviz2</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
+"""
+
+CMAKELISTS_ROS2 = """cmake_minimum_required(VERSION 3.8)
+project({name})
+find_package(ament_cmake REQUIRED)
+install(DIRECTORY urdf meshes launch rviz
+  DESTINATION share/${{PROJECT_NAME}})
+ament_package()
+"""
+
+# {name} = package name, {robot} = urdf file stem.  Reads the plain URDF (not
+# xacro) and brings up robot_state_publisher + joint_state_publisher_gui + RViz.
+DISPLAY_LAUNCH_ROS2 = '''import os
+
+from ament_index_python.packages import get_package_share_directory
+from launch import LaunchDescription
+from launch_ros.actions import Node
+
+
+def generate_launch_description():
+    pkg = get_package_share_directory("{name}")
+    urdf = os.path.join(pkg, "urdf", "{robot}.urdf")
+    with open(urdf) as f:
+        robot_description = f.read()
+    rviz = os.path.join(pkg, "rviz", "{robot}.rviz")
+    return LaunchDescription([
+        Node(
+            package="robot_state_publisher",
+            executable="robot_state_publisher",
+            output="screen",
+            parameters=[{{"robot_description": robot_description}}],
+        ),
+        Node(
+            package="joint_state_publisher_gui",
+            executable="joint_state_publisher_gui",
+            output="screen",
+        ),
+        Node(
+            package="rviz2",
+            executable="rviz2",
+            output="screen",
+            arguments=["-d", rviz],
+        ),
+    ])
+'''
+
+# A minimal RViz2 config so the robot shows up immediately (RobotModel from the
+# /robot_description topic, TF, grid).  {fixed_frame} = the root link name.
+RVIZ_CONFIG_ROS2 = """Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+Visualization Manager:
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Enabled: true
+      Name: Grid
+    - Class: rviz_default_plugins/RobotModel
+      Enabled: true
+      Name: RobotModel
+      Description Topic:
+        Value: /robot_description
+    - Class: rviz_default_plugins/TF
+      Enabled: true
+      Name: TF
+  Global Options:
+    Fixed Frame: {fixed_frame}
+    Frame Rate: 30
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Name: Current View
+"""
+
 
 def write_ros_package(model, pkg_dir, email="auto@example.com"):
     with open(os.path.join(pkg_dir, "package.xml"), "w", encoding="utf-8") as f:

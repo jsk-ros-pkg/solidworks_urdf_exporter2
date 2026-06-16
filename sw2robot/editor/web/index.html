@@ -452,12 +452,18 @@
       <div style="color:#8fd99f;font-size:11px;margin-bottom:4px">
         📦 Export</div>
       <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">
-        <a id="expdae" href="/api/export/zip?meshes=dae" download>
+        <a id="expdae" href="/api/export/zip?meshes=dae&ros=1" download>
           <button data-i18n="ui.expdae" data-i18n-title="t.expdae"
-                  title="portable ROS package (<name>_description): package://
+                  title="portable ROS 1 (catkin) package (<name>_description): package://
 URLs, visual = colour COLLADA .dae, collision = .stl (loads in RViz/Gazebo)">
-            ⬇ ROS package</button></a>
-        <a id="expglb" href="/api/export/zip?meshes=glb" download>
+            ⬇ ROS1 package</button></a>
+        <a id="expros2" href="/api/export/zip?meshes=dae&ros=2" download>
+          <button data-i18n="ui.expros2" data-i18n-title="t.expros2"
+                  title="portable ROS 2 (ament_cmake) package (<name>_description):
+package:// URLs, .dae/.stl meshes, plus launch/display.launch.py + rviz config
+(run: ros2 launch <name>_description display.launch.py)">
+            ⬇ ROS2 package</button></a>
+        <a id="expglb" href="/api/export/zip?meshes=glb&ros=1" download>
           <button data-i18n-title="t.expglb" title="uniform .glb meshes (colour kept) for three.js /
 skrobot / native-mesh consumers (not RViz-loadable)">⬇ glb</button></a>
       </div>
@@ -876,9 +882,12 @@ skrobot / native-mesh consumers (not RViz-loadable)">⬇ glb</button></a>
     't.selall': { en: 'select all', ja: 'すべて選択' },
     'ui.selectedArrow': { en: 'selected →', ja: '選択 →' },
     'ui.set': { en: 'Set', ja: '適用' },
-    't.expdae': { en: 'portable ROS package (<name>_description): package:// URLs, visual = colour COLLADA .dae, collision = .stl (loads in RViz/Gazebo)',
-                  ja: 'ポータブルな ROS パッケージ (<name>_description): package:// URL、visual = カラー COLLADA .dae、collision = .stl（RViz/Gazebo で読込可）' },
-    'ui.expdae': { en: '⬇ ROS package', ja: '⬇ ROS パッケージ' },
+    't.expdae': { en: 'portable ROS 1 (catkin) package (<name>_description): package:// URLs, visual = colour COLLADA .dae, collision = .stl (loads in RViz/Gazebo)',
+                  ja: 'ポータブルな ROS 1 (catkin) パッケージ (<name>_description): package:// URL、visual = カラー COLLADA .dae、collision = .stl（RViz/Gazebo で読込可）' },
+    'ui.expdae': { en: '⬇ ROS1 package', ja: '⬇ ROS1 パッケージ' },
+    't.expros2': { en: 'portable ROS 2 (ament_cmake) package (<name>_description): package:// URLs, .dae/.stl meshes, plus launch/display.launch.py + rviz config (run: ros2 launch <name>_description display.launch.py)',
+                  ja: 'ポータブルな ROS 2 (ament_cmake) パッケージ (<name>_description): package:// URL、.dae/.stl メッシュ、launch/display.launch.py + rviz 設定付き（実行: ros2 launch <name>_description display.launch.py）' },
+    'ui.expros2': { en: '⬇ ROS2 package', ja: '⬇ ROS2 パッケージ' },
     't.expglb': { en: 'uniform .glb meshes (colour kept) for three.js / skrobot / native-mesh consumers (not RViz-loadable)',
                   ja: '均一な .glb メッシュ（色は保持）three.js / skrobot / ネイティブメッシュ向け（RVizでは読込不可）' },
     'ui.hint': { en: 'left-drag: orbit · right-drag: pan · wheel: zoom · click to select a link · move joints with the panel sliders (🖐 pose ON lets you drag a link to move its joint)',
