@@ -1126,6 +1126,34 @@ def _config_parent_map(comps, adjacency, base, directed):
             "lower": -3.141592 if lo is None else lo,
             "upper": 3.141592 if up is None else up,
             "mimic": d.get("mimic")}
+    # Mirror fallback: a joint whose child got no axis (a SolidWorks
+    # mirror-feature copy carries no mates) but whose child part has exactly one
+    # sibling instance WITH an axis -- the mated original on the other side.
+    # The axis is a feature of the child part, identical in its own frame, so
+    # reflect it into this child's pose: ax_R = W_child_R . W_child_L^-1 . ax_L.
+    by_name = {c.name: c for c in comps}
+    axis_by_child = {ch: info["axis"] for (ch, _pa), info in edge_info.items()
+                     if info.get("axis") is not None}
+    for (child, parent), info in edge_info.items():
+        if info.get("axis") is not None:
+            continue
+        cR = by_name.get(child)
+        if cR is None or not cR.part_path:
+            continue
+        sibs = [ch for ch in axis_by_child
+                if ch != child and by_name.get(ch)
+                and by_name[ch].part_path == cR.part_path]
+        if len(sibs) != 1:                # ambiguous (or none) -> leave as-is
+            continue
+        cL, axL = by_name[sibs[0]], axis_by_child[sibs[0]]
+        try:
+            T = np.asarray(cR.world, float) @ np.linalg.inv(
+                np.asarray(cL.world, float))
+        except np.linalg.LinAlgError:
+            continue
+        pt = (T @ np.append(np.asarray(axL[0], float), 1.0))[:3]
+        info["axis"] = (pt, T[:3, :3] @ np.asarray(axL[1], float))
+        info["mirrored_axis"] = True
     # anything unlisted -> fixed to base
     for c in comps:
         if c.name != base.name and c.name not in parent_of:
