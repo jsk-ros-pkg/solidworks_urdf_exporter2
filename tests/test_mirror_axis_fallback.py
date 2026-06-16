@@ -88,3 +88,38 @@ def test_no_mirror_when_sibling_is_ambiguous():
     _parent_of, edge_info = _config_parent_map(
         [a, b, c, pa], adjacency, _comp("base", np.eye(4)), directed)
     assert edge_info[("c", "pa")]["axis"] is None     # left ambiguous, untouched
+
+
+def test_mirror_from_several_siblings_when_they_agree():
+    """Four identical mecanum wheels share one spin axis; two of them resolved an
+    axis, the others mated only by coincident planes.  The un-axised wheels must
+    inherit the axis -- multiple siblings are fine as long as they AGREE."""
+    # same part, placed at four poses; the spin axis (+X in the part frame) lands
+    # along world +X for w1/w2 and is mirrored to -X for w3/w4
+    flipX = np.diag([1.0, -1.0, -1.0, 1.0])     # 180 deg about X (a wheel mirror)
+    wheels = {"w1": np.eye(4), "w2": np.eye(4).copy(),
+              "w3": flipX.copy(), "w4": flipX.copy()}
+    wheels["w2"][:3, 3] = [0, 0.3, 0]
+    wheels["w4"][:3, 3] = [0, 0.3, 0]
+    comps = [_comp(n, W) for n, W in wheels.items()]
+    for c in comps:
+        c.part_path = "wheel.SLDPRT"
+    pa = _comp("axle", np.eye(4))
+    spin = np.array([1.0, 0.0, 0.0])
+    adjacency = {
+        frozenset(("w1", "axle")): {"types": ["CONCENTRIC"],
+                                    "axis": (np.zeros(3), spin), "mates": []},
+        frozenset(("w2", "axle")): {"types": ["CONCENTRIC"],
+                                    "axis": (np.zeros(3), spin), "mates": []},
+        frozenset(("w3", "axle")): {"types": [], "axis": None, "mates": []},
+        frozenset(("w4", "axle")): {"types": [], "axis": None, "mates": []},
+    }
+    directed = [{"parent": "axle", "child": w, "type": "revolute"}
+                for w in ("w1", "w2", "w3", "w4")]
+    _parent_of, edge_info = _config_parent_map(
+        comps + [pa], adjacency, _comp("base", np.eye(4)), directed)
+    for w in ("w3", "w4"):
+        ax = edge_info[(w, "axle")]["axis"]
+        assert ax is not None, f"{w} did not inherit the wheel spin axis"
+        # the inherited axis is parallel to the part's spin axis (sign-free)
+        assert abs(abs(float(np.asarray(ax[1], float) @ [1, 0, 0])) - 1.0) < 1e-6
