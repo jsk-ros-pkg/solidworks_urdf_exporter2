@@ -948,6 +948,7 @@ def _auto_parent_map(comps, adjacency, base):
 
     visited = {base.name}
     parent_of = {}
+    mate_less = set()        # names attached by the no-mate fallback (untrusted)
 
     def bfs_within(max_tier, roots):
         queue = list(roots)
@@ -981,6 +982,43 @@ def _auto_parent_map(comps, adjacency, base):
         return sorted(nbs, key=lambda nb: (
             tuple(-x for x in _edge_pref(cur, nb)), nb))
 
+    def _twin_host(root, rpos):
+        """Mirror/copy rule for a mate-less part: SolidWorks 'Mirror Components'
+        and pattern copies carry NO mates, so a mirrored part (e.g. the right
+        gripper finger) reaches here with nothing to connect to and the plain
+        nearest-component fallback wrongly bolts it to whatever sits closest --
+        often a SIBLING copy, not its real mount.  But the SAME part is mated on
+        the original side: reuse that.  If ``root``'s mated twins (other
+        instances of the same part, placed through REAL mates) all hang off the
+        same parent PART, attach ``root`` to the nearest already-placed instance
+        of that part -- i.e. connect the copy exactly like its mirror original.
+        Returns the host name, or None when there is no unambiguous twin."""
+        rp = by_name[root].part_path
+        if not rp:
+            return None
+        parent_parts = set()
+        for c in comps:
+            if (c.name != root and c.part_path == rp
+                    and c.name in visited and c.name not in mate_less
+                    and c.name in parent_of):
+                par = by_name.get(parent_of[c.name])
+                if par is not None and par.part_path:
+                    parent_parts.add(par.part_path)
+        if len(parent_parts) != 1:
+            return None          # no mated twin, or twins disagree -> don't guess
+        target = next(iter(parent_parts))
+        insts = [c.name for c in comps if c.part_path == target]
+        if not insts:
+            return None
+        # the host is the instance of the parent part nearest ``root`` in world
+        # space (the same-side copy).  Only commit if it is ALREADY placed: if
+        # the right-side parent has not been reached yet, grabbing the nearest
+        # PLACED instance would cross sides (a right finger onto a left base), so
+        # defer to the plain nearest-component fallback instead of guessing.
+        nearest = min(insts, key=lambda n: float(np.sum(
+            (by_name[n].world[:3, 3] - rpos) ** 2)))
+        return nearest if nearest in visited else None
+
     while True:
         bfs_within(0, [base.name, *sorted(parent_of)])
         # attach ONE component over the lowest-tier edge available --
@@ -1005,19 +1043,28 @@ def _auto_parent_map(comps, adjacency, base):
         rem = [c.name for c in comps if c.name not in visited]
         if not rem:
             break
-        # mate-less / disconnected island: attach to the NEAREST already-
-        # placed component, not blindly to the base -- an unmated connector
-        # sitting on a moving link must ride that link, or it stays welded
-        # to the base while its neighbours move away
+        # mate-less / disconnected island.  FIRST try the mirror/copy rule:
+        # a part with no mates of its own but whose twin IS mated inherits that
+        # twin's connection (so a mirrored finger lands on the gripper base, not
+        # on the sibling finger that merely sits closest).  Otherwise attach to
+        # the NEAREST already-placed component, not blindly to the base -- an
+        # unmated connector sitting on a moving link must ride that link, or it
+        # stays welded to the base while its neighbours move away.
         root = min(rem, key=dist2)
         rpos = by_name[root].world[:3, 3]
-        host = min(visited,
-                   key=lambda n: float(np.sum(
-                       (by_name[n].world[:3, 3] - rpos) ** 2)))
-        print(f"      note: '{root}' has no usable mates; attaching to "
-              f"nearest component '{host}'")
+        host = _twin_host(root, rpos)
+        if host is not None:
+            print(f"      note: '{root}' has no mates; mirroring its mated "
+                  f"twin's connection -> '{host}'")
+        else:
+            host = min(visited,
+                       key=lambda n: float(np.sum(
+                           (by_name[n].world[:3, 3] - rpos) ** 2)))
+            print(f"      note: '{root}' has no usable mates; attaching to "
+                  f"nearest component '{host}'")
         parent_of[root] = host
         visited.add(root)
+        mate_less.add(root)
 
     edge_info = {}
     for child, parent in parent_of.items():
