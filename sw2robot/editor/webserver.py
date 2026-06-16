@@ -563,6 +563,69 @@ def _remove_yaml_block(txt, mapkey):
                   txt)
 
 
+def _set_mimic_yaml(txt, child, master, multiplier, offset, clear):
+    """Add / replace / remove the ``mimic:`` block of the joints.yaml entry whose
+    ``child:`` is the component ``child``.  ``master`` is the driver joint's URDF
+    name (stored verbatim -- urdf_writer's name remap is the identity on an
+    already-emitted name).  Returns ``(new_txt, applied)``.
+
+    Line-based on purpose: it tolerates a mimic block placed anywhere inside the
+    entry and any sibling keys (lower/upper/axis...), and preserves the file's
+    reference comments -- unlike a YAML round-trip."""
+    lines = txt.split("\n")
+    starts = [i for i, ln in enumerate(lines)
+              if re.match(r"^\s*-\s*parent:", ln)]
+    cre = re.compile(r"^\s*child:\s*" + re.escape(child) + r"\s*(#.*)?$")
+    for k in range(len(starts) - 1, -1, -1):          # last->first: edits stay
+        s = starts[k]                                 # valid for earlier entries
+        col = len(lines[s]) - len(lines[s].lstrip())
+        end = starts[k + 1] if k + 1 < len(starts) else len(lines)
+        for idx in range(s + 1, end):                 # stop at a dedented key
+            ln = lines[idx]
+            if ln.strip() == "":
+                continue
+            ind = len(ln) - len(ln.lstrip())
+            if ind <= col and not ln.lstrip().startswith("-"):
+                end = idx
+                break
+        entry = lines[s:end]
+        if not any(cre.match(x) for x in entry):
+            continue
+        type_i = next((i for i, x in enumerate(entry)
+                       if re.match(r"^\s*type:", x)), None)
+        key_ind = (entry[type_i][:len(entry[type_i])
+                                 - len(entry[type_i].lstrip())]
+                   if type_i is not None else "    ")
+        # drop any existing mimic: block (mimic line + deeper-indented children)
+        cleaned, i2 = [], 0
+        while i2 < len(entry):
+            x = entry[i2]
+            if re.match(r"^\s*mimic:\s*(#.*)?$", x):
+                mind = len(x) - len(x.lstrip())
+                i2 += 1
+                while i2 < len(entry):
+                    y = entry[i2]
+                    yind = len(y) - len(y.lstrip())
+                    if y.strip() == "" or yind > mind:
+                        i2 += 1
+                    else:
+                        break
+                continue
+            cleaned.append(x)
+            i2 += 1
+        if not clear and master:
+            block = [f"{key_ind}mimic:",
+                     f"{key_ind}  joint: {master}",
+                     f"{key_ind}  multiplier: {float(multiplier):g}",
+                     f"{key_ind}  offset: {float(offset):g}"]
+            ti = next((i for i, x in enumerate(cleaned)
+                       if re.match(r"^\s*type:", x)), len(cleaned) - 1)
+            cleaned = cleaned[:ti + 1] + block + cleaned[ti + 1:]
+        lines[s:end] = cleaned
+        return "\n".join(lines), True
+    return txt, False
+
+
 def _yaml_scalar(s):
     """Render ``s`` as a yaml plain scalar, single-quoting it when it carries
     characters (spaces, ``:`` ...) that would otherwise break a plain scalar."""
@@ -1482,6 +1545,51 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 return self._send_json(
                     {"applied": [c.get("name") for c in applied],
                      "missed": [c.get("name") for c in missed]})
+            if parsed.path == "/api/set_mimic":
+                # changes: [{child, master, multiplier, offset}] to link a
+                # follower joint to a driver, or {child, clear: true} to unlink.
+                cls = type(self)
+                n = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(n) or b"{}")
+                changes = body.get("changes") or []
+                if not cls.pkg_dir:
+                    return self._send_json({"error": "no package open"}, 400)
+                name = os.path.splitext(os.path.basename(cls.urdf_rel))[0]
+                yml = os.path.join(cls.pkg_dir, name + ".joints.yaml")
+                if not os.path.exists(yml):
+                    return self._send_json(
+                        {"error": f"{name}.joints.yaml not found -- re-extract "
+                                  f"this package once"}, 400)
+                with open(yml, encoding="utf-8") as f:
+                    txt = f.read()
+                linv = _link_names_inverse(txt)   # display -> component
+                applied, missed = [], []
+                for ch in changes:
+                    child = linv.get(ch.get("child"), ch.get("child"))
+                    master = ch.get("master")
+                    clear = bool(ch.get("clear"))
+                    if not child or (not clear and not master):
+                        missed.append(ch)
+                        continue
+                    txt, ok = _set_mimic_yaml(
+                        txt, child, master,
+                        ch.get("multiplier", 1.0), ch.get("offset", 0.0), clear)
+                    (applied if ok else missed).append(ch)
+                if applied:
+                    _snapshot(cls.pkg_dir, yml, f"mimic x{len(applied)}")
+                    with open(yml, "w", encoding="utf-8") as f:
+                        f.write(txt)
+                    from sw2robot.exporter.export import build
+                    try:
+                        build(cls.pkg_dir, config_path=yml)
+                    except Exception as e:
+                        return self._send_json(
+                            {"error": f"rebuild failed: {e}"}, 500)
+                print(f"[sw2robot.web] set_mimic: {len(applied)} applied, "
+                      f"{len(missed)} not matched")
+                return self._send_json(
+                    {"applied": [c.get("child") for c in applied],
+                     "missed": [c.get("child") for c in missed]})
             if parsed.path == "/api/set_base":
                 cls = type(self)
                 n = int(self.headers.get("Content-Length", 0))
