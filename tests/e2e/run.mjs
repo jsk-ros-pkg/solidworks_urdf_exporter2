@@ -45,8 +45,18 @@ const pageErrors = [];
 page.on('pageerror', e => pageErrors.push(e.message.split('\n')[0]));
 
 // ---- 1. load --------------------------------------------------------------
-await page.goto(URL, { waitUntil: 'networkidle2', timeout: 60000 });
-await sleep(9000);
+// Don't gate on networkidle2: the live editor polls /api/collision every 2 s,
+// so the network is never "idle" for long on a slow CI runner and the
+// navigation would time out even though the page is fine.  Wait for the DOM,
+// then for the page's OWN done-loading signal (the "camera fitted" log line),
+// bounded by a generous cap -- if it never appears the check below fails
+// clearly instead of the whole suite dying on a navigation timeout.
+await page.goto(URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+await page.waitForFunction(
+  () => [...document.querySelectorAll('#log div')]
+    .some(d => d.textContent.includes('カメラを調整しました')),
+  { timeout: 60000 }).catch(() => {});
+await sleep(1500);              // let the first render settle
 const logText = await page.evaluate(() =>
   [...document.querySelectorAll('#log div')].map(d => d.textContent).join('\n'));
 check('load: camera fitted', logText.includes('カメラを調整しました'));
