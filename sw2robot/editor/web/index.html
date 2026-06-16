@@ -234,6 +234,27 @@
   #ecpanel .ec-act button { flex: 1; padding: 4px; }
   #ecpanel .ec-place { background: #2d7d46 !important; color: #fff;
                        border-color: #2d7d46 !important; }
+
+  /* ---- keystroke overlay (screencast keys) for recording demo videos ---- */
+  #keyoverlay { position: absolute; left: 14px; bottom: 14px; z-index: 9;
+             display: flex; flex-wrap: wrap-reverse; gap: 6px;
+             max-width: 70%; pointer-events: none; }
+  #keyoverlay .keycap {
+    display: inline-flex; align-items: center; gap: 5px;
+    background: rgba(20, 23, 28, .82); color: #fff;
+    border: 1px solid rgba(255, 255, 255, .25);
+    border-bottom-width: 3px; border-radius: 7px;
+    padding: 5px 11px; font: 600 15px/1 system-ui, sans-serif;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, .35);
+    animation: keycap-in .08s ease-out;
+    transition: opacity .25s ease; white-space: nowrap; }
+  #keyoverlay .keycap.mouse { background: rgba(34, 56, 92, .85); }
+  #keyoverlay .keycap.fading { opacity: 0; }
+  #keyoverlay .keycap .mult { font-size: 12px; color: #9fd0ff;
+                              font-weight: 700; }
+  @keyframes keycap-in {
+    from { transform: translateY(6px) scale(.92); opacity: 0; }
+    to   { transform: none; opacity: 1; } }
 </style>
 <script type="importmap">
 {
@@ -277,6 +298,9 @@
       <button id="posedrag" class="toggle" data-i18n-title="t.posedrag"
               title="OFF: ドラッグで視点回転 / ON: リンクをドラッグして関節を動かす">
         🖐 pose</button>
+      <button id="keycast" class="toggle" data-i18n-title="t.keycast"
+              title="デモ録画用: 押したキー/マウス操作を画面左下に表示">
+        ⌨ keys</button>
       <select id="gridcap" data-i18n-title="t.gridcap" title="grid pitch"
               style="font-size:11px;color:#334;align-self:center;
                      background:#ffffffcc;border:1px solid #99a;
@@ -348,6 +372,7 @@
       <button id="bulkclose" style="margin-left:4px">✕</button>
     </div>
     <div id="linkinfo"></div>
+    <div id="keyoverlay" aria-hidden="true"></div>
   </div>
   <div id="panel">
     <div id="langbar" style="display:flex;gap:4px;justify-content:flex-end;
@@ -850,6 +875,8 @@ skrobot / native-mesh consumers (not RViz-loadable)">⬇ glb</button></a>
     't.posedrag': { en: 'OFF: drag to orbit the view / ON: drag a link to move its joint',
                     ja: 'OFF: ドラッグで視点回転 / ON: リンクをドラッグして関節を動かす' },
     't.gridcap': { en: 'grid pitch', ja: 'グリッド間隔' },
+    't.keycast': { en: 'demo recording: show pressed keys / mouse in the bottom-left',
+                   ja: 'デモ録画用: 押したキー/マウス操作を画面左下に表示' },
     'ui.emptyDrop': { en: 'Drag & Drop a .sldasm / package folder here',
                       ja: 'ここに .sldasm / パッケージフォルダを Drag & Drop' },
     'ui.emptyPick': { en: 'or use “📄 Open file…” / “📁 Folder…” on the right',
@@ -4276,6 +4303,107 @@ window.onLangChange = () => {
 };
 document.querySelectorAll('#langbar button').forEach(b =>
   b.addEventListener('click', () => setLang(b.dataset.lang)));
+
+// ---- keystroke overlay (screencast keys) for recording demo videos --------
+// OFF by default; the ⌨ keys toolbar toggle enables it. We only *listen* to
+// events (never preventDefault), so this can't interfere with normal editing.
+(function setupKeycast() {
+  const overlay = document.getElementById('keyoverlay');  // bottom-left layer
+  const toggle  = document.getElementById('keycast');     // ⌨ keys toolbar btn
+  let on = false;
+  const LIFETIME = 1300;          // ms a keycap stays before fading out
+  const FADE = 250;               // must match CSS transition
+
+  // pretty names for non-printable keys
+  const NAMES = {
+    ' ': 'Space', 'Spacebar': 'Space', 'Escape': 'Esc', 'Enter': '⏎',
+    'Backspace': '⌫', 'Delete': 'Del', 'Tab': 'Tab ⇥',
+    'ArrowUp': '↑', 'ArrowDown': '↓', 'ArrowLeft': '←', 'ArrowRight': '→',
+    'Control': 'Ctrl', 'Meta': 'Cmd',
+  };
+  const MOUSE = { 0: 'L-Click', 1: 'M-Click', 2: 'R-Click' };
+  const isMod = k => k === 'Control' || k === 'Shift' || k === 'Alt' ||
+                     k === 'Meta';
+
+  let last = null;                // { el, label, count, timer } for ×N merge
+
+  function expire(entry) {
+    entry.el.classList.add('fading');
+    setTimeout(() => { entry.el.remove(); if (last === entry) last = null; },
+               FADE);
+  }
+
+  function show(label, kind) {
+    // merge a rapid repeat of the identical chord into a ×N counter
+    if (last && last.label === label && !last.el.classList.contains('fading')) {
+      const entry = last;
+      entry.count++;
+      entry.el.querySelector('.mult').textContent = '×' + entry.count;
+      clearTimeout(entry.timer);
+      entry.timer = setTimeout(() => expire(entry), LIFETIME);
+      return;
+    }
+    const el = document.createElement('span');
+    el.className = 'keycap' + (kind === 'mouse' ? ' mouse' : '');
+    el.append(document.createTextNode(label));
+    const m = document.createElement('span');
+    m.className = 'mult';
+    el.appendChild(m);
+    overlay.appendChild(el);
+    // cap how many keycaps live at once
+    while (overlay.children.length > 6) { overlay.firstChild.remove(); }
+    const entry = { el, label, count: 1, timer: null };
+    entry.timer = setTimeout(() => expire(entry), LIFETIME);
+    last = entry;
+  }
+
+  function chord(e, key) {
+    const mods = [];
+    if (e.ctrlKey)  mods.push('Ctrl');
+    if (e.altKey)   mods.push('Alt');
+    if (e.shiftKey) mods.push('Shift');
+    if (e.metaKey)  mods.push('Cmd');
+    let main = NAMES[key] || key;
+    if (main.length === 1) main = main.toUpperCase();
+    // don't print e.g. "Shift + Shift" when the key itself is the modifier
+    if (isMod(key) && mods.length &&
+        mods[mods.length - 1] === (NAMES[key] || key)) {
+      return mods.join(' + ');
+    }
+    return [...mods, main].join(' + ');
+  }
+
+  function onKey(e) {
+    if (!on || e.repeat) return;
+    show(chord(e, e.key), 'key');
+  }
+  function onMouse(e) {
+    if (!on) return;
+    const name = MOUSE[e.button];
+    if (!name) return;
+    const mods = [];
+    if (e.ctrlKey)  mods.push('Ctrl');
+    if (e.altKey)   mods.push('Alt');
+    if (e.shiftKey) mods.push('Shift');
+    show([...mods, name].join(' + '), 'mouse');
+  }
+  function onWheel(e) {
+    if (!on) return;
+    show(e.deltaY < 0 ? 'Scroll ↑' : 'Scroll ↓', 'mouse');
+  }
+
+  // capture phase so we see the event before any field/control consumes it
+  window.addEventListener('keydown', onKey, true);
+  window.addEventListener('mousedown', onMouse, true);
+  window.addEventListener('wheel', onWheel, { capture: true, passive: true });
+
+  toggle.addEventListener('click', () => {
+    on = toggle.classList.toggle('active');
+    overlay.style.display = on ? 'flex' : 'none';
+    if (!on) { overlay.replaceChildren(); last = null; }
+  });
+  overlay.style.display = 'none';
+})();
 
 const info = await (await fetch('/api/info')).json();
 if (info.urdf) { loadRobot(info); }
