@@ -1750,13 +1750,17 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                       f"eaters={body.get('eventEaters')}")
                 return self._send_json({"saved": out})
             if parsed.path == "/api/set_exclude":
-                # exclude a COMPONENT from the built URDF entirely (yaml
-                # `exclude:` list), or restore: {name, on} / {clear: true}
+                # exclude COMPONENT(s) from the built URDF entirely (yaml
+                # `exclude:` list), or restore.  {name} or {names: [...]} (a
+                # whole subtree, deleted in one rebuild); {clear: true} restores.
                 cls = type(self)
                 n = int(self.headers.get("Content-Length", 0))
                 body = json.loads(self.rfile.read(n) or b"{}")
-                name = body.get("name")
-                if not cls.pkg_dir or (not name and not body.get("clear")):
+                names = body.get("names")
+                if names is None and body.get("name") is not None:
+                    names = [body.get("name")]
+                names = [x for x in (names or []) if x]
+                if not cls.pkg_dir or (not names and not body.get("clear")):
                     return self._send_json({"error": "no package/name"}, 400)
                 pkg = os.path.splitext(os.path.basename(cls.urdf_rel))[0]
                 yml = os.path.join(cls.pkg_dir, pkg + ".joints.yaml")
@@ -1765,20 +1769,23 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                         {"error": "joints.yaml not found"}, 400)
                 with open(yml, encoding="utf-8") as f:
                     txt = f.read()
-                if name:                       # a renamed link -> component
-                    name = _link_names_inverse(txt).get(name, name)
+                linv = _link_names_inverse(txt)    # renamed link -> component
+                names = [linv.get(x, x) for x in names]
                 _snapshot(cls.pkg_dir, yml,
                           "restore excluded" if body.get("clear")
-                          else f"exclude {str(name)[:30]}")
+                          else (f"exclude {names[0][:30]}"
+                                + (f" +{len(names) - 1}" if len(names) > 1
+                                   else "")))
                 m = re.search(r"(?m)^exclude:\n((?:- .*\n)*)", txt)
                 block = m.group(1) if m else ""
                 if body.get("clear"):
                     block = ""
                 else:
-                    block = re.sub(r"(?m)^- " + re.escape(name)
-                                   + r"\s*$\n?", "", block)
-                    if body.get("on", True):
-                        block += f"- {name}\n"
+                    for nm in names:
+                        block = re.sub(r"(?m)^- " + re.escape(nm)
+                                       + r"\s*$\n?", "", block)
+                        if body.get("on", True):
+                            block += f"- {nm}\n"
                 new = f"exclude:\n{block}" if block else ""
                 txt = (txt[:m.start()] + new + txt[m.end():]) if m \
                     else (new + txt)
@@ -1790,7 +1797,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 except Exception as e:
                     return self._send_json(
                         {"error": f"rebuild failed: {e}"}, 500)
-                print(f"[sw2robot.web] set_exclude: {name} "
+                print(f"[sw2robot.web] set_exclude: {names} "
                       f"on={body.get('on', True)} clear={body.get('clear')}")
                 return self._send_json({"excluded": [
                     ln[2:].strip() for ln in block.splitlines()]})

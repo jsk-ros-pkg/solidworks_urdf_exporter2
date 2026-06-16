@@ -565,6 +565,8 @@ skrobot / native-mesh consumers (not RViz-loadable)">⬇ glb</button></a>
     'excl.now': { en: a => `URDF exclude list now: ${a.n} item(s) ✓ (Ctrl+Z to restore)`,
                   ja: a => `URDF 除外リスト: 現在 ${a.n} 件 ✓ (Ctrl+Z で復元可)` },
     'excl.fail': { en: a => `exclude failed: ${a.e}`, ja: a => `除外に失敗: ${a.e}` },
+    'del.deleting': { en: a => `deleting ${a.l}${a.n > 1 ? ` + ${a.n - 1} child link(s)` : ''} (Ctrl+Z to undo)`,
+                      ja: a => `${a.l}${a.n > 1 ? ` と子リンク ${a.n - 1} 個` : ''} を削除 (Ctrl+Z で戻す)` },
     // rename
     'rename.resetOk': { en: a => `reset ${a.kind} name to default: ${a.name}`,
                         ja: a => `${a.kind} 名をデフォルトに戻しました: ${a.name}` },
@@ -784,8 +786,8 @@ skrobot / native-mesh consumers (not RViz-loadable)">⬇ glb</button></a>
     'ec.snapOff': { en: 'surface snap off', ja: '吸着オフ' },
     'hov.alignFace': { en: a => `${a.link} — <span class="key">click</span> align root to this face (origin = face center)`,
                        ja: a => `${a.link} — <span class="key">click</span> この面にルートを整列（原点 = 面の中心）` },
-    'hov.selected': { en: a => `✓ ${a.link} selected — <span class="key">t</span> fixed/revolute, <span class="key">m</span> mimic, <span class="key">R</span> make root`,
-                      ja: a => `✓ ${a.link} を選択中 — <span class="key">t</span> 固定/回転、<span class="key">m</span> mimic 連動、<span class="key">R</span> ルート化` },
+    'hov.selected': { en: a => `✓ ${a.link} selected — <span class="key">t</span> fixed/revolute, <span class="key">m</span> mimic, <span class="key">R</span> make root, <span class="key">Del</span> delete subtree`,
+                      ja: a => `✓ ${a.link} を選択中 — <span class="key">t</span> 固定/回転、<span class="key">m</span> mimic 連動、<span class="key">R</span> ルート化、<span class="key">Del</span> サブツリー削除` },
     'hov.link': { en: a => `${a.link} — <span class="key">click</span> select, <span class="key">dbl-click</span> tree, <span class="key">Shift+drag</span> box-select`,
                   ja: a => `${a.link} — <span class="key">click</span> 選択、<span class="key">dbl-click</span> ツリー、<span class="key">Shift+drag</span> 範囲選択` },
     'hov.axis': { en: a => `⊕ ${a.joint} (joint axis) — <span class="key">click</span> select, <span class="key">t</span> fixed/revolute`,
@@ -2589,6 +2591,33 @@ document.getElementById('selexclude').addEventListener('click', () => {
 document.getElementById('exclchip').addEventListener('click', () =>
   setExclude({ clear: true }, t('excl.restoring')));
 
+// a link + every descendant link under it (the subtree to delete together)
+function linkSubtree(linkName) {
+  const root = viewer.robot?.links?.[linkName];
+  const out = [];
+  if (!root) { return out; }
+  (function walk(link) {
+    out.push(link.name);
+    for (const j of link.children) {
+      if (j.isURDFJoint) {
+        for (const cl of j.children) { if (cl.isURDFLink) { walk(cl); } }
+      } else if (j.isURDFLink) { walk(j); }   // defensive: directly nested link
+    }
+  })(root);
+  return out;
+}
+// Delete key: remove the selected link AND its whole subtree from the URDF
+// (children would otherwise dangle).  Excluded as one rebuild; Ctrl+Z restores.
+function deleteSelectedSubtree() {
+  if (!selectedLink || !currentInfo) { return; }
+  const links = linkSubtree(selectedLink);
+  if (!links.length) { return; }
+  const comps = [...new Set(links.map(n => compMeta[n]?.name ?? n))];
+  const l = selectedLink, n = links.length;
+  selectLink(null);
+  setExclude({ names: comps, on: true }, t('del.deleting', { l, n }));
+}
+
 function highlightJoint(name, on) {
   const m = axisMarkers.get(name);
   if (m && m.ghost) {
@@ -3741,7 +3770,10 @@ window.addEventListener('keydown', ev => {
     return;
   }
   const target = selectedLink ?? hoveredLink;
-  if ((ev.key === 't' || ev.key === 'T')) {
+  if ((ev.key === 'Delete' || ev.key === 'Backspace') && selectedLink) {
+    ev.preventDefault();                // Backspace must not navigate back
+    deleteSelectedSubtree();            // remove the link + its whole subtree
+  } else if ((ev.key === 't' || ev.key === 'T')) {
     toggleJointFixed();                 // fixed <-> revolute on selected/hovered
   } else if ((ev.key === 'm' || ev.key === 'M')) {
     enterMimicMode();                   // start mimic linking from the selection
