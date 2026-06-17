@@ -854,6 +854,8 @@ skrobot / native-mesh consumers (not RViz-loadable)">⬇ glb</button></a>
     'extract.bar': { en: 'extracting from SolidWorks …', ja: 'SolidWorks から抽出中 …' },
     'extract.failed': { en: a => `extraction FAILED: ${a.e}`, ja: a => `抽出に失敗: ${a.e}` },
     'extract.done': { en: a => `extraction finished in ${a.time} ✓`, ja: a => `抽出が ${a.time} で完了 ✓` },
+    'extract.cancelling': { en: 'cancelling extraction … (stops at the next step)', ja: '抽出をキャンセル中 … (次の処理の区切りで停止します)' },
+    'extract.cancelled': { en: 'extraction cancelled', ja: '抽出をキャンセルしました' },
     'extract.statusElapsed': { en: a => `⏳ extracting … ${a.time}`, ja: a => `⏳ 抽出中 … ${a.time}` },
     'extract.meshBar': { en: a => `mesh ${a.i}/${a.n}  ${a.name}`, ja: a => `メッシュ ${a.i}/${a.n}  ${a.name}` },
     'extract.meshSub': { en: a => `exporting meshes — ${a.time}`, ja: a => `メッシュ出力中 — ${a.time}` },
@@ -4039,6 +4041,7 @@ document.getElementById('resetview').addEventListener('click', resetView);
 // the robot's joints/links, so removing the robot drops them too; we only have
 // to undim the SHARED materials TF may have dimmed and clear the JS-side state.
 function clearViewer() {
+  if (extracting) { cancelExtraction(); return; }  // interrupt a running extract
   if (!viewer.robot) { return; }                 // already empty
   op('clearViewer', {});
   if (mimicMode) { cancelMimic(); }
@@ -4292,6 +4295,7 @@ window.addEventListener('keydown', ev => {
 
 // ---- export box ----------------------------------------------------------
 async function openServerPath(p) {
+  await ensureNoExtraction();           // interrupt a running extraction first
   log(`/api/open ${p}`);
   const resp = await fetch('/api/open?path=' + encodeURIComponent(p));
   const info = await resp.json();
@@ -4329,8 +4333,27 @@ function extractPhase(line) {
   return t('phase.extracting');
 }
 
+// extraction runs SolidWorks in a server-side thread that checks a cancel flag
+// at every progress checkpoint (per phase / per mesh), so it can be interrupted
+// part-way through a heavy file.
+let extracting = false;
+function cancelExtraction() {
+  log(t('extract.cancelling'), 'wrn');
+  return fetch('/api/extract/cancel').catch(() => {});
+}
+// stop any running extraction before starting/loading something new, and wait
+// for it to actually settle (cooperative cancel lands within ~one mesh)
+async function ensureNoExtraction() {
+  if (!extracting) { return; }
+  await cancelExtraction();
+  for (let i = 0; i < 120 && extracting; i++) {
+    await new Promise(r => setTimeout(r, 500));
+  }
+}
+
 // SolidWorks extraction: start the job, stream its progress into the log
 async function extractFlow(p) {
+  await ensureNoExtraction();           // a heavy job in flight? cancel it first
   log(t('extract.request', { p }), 'wrn');
   statusEl.textContent = t('extract.statusRunning');
   const resp = await fetch('/api/extract?path=' + encodeURIComponent(p));
@@ -4340,6 +4363,7 @@ async function extractFlow(p) {
     return;
   }
   log(t('extract.started'));
+  extracting = true;
   showLoadbar(t('extract.bar'), { indet: true });
   const t0 = performance.now();
   let seen = 0;
@@ -4353,6 +4377,14 @@ async function extractFlow(p) {
 
     if (!st.running) {
       clearInterval(poll);
+      extracting = false;
+      if (st.cancelled) {
+        hideLoadbar();
+        document.getElementById('loadbackdrop').style.display = 'none';
+        statusEl.textContent = t('extract.cancelled');
+        log(t('extract.cancelled'), 'wrn');
+        return;
+      }
       if (st.error) {
         hideLoadbar();
         document.getElementById('loadbackdrop').style.display = 'none';

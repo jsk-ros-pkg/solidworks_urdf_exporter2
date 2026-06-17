@@ -486,8 +486,14 @@ def _snapshot(pkg_dir, yml, label):
 
 
 # one extraction job at a time (SolidWorks is a singleton resource anyway)
-_job = {"running": False, "log": [], "error": None, "package": None}
+_job = {"running": False, "log": [], "error": None, "package": None,
+        "cancel": False, "cancelled": False}
 _job_lock = threading.Lock()
+
+
+class _CancelExtract(Exception):
+    """Raised from the progress callback to abort the extract cooperatively
+    when the user asked to cancel (via /api/extract/cancel)."""
 # warm SolidWorks session kept across extractions: starting SolidWorks is
 # by far the slowest stage (~1-2 min), so pay it once per server lifetime
 _sw = {"sess": None}
@@ -572,6 +578,10 @@ def _shutdown_sw():
 def _run_extract(sldasm):
     """Background thread: SolidWorks extract + build -> module package."""
     def progress(msg):
+        # cooperative cancel: the extract calls progress() between COM steps
+        # (per phase, per mesh), so raising here aborts at the next checkpoint
+        if _job.get("cancel"):
+            raise _CancelExtract()
         _job["log"].append(str(msg))
         print(f"[sw2robot.web] extract: {msg}")
 
@@ -630,6 +640,17 @@ def _run_extract(sldasm):
         _preconvert_meshes(str(state.package_dir))
         progress(f"done -> {state.package_dir} (SolidWorks kept warm for "
                  f"the next extraction)")
+    except _CancelExtract:
+        # the COM sequence was aborted mid-flight, so the warm session may hold
+        # a half-open doc -- tear it down so the next extraction starts clean
+        _job["cancelled"] = True
+        _job["log"].append("cancelled by user; resetting SolidWorks session ...")
+        print("[sw2robot.web] extract CANCELLED by user")
+        try:
+            _shutdown_sw()
+        except Exception:
+            pass
+        _job["log"].append("cancelled.")
     except Exception as e:
         from sw2robot.exporter.swcom import SolidWorksUnavailable
         _job["error"] = f"{type(e).__name__}: {e}"
@@ -1081,12 +1102,19 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                             {"error": "an extraction is already running"},
                             409)
                     _job.update(running=True, log=[], error=None,
-                                package=None)
+                                package=None, cancel=False, cancelled=False)
                 threading.Thread(target=_run_extract, args=(target,),
                                  daemon=True).start()
                 return self._send_json({"started": True})
             if path == "/api/extract/status":
                 return self._send_json(_job)
+            if path == "/api/extract/cancel":
+                # cooperative: the extract thread checks _job["cancel"] at its
+                # next progress() checkpoint and aborts (see _run_extract)
+                running = _job["running"]
+                if running:
+                    _job["cancel"] = True
+                return self._send_json({"cancelling": running})
             if path == "/api/open":
                 target = (query.get("path") or [""])[0]
                 try:
