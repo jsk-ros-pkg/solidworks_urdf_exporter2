@@ -274,18 +274,26 @@ class SolidWorks:
         try:
             self.app = win32com.client.gencache.EnsureDispatch(
                 "SldWorks.Application")
-        except Exception as e:
-            print(f"  [swcom] EnsureDispatch (early binding) failed: {e!r}")
+        except Exception:
+            # benign here: with the typelib loaded (ensure_typelibs) the dynamic
+            # object still resolves OpenDoc6 et al.  Only the frozen build, where
+            # makepy can't generate, ends up genuinely late-bound -- handled next.
             self.app = win32com.client.Dispatch("SldWorks.Application")
-        # A LATE-bound object (the EnsureDispatch fallback, common in a frozen
-        # build) cannot reach typelib-only methods like OpenDoc6.  Upgrade the
-        # live object to an early-bound wrapper now that gencache is writable.
+        # A LATE-bound object that lacks OpenDoc6 cannot reach typelib-only
+        # methods (the frozen-exe failure).  Force-generate the wrapper now that
+        # gencache is writable and upgrade the live object to early binding.
         if not hasattr(self.app, "OpenDoc6"):
+            print("  [swcom] dispatch is late-bound (no OpenDoc6); generating "
+                  "the typelib wrapper ...")
             try:
                 _prepare_gencache()
                 self.app = win32com.client.gencache.EnsureDispatch(self.app)
             except Exception as e:
                 print(f"  [swcom] could not upgrade to early binding: {e!r}")
+            if not hasattr(self.app, "OpenDoc6"):
+                print("  [swcom] WARNING: OpenDoc6 still unavailable -- makepy "
+                      "could not generate the typelib wrapper (frozen build "
+                      "with no writable gen_py?)")
         try:
             self.app.Visible = visible
         except Exception:

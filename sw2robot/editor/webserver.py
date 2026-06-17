@@ -779,13 +779,15 @@ _sw = {"sess": None}
 def _warm_sw(progress):
     sess = _sw["sess"]
     if sess is not None:
-        from sw2robot.exporter.swcom import safe_prop
         progress("checking the warm SolidWorks session (an idle session "
                  "can take a moment to respond) ...")
         t0 = time.time()
         for attempt in (1, 2, 3):    # transient RPC-busy is not death
-            alive = sess.app is not None \
-                and safe_prop(sess.app, "Visible") is not None
+            # _responds() makes a REAL call, so it catches a disconnected proxy
+            # (CO_E_OBJNOTCONNECTED) -- e.g. a session whose creating thread has
+            # ended -- which a bare Visible read can miss.  A dead one is dropped
+            # and the caller starts a fresh instance on the current thread.
+            alive = sess.app is not None and sess._responds()
             if alive:
                 progress(f"warm session is alive ✓ (responded in "
                          f"{time.time() - t0:.1f}s)")
@@ -801,35 +803,6 @@ def _warm_sw(progress):
     return None
 
 
-def _start_sw_session(progress, timeout=300):
-    """Start a fresh hidden SolidWorks, but never hang forever: if the launch
-    has not finished within ``timeout`` s -- the classic symptom of an
-    unreachable license server, where SolidWorks sits waiting on a license it
-    cannot get -- stop with a clear warning instead of blocking the job
-    indefinitely.  A timed-out launch thread is left to die on its own; the
-    next extraction starts clean (no session is cached)."""
-    from sw2robot.exporter.swcom import SolidWorks, SolidWorksUnavailable
-    box = {}
-
-    def work():
-        try:
-            box["sw"] = SolidWorks(visible=False)
-        except BaseException as e:       # carry the failure to the caller
-            box["err"] = e
-
-    th = threading.Thread(target=work, daemon=True)
-    th.start()
-    th.join(timeout)
-    if th.is_alive():
-        raise SolidWorksUnavailable(
-            f"SolidWorks did not start within {timeout}s -- the license "
-            f"server is almost certainly unreachable. Stopping. Restart the "
-            f"extraction once SolidWorks can acquire a license.")
-    if "err" in box:
-        raise box["err"]
-    return box["sw"]
-
-
 def _keepalive_loop():
     """Ping the warm session once a minute while idle, so Windows doesn't
     page it out and the next extraction starts instantly.
@@ -839,7 +812,6 @@ def _keepalive_loop():
     full relaunch on the next extraction (~20 s) and leaves the old
     process behind as a zombie.  Declare death only after 3 consecutive
     failures, and then try to shut the process down for real."""
-    from sw2robot.exporter.swcom import safe_prop
     fails = 0
     while True:
         time.sleep(60)
@@ -849,8 +821,7 @@ def _keepalive_loop():
             continue
         alive = False
         try:
-            alive = sess.app is not None \
-                and safe_prop(sess.app, "Visible") is not None
+            alive = sess.app is not None and sess._responds()
         except Exception:
             alive = False
         if alive:
@@ -927,9 +898,14 @@ def _run_extract(sldasm):
                  f"(the original is never modified)")
         sw = _warm_sw(progress)
         if sw is None:
+            from sw2robot.exporter.swcom import SolidWorks
             progress("starting SolidWorks (this can take a minute; later "
                      "extractions reuse this session) ...")
-            sw = _start_sw_session(progress)   # bounded; warns if it can't start
+            # Create the COM object in THIS thread.  SolidWorks is STA-bound:
+            # an instance built on another thread (e.g. a timeout worker) loses
+            # its apartment when that thread ends, so OpenDoc6 then fails with
+            # CO_E_OBJNOTCONNECTED ("object not connected to server").
+            sw = SolidWorks(visible=False)
             _sw["sess"] = sw
         state = core.extract_and_import(
             sldasm, out_dir=_Handler.root_dir, progress=progress, sw=sw)
