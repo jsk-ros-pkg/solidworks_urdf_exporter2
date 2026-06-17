@@ -203,8 +203,10 @@ check('fs: close hides modal', fsClosed === 'none');
 check('fs: empty prompt hidden while robot loaded', await page.evaluate(
   () => document.getElementById('emptyprompt').style.display !== 'block'));
 
-// ---- 7. OS-dialog open buttons (hidden file inputs, robot-compiler style) --
-// uploadFile / FileChooser.accept = exactly what the native dialog does.
+// ---- 7. folder upload (hidden webkitdirectory input, kept for later) -------
+// The 📄/📁 buttons were removed, but the folder-upload plumbing stays: the
+// hidden directory picker still feeds handleDrop (uploaded files -> blob URLs),
+// so clicking it programmatically loads a whole package without a server path.
 const pkgName = await page.evaluate(async () =>
   (await (await fetch('/api/info')).json()).name);
 const pkgDir = path.resolve(
@@ -217,27 +219,19 @@ if (fs.existsSync(pkgUrdf)) {
     [...document.querySelectorAll('#log div')].slice(i)
       .map(d => d.textContent).join('\n'), n);
 
-  let mark = await logLen();
-  await (await page.$('#openfileinput')).uploadFile(pkgUrdf);
-  await sleep(4000);
-  const fileLog = await logAfter(mark);
-  check('open-file: picked .urdf reaches the drop pipeline',
-        /ファイルをドロップ/.test(fileLog) && fileLog.includes('URDF を解析'),
-        fileLog.split('\n')[0]);
-
-  mark = await logLen();
+  const mark = await logLen();
   const [chooser] = await Promise.all([
     page.waitForFileChooser({ timeout: 10000 }),
-    page.click('#openfolder'),
+    page.evaluate(() => document.getElementById('openfolderinput').click()),
   ]);
   await chooser.accept([pkgDir]);     // a DIRECTORY (webkitdirectory input)
   await sleep(30000);
   const dirLog = await logAfter(mark);
-  check('open-folder: package folder loads fully',
+  check('folder-upload: package folder loads fully',
         /\d+ 個のファイルをドロップ/.test(dirLog) && dirLog.includes('カメラを調整しました'),
         (dirLog.match(/dropped \d+ files/) ?? ['?'])[0]);
 } else {
-  console.log(`SKIP  open-file/open-folder (no local ${pkgUrdf})`);
+  console.log(`SKIP  folder-upload (no local ${pkgUrdf})`);
 }
 
 // ---- 8. self-collision: NEW contacts tint the offending links red ----------
@@ -457,57 +451,63 @@ check('extract-ui: mesh export determinate bar (30/55) + seconds',
 await page.evaluate(() => { window._phase = 'done'; });
 await sleep(1500);
 
-// ---- 11. drop-a-.sldasm UX: dim backdrop + spinner + candidate picker ------
+// ---- 11. 🗄 server browser: recent files + filter + paste-a-path extract ----
 await page.evaluate(() => {
   const of = window.fetch.bind(window);
   window.fetch = async (u, opts) => {
     const url = typeof u === 'string' ? u : u?.url;
     const J = o => new Response(JSON.stringify(o),
       { headers: { 'Content-Type': 'application/json' } });
-    if (url && url.includes('/api/locate')) {
-      await new Promise(r => setTimeout(r, 700));
-      return J({ building: false, hits: [
-        { path: 'G:/a/x.SLDASM', size: 1, size_match: false },
-        { path: 'G:/b/x.SLDASM', size: 2, size_match: false }] });
-    }
+    if (url && url.includes('/api/recent'))
+      return J(['G:/proj/recent_arm.SLDASM', 'G:/proj/recent_gripper.SLDASM']);
+    if (url && url.includes('/api/list'))
+      return J([{ name: 'built_pkg', path: 'C:/out/built_pkg' }]);
+    if (url && url.includes('/api/fs'))           // server browser root
+      return J({ path: '', parent: null, dirs: [], files: [] });
     if (url && url.includes('/api/extract?')) return J({ started: true });
     if (url && url.includes('/api/extract/status'))
       return J({ running: true, error: null, log: ['starting SolidWorks ...'] });
     return of(u, opts);
   };
-  window.sw2robot.locateAndExtract('C:/drop/x.SLDASM', 12345);
 });
-await sleep(300);
-const loc = await page.evaluate(() => ({
-  backdrop: getComputedStyle(document.getElementById('loadbackdrop')).display,
-  text: document.getElementById('loadbar').querySelector('.lb-text').textContent,
-}));
-check('drop-sldasm: dim + spinner during locate',
-      loc.backdrop === 'block' && /検索中/.test(loc.text), JSON.stringify(loc));
-await sleep(700);
-const pick = await page.evaluate(() => {
-  const ov = [...document.querySelectorAll('#viewwrap > div')].find(d =>
-    d.style.zIndex === '9' && /複数見つかりました/.test(d.textContent));
-  return { shown: !!ov,
-    backdrop: getComputedStyle(document.getElementById('loadbackdrop')).display,
-    btns: ov ? ov.querySelectorAll('button').length : 0 };
+// 🗄 surfaces SolidWorks recent files (⭐) AND built packages (⭐📦) at the root
+await page.evaluate(() => document.getElementById('fsbrowse').click());
+await sleep(400);
+const recent = await page.evaluate(() => {
+  const rows = [...document.querySelectorAll('#fslist > div')];
+  return {
+    star: rows.some(d => /⭐/.test(d.textContent) && /recent_arm/i.test(d.textContent)),
+    pkg: rows.some(d => /built_pkg/.test(d.textContent)),
+  };
 });
-check('drop-sldasm: prominent candidate picker (dim stays)',
-      pick.shown && pick.btns >= 3 && pick.backdrop === 'block',
-      JSON.stringify(pick));
+check('server-browser: lists recent files (⭐) and built packages',
+      recent.star && recent.pkg, JSON.stringify(recent));
+// filter narrows the listing to matching rows
 await page.evaluate(() => {
-  [...document.querySelectorAll('#viewwrap > div')].find(d =>
-    d.style.zIndex === '9' && /複数見つかりました/.test(d.textContent))
-    .querySelector('button').click();
+  const f = document.getElementById('fsfilter');
+  f.value = 'gripper'; f.dispatchEvent(new Event('input'));
 });
-await sleep(1500);
-const af = await page.evaluate(() => ({
-  gone: ![...document.querySelectorAll('#viewwrap > div')].some(d =>
-    d.style.zIndex === '9' && /複数見つかりました/.test(d.textContent)),
+await sleep(120);
+const filt = await page.evaluate(() => {
+  const vis = [...document.querySelectorAll('#fslist > div')]
+    .filter(d => d.style.display !== 'none').map(d => d.textContent);
+  return { n: vis.length, hasGripper: vis.some(t => /gripper/i.test(t)),
+           hasArm: vis.some(t => /recent_arm/i.test(t)) };
+});
+check('server-browser: filter narrows to matching rows',
+      filt.hasGripper && !filt.hasArm, JSON.stringify(filt));
+// the path bar IS the paste-path: type a .sldasm path + Enter -> extraction
+await page.evaluate(() => {
+  const el = document.getElementById('fspath');
+  el.value = '  "C:\\\\drop\\\\x.SLDASM"  ';     // quoted + padded, like "Copy as path"
+  el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+});
+await sleep(1200);
+const paste = await page.evaluate(() => ({
   text: document.getElementById('loadbar').querySelector('.lb-text').textContent,
 }));
-check('drop-sldasm: picking a candidate starts extraction',
-      af.gone && /SolidWorks|抽出/.test(af.text), JSON.stringify(af));
+check('server-browser: pasting a .sldasm path into the bar starts extraction',
+      /SolidWorks|抽出/.test(paste.text), JSON.stringify(paste));
 
 check('suite: no page errors at end', pageErrors.length === 0,
       pageErrors.join(' | '));

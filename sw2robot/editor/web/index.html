@@ -266,7 +266,7 @@
 </script>
 </head>
 <body>
-<div id="droptip" data-i18n="ui.droptip">drop a module folder or a .sldasm here</div>
+<div id="droptip" data-i18n="ui.droptip">drop a package folder here (for a .sldasm use 🗄)</div>
 <div id="app">
   <div id="viewwrap">
     <urdf-manipulator id="viewer" up="Z" highlight-color="#ffb86b">
@@ -330,11 +330,19 @@
          flex-direction:column">
       <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
         <button id="fsup">⬆</button>
-        <span id="fspath" style="flex:1;font-size:11px;color:#8a93a3;
-              overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-              direction:rtl;text-align:left"></span>
+        <input id="fspath" data-i18n-ph="t.fspathPh"
+               placeholder="フルパスを貼り付け / 編集して Enter"
+               style="flex:1;font-size:11px;color:#cdd;background:#0e1216;
+               border:1px solid #345;border-radius:4px;padding:4px 6px;
+               min-width:0">
+        <button id="fsgo" data-i18n-title="t.fsgo" title="このパスを開く / 移動">↵</button>
         <button id="fsclose">✕</button>
       </div>
+      <input id="fsfilter" data-i18n-ph="t.fsfilterPh"
+             placeholder="このフォルダ内を絞り込み…"
+             style="font-size:11px;color:#cdd;background:#0e1216;
+             border:1px solid #345;border-radius:4px;padding:4px 6px;
+             margin-bottom:6px">
       <div id="fslist" style="overflow-y:auto;font-size:12.5px"></div>
     </div>
     <div id="loadbackdrop" style="position:absolute;inset:0;z-index:6;
@@ -401,20 +409,13 @@
         🎯 Extract the assembly open in SolidWorks</button>
       <div id="swstat" style="font-size:11px;color:#8a93a3"></div>
       <div style="display:flex;gap:4px">
-        <button id="openfile" style="flex:1" data-i18n="ui.openfile"
-                data-i18n-title="t.openfile"
-                title="OSのファイルダイアログ (.sldasm / .urdf)">
-          📄 ファイルを開く…</button>
-        <button id="openfolder" style="flex:1" data-i18n="ui.openfolder"
-                data-i18n-title="t.openfolder"
-                title="OSのフォルダダイアログ (パッケージフォルダ)">
-          📁 フォルダ…</button>
-        <button id="fsbrowse" data-i18n-title="t.fsbrowse"
-                title="サーバー側のファイルブラウザ (ダイアログで見つからない時)">
-          🗄</button>
+        <button id="fsbrowse" style="flex:1" data-i18n-title="t.fsbrowse"
+                title="サーバー側のファイルブラウザ（最近のファイル＋フルパス貼り付け）">
+          🗄 開く…</button>
       </div>
-      <input id="openfileinput" type="file" accept=".sldasm,.SLDASM,.urdf"
-             style="display:none">
+      <!-- folder-upload kept for later (no visible button): a package folder
+           can still be dropped onto the page; this hidden directory picker is
+           wired to handleDrop so a button can re-enable dialog upload anytime -->
       <input id="openfolderinput" type="file" webkitdirectory directory
              multiple style="display:none">
     </div>
@@ -857,8 +858,9 @@ skrobot / native-mesh consumers (not RViz-loadable)">⬇ glb</button></a>
     'extract.phaseRunning': { en: a => `${a.phase} …`, ja: a => `${a.phase} …` },
     // file browser
     'fs.error': { en: a => `📁 ${a.e}`, ja: a => `📁 ${a.e}` },
-    'fs.driveSelect': { en: '(select a drive)', ja: '(ドライブ選択)' },
     'fs.packageHint': { en: '(package — click to open)', ja: '(パッケージ — クリックで開く)' },
+    'fs.recentHint': { en: '(recent — click to extract)', ja: '(最近のファイル — クリックで抽出)' },
+    'fs.pkgRecentHint': { en: '(built package — click to open)', ja: '(抽出済みパッケージ — クリックで開く)' },
     'fs.empty': { en: '(empty, or no matching files)', ja: '(空、または対象ファイルなし)' },
     // drag & drop
     'drop.count': { en: a => `dropped ${a.n} files`, ja: a => `${a.n} 個のファイルをドロップ` },
@@ -868,22 +870,8 @@ skrobot / native-mesh consumers (not RViz-loadable)">⬇ glb</button></a>
     'drop.convertOk': { en: a => `3DXML conversions done ✓ (${a.n} files ready)`, ja: a => `3DXML 変換完了 ✓（${a.n} ファイル）` },
     'drop.suffix': { en: ' (dropped)', ja: '（ドロップ）' },
     'drop.fail': { en: a => `drop failed: ${a.e}`, ja: a => `ドロップに失敗: ${a.e}` },
-    // locate .sldasm
-    'locate.start': { en: a => `locating "${a.name}" (${a.size} B) on disk …`, ja: a => `「${a.name}」(${a.size} B) をディスク上で検索中 …` },
-    'locate.bar': { en: a => `searching for "${a.name}" on disk …`, ja: a => `「${a.name}」をディスク上で検索中 …` },
-    'locate.fail': { en: a => `locate failed: ${a.e}`, ja: a => `検索に失敗: ${a.e}` },
-    'locate.found': { en: a => `found on disk: ${a.path}`, ja: a => `ディスク上で発見: ${a.path}` },
-    'locate.building': { en: 'file index is still building (first run walks the CAD shares, a few minutes) — try the drop again shortly, or use 🗄',
-                         ja: 'ファイル索引を構築中です（初回は CAD 共有を走査、数分）— 少し待って再ドロップするか 🗄 を使ってください' },
-    'locate.notFound': { en: 'not found in the CAD shares or local Desktop/Downloads/Documents — open it via the 🗄 server browser instead',
-                         ja: 'CAD 共有やローカルの Desktop/Downloads/Documents に見つかりません — 🗄 サーバーブラウザから開いてください' },
-    'locate.candidates': { en: a => `${a.n} candidate file(s) — pick one`, ja: a => `${a.n} 件の候補 — 1つ選んでください` },
-    'locate.multiTitle': { en: a => `multiple matches for "${a.name}"`, ja: a => `「${a.name}」が複数見つかりました` },
-    'locate.multiHelp': { en: 'pick the file to load (≡ = same size as the one you dropped)',
-                          ja: '読み込むファイルを選んでください(≡ = ドロップしたものと同じサイズ)' },
-    'locate.sameSize': { en: 'same size', ja: '同じサイズ' },
-    'locate.diffSize': { en: 'same name, different size (older?)', ja: '同名・別サイズ(旧版?)' },
-    'locate.prepBar': { en: a => `preparing to extract "${a.name}" …`, ja: a => `「${a.name}」を抽出準備中 …` },
+    'drop.sldasmUsePath': { en: 'a dropped .sldasm has no real path — open 🗄 and pick a recent file or paste its full path',
+                            ja: 'ドロップした .sldasm は実パスが取れません — 🗄 を開いて最近のファイルを選ぶかフルパスを貼り付けてください' },
     // SolidWorks status
     'sw.unsaved': { en: '⚠️ unsaved changes — press Ctrl+S in SolidWorks first; ', ja: '⚠️ 未保存の変更 — まず SolidWorks で Ctrl+S を押してください; ' },
     'sw.open': { en: a => `open: ${a.name}`, ja: a => `開いています: ${a.name}` },
@@ -897,11 +885,11 @@ skrobot / native-mesh consumers (not RViz-loadable)">⬇ glb</button></a>
     'bug.sent': { en: '🐞 diagnostic report sent (server: _client_report.json)', ja: '🐞 診断レポートを送信しました（サーバー: _client_report.json）' },
     'bug.fail': { en: a => `🐞 report failed: ${a.e}`, ja: a => `🐞 レポート送信に失敗: ${a.e}` },
     'start.pick': { en: 'pick a package (or drag&drop)', ja: 'パッケージを選択（またはドラッグ&ドロップ）' },
-    'start.noPkg': { en: 'no package open yet — open via 📄/📁/🗄 or drop a folder/.sldasm',
-                     ja: 'まだパッケージが開かれていません — 📄/📁/🗄 で開くかフォルダ/.sldasm をドロップ' },
+    'start.noPkg': { en: 'no package open yet — drop a package folder, or open a .sldasm via 🗄 (recent files + paste a full path)',
+                     ja: 'まだパッケージが開かれていません — パッケージフォルダをドロップ、または .sldasm を 🗄（最近のファイル＋フルパス貼り付け）で開く' },
     // ---- static HTML (data-i18n / data-i18n-title) ----
     'ui.title': { en: 'sw2robot viewer', ja: 'sw2robot ビューア' },
-    'ui.droptip': { en: 'drop a module folder or a .sldasm here', ja: 'モジュールフォルダか .sldasm をここにドロップ' },
+    'ui.droptip': { en: 'drop a package folder here (for a .sldasm use 🗄)', ja: 'パッケージフォルダをここにドロップ（.sldasm は 🗄 で）' },
     't.iso': { en: 'isometric', ja: '等角投影' },
     't.axes': { en: 'joint axes', ja: '関節軸' },
     't.origin': { en: 'root origin triad', ja: 'ルート原点の座標軸' },
@@ -919,10 +907,10 @@ skrobot / native-mesh consumers (not RViz-loadable)">⬇ glb</button></a>
     't.gridcap': { en: 'grid pitch', ja: 'グリッド間隔' },
     't.keycast': { en: 'demo recording: show pressed keys / mouse in the bottom-left',
                    ja: 'デモ録画用: 押したキー/マウス操作を画面左下に表示' },
-    'ui.emptyDrop': { en: 'Drag & Drop a .sldasm / package folder here',
-                      ja: 'ここに .sldasm / パッケージフォルダを Drag & Drop' },
-    'ui.emptyPick': { en: 'or use “📄 Open file…” / “📁 Folder…” on the right',
-                      ja: 'または右の「📄 ファイルを開く…」「📁 フォルダ…」から選択' },
+    'ui.emptyDrop': { en: 'Drag & Drop a package folder here',
+                      ja: 'ここにパッケージフォルダを Drag & Drop' },
+    'ui.emptyPick': { en: 'or open via 🗄 on the right (recent files / paste a full path)',
+                      ja: 'または右の 🗄 から開く（最近のファイル / フルパス貼り付け）' },
     't.selexclude': { en: 'exclude from the URDF (adds to yaml exclude:, Ctrl+Z to undo)',
                       ja: 'URDFから除外する (yaml exclude: に追加、Ctrl+Zで戻る)' },
     'ui.selroot': { en: '⌂ make root', ja: '⌂ ルート化' },
@@ -932,12 +920,11 @@ skrobot / native-mesh consumers (not RViz-loadable)">⬇ glb</button></a>
     'ui.btContinuous': { en: 'continuous', ja: '連続回転' },
     'ui.btPrismatic': { en: 'prismatic', ja: '直動' },
     'ui.useactive': { en: '🎯 Extract the assembly open in SolidWorks', ja: '🎯 SolidWorksで開いているアセンブリを抽出' },
-    't.openfile': { en: 'OS file dialog (.sldasm / .urdf)', ja: 'OSのファイルダイアログ (.sldasm / .urdf)' },
-    'ui.openfile': { en: '📄 Open file…', ja: '📄 ファイルを開く…' },
-    't.openfolder': { en: 'OS folder dialog (package folder)', ja: 'OSのフォルダダイアログ (パッケージフォルダ)' },
-    'ui.openfolder': { en: '📁 Folder…', ja: '📁 フォルダ…' },
-    't.fsbrowse': { en: 'server-side file browser (when the dialog can’t find it)',
-                    ja: 'サーバー側のファイルブラウザ (ダイアログで見つからない時)' },
+    't.fsbrowse': { en: 'server-side file browser: recent files + paste a full path',
+                    ja: 'サーバー側ファイルブラウザ：最近のファイル＋フルパス貼り付け' },
+    't.fspathPh': { en: 'paste / edit a full path, then Enter', ja: 'フルパスを貼り付け / 編集して Enter' },
+    't.fsgo': { en: 'open / go to this path', ja: 'このパスを開く / 移動' },
+    't.fsfilterPh': { en: 'filter this folder…', ja: 'このフォルダ内を絞り込み…' },
     'ui.reset': { en: 'Reset pose (0)', ja: '姿勢リセット (0)' },
     'ui.resetview': { en: '↺ Reset view', ja: '↺ リセット' },
     't.resetview': { en: 'back to the just-loaded state: neutral pose, default camera, nothing selected, all tools closed (c)',
@@ -999,6 +986,9 @@ skrobot / native-mesh consumers (not RViz-loadable)">⬇ glb</button></a>
     });
     r.querySelectorAll('[data-i18n-title]').forEach(el => {
       el.title = t(el.dataset.i18nTitle);
+    });
+    r.querySelectorAll('[data-i18n-ph]').forEach(el => {
+      el.placeholder = t(el.dataset.i18nPh);
     });
   }
   window.applyStaticI18n = applyStaticI18n;
@@ -4342,19 +4332,24 @@ function openAny(p) {
 const fsmodal = document.getElementById('fsmodal');
 let fsCur = '';
 
+const FS_LAST_DIR_KEY = 'sw2robot.fsdir';
+
 async function fsShow(path) {
   const r = await (await fetch(
     '/api/fs?path=' + encodeURIComponent(path ?? ''))).json();
   if (r.error) { log(t('fs.error', { e: r.error }), 'err'); return; }
   fsCur = r.path;
-  document.getElementById('fspath').textContent = r.path || t('fs.driveSelect');
+  try { localStorage.setItem(FS_LAST_DIR_KEY, r.path || ''); } catch { /**/ }
+  document.getElementById('fspath').value = r.path || '';
   document.getElementById('fsup').disabled = !r.parent && !r.path;
   document.getElementById('fsup').dataset.parent = r.parent ?? '';
+  document.getElementById('fsfilter').value = '';
   const list = document.getElementById('fslist');
   list.innerHTML = '';
   const row = (icon, name, cb, hint) => {
     const d = document.createElement('div');
     d.textContent = `${icon} ${name}${hint ? '   ' + hint : ''}`;
+    d.dataset.fsname = String(name).toLowerCase();
     d.style.cssText = 'padding:3px 6px;border-radius:3px;cursor:pointer;' +
                       'white-space:nowrap;overflow:hidden;' +
                       'text-overflow:ellipsis';
@@ -4363,6 +4358,21 @@ async function fsShow(path) {
     d.addEventListener('click', cb);
     list.appendChild(d);
   };
+  if (!r.path) {           // root view: recent SolidWorks files + built packages
+    const [recent, pkgs] = await Promise.all([
+      fetch('/api/recent').then(x => x.json()).catch(() => []),
+      fetch('/api/list').then(x => x.json()).catch(() => [])]);
+    for (const p of (recent || []).slice(0, 10)) {
+      const nm = p.split(/[\\/]/).pop();
+      row('⭐', nm, () => { fsmodal.style.display = 'none'; openAny(p); },
+          t('fs.recentHint'));
+    }
+    for (const pk of (pkgs || []).slice(0, 10)) {
+      row('⭐📦', pk.name, () => { fsmodal.style.display = 'none';
+                                  openServerPath(pk.path); },
+          t('fs.pkgRecentHint'));
+    }
+  }
   for (const dir of r.dirs) {
     if (dir.package) {
       row('📦', dir.name, () => { fsmodal.style.display = 'none';
@@ -4381,25 +4391,50 @@ async function fsShow(path) {
   }
   fsmodal.style.display = 'flex';
 }
-document.getElementById('fsbrowse').addEventListener('click',
-  () => fsShow(fsCur || ''));
 
-// ---- OS-native open dialogs (hidden file inputs, robot-compiler style).
-// The browser hides real paths, so picked files go through the SAME flow
-// as drag&drop: .sldasm -> fingerprint locate, package folder -> blob URLs.
-const openFileInput = document.getElementById('openfileinput');
+// type-to-narrow the current listing (hide non-matching rows)
+function fsFilter() {
+  const q = document.getElementById('fsfilter').value.trim().toLowerCase();
+  for (const d of document.querySelectorAll('#fslist > div')) {
+    d.style.display = (!q || (d.dataset.fsname || '').includes(q)) ? '' : 'none';
+  }
+}
+
+// the path bar IS the old 📋: paste/edit a full path + Enter -> a .sldasm/.urdf
+// is opened/extracted, anything else is treated as a directory to navigate to.
+// Windows "Copy as path" wraps the path in quotes -- strip them.
+function fsGo() {
+  const p = document.getElementById('fspath').value.trim().replace(/^"+|"+$/g, '');
+  if (!p) { return; }
+  if (/\.(sldasm|urdf)$/i.test(p)) { fsmodal.style.display = 'none'; openAny(p); }
+  else { fsShow(p); }
+}
+
+document.getElementById('fsbrowse').addEventListener('click', () => {
+  let start = fsCur;
+  try { start = start || localStorage.getItem(FS_LAST_DIR_KEY) || ''; }
+  catch { /**/ }
+  fsShow(start);
+  setTimeout(() => document.getElementById('fspath').focus(), 50);
+});
+document.getElementById('fsgo').addEventListener('click', fsGo);
+document.getElementById('fspath').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); fsGo(); }
+});
+document.getElementById('fsfilter').addEventListener('input', fsFilter);
+document.getElementById('fsfilter').addEventListener('keydown', e => {
+  if (e.key !== 'Enter') { return; }     // Enter on a lone match activates it
+  const vis = [...document.querySelectorAll('#fslist > div')]
+    .filter(d => d.style.display !== 'none');
+  if (vis.length === 1) { vis[0].click(); }
+});
+
+// Folder-upload (view a package without a server path) is kept for later but
+// has no visible button: this hidden directory picker stays wired to handleDrop
+// (browsers hide real paths, so uploaded files load via blob URLs), and a
+// package folder can still be drag&dropped onto the page.  Re-adding a button
+// that calls openFolderInput.click() re-enables dialog upload.
 const openFolderInput = document.getElementById('openfolderinput');
-document.getElementById('openfile').addEventListener('click', () => {
-  openFileInput.value = ''; openFileInput.click();
-});
-document.getElementById('openfolder').addEventListener('click', () => {
-  openFolderInput.value = ''; openFolderInput.click();
-});
-openFileInput.addEventListener('change', () => {
-  const files = {};
-  [...openFileInput.files].forEach(f => { files['/' + f.name] = f; });
-  if (Object.keys(files).length) { handleDrop(files); }
-});
 openFolderInput.addEventListener('change', () => {
   const files = {};
   [...openFolderInput.files].forEach(
@@ -4450,9 +4485,11 @@ async function handleDrop(files) {
   log(t('drop.count', { n: names.length }));
   const urdfPath = names.find(n => n.toLowerCase().endsWith('.urdf'));
   if (!urdfPath) {
+    // A dropped .sldasm can't be extracted from its uploaded bytes -- SolidWorks
+    // needs the file in its folder (referenced parts resolve relative to it) and
+    // the browser hides the real path.  Point the user at the path-aware entries.
     const sld = names.find(n => n.toLowerCase().endsWith('.sldasm'));
-    if (sld) { return locateAndExtract(sld, files[sld]); }
-    log(t('drop.noUrdf'), 'err');
+    log(t(sld ? 'drop.sldasmUsePath' : 'drop.noUrdf'), sld ? 'wrn' : 'err');
     return;
   }
   const blobs = new Map();
@@ -4495,79 +4532,6 @@ function showLoadOverlay(text) {
 function hideLoadOverlay() {
   loadBackdrop.style.display = 'none';
   hideLoadbar();
-}
-
-// dropped .sldasm: fingerprint (basename+size) -> server finds the real path
-async function locateAndExtract(droppedPath, file) {
-  const name = droppedPath.split('/').pop();
-  log(t('locate.start', { name, size: file.size }));
-  showLoadOverlay(t('locate.bar', { name }));
-  let r;
-  try {
-    const resp = await fetch(`/api/locate?name=${encodeURIComponent(name)}` +
-                             `&size=${file.size}`);
-    r = await resp.json();
-    if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
-  } catch (e) {
-    hideLoadOverlay();
-    log(t('locate.fail', { e: e.message ?? e }), 'err');
-    return;
-  }
-  const hits = r.hits ?? [];
-  const exact = hits.filter(h => h.size_match);
-  // auto-proceed when there's only one sensible choice: a single exact-size
-  // match, or just a single candidate overall (no picker for one option)
-  const auto = exact.length === 1 ? exact[0]
-             : hits.length === 1 ? hits[0] : null;
-  if (auto) {
-    log(t('locate.found', { path: auto.path }), 'ok');
-    extractFlow(auto.path);                // keeps the overlay; shows progress
-    return;
-  }
-  if (hits.length === 0) {
-    hideLoadOverlay();
-    log(r.building ? t('locate.building') : t('locate.notFound'), 'wrn');
-    return;
-  }
-  // multiple candidates: a prominent centered picker (the dim stays behind it)
-  log(t('locate.candidates', { n: hits.length }), 'wrn');
-  hideLoadbar();                           // pause the spinner while we wait
-  showCandidatePicker(name, hits);
-}
-
-function showCandidatePicker(name, hits) {
-  const ov = document.createElement('div');
-  ov.style.cssText = 'position:absolute;inset:0;z-index:9;display:flex;' +
-    'align-items:center;justify-content:center';
-  const card = document.createElement('div');
-  card.style.cssText = 'background:#1c2228;border:1px solid #456;' +
-    'border-radius:8px;padding:16px 18px;max-width:82%;color:#dde;' +
-    'box-shadow:0 8px 30px #000a';
-  card.innerHTML =
-    `<div style="font-size:14px;margin-bottom:3px">${t('locate.multiTitle', { name })}</div>` +
-    `<div style="font-size:11px;color:#8a93a3;margin-bottom:10px">` +
-    `${t('locate.multiHelp')}</div>`;
-  for (const h of hits) {
-    const b = document.createElement('button');
-    b.style.cssText = 'display:block;width:100%;margin:3px 0;text-align:left;' +
-      'font-size:12px;padding:7px 9px';
-    b.textContent = (h.size_match ? '≡ ' : '≠ ') + h.path +
-                    (h.size_match ? '' : `  (${h.size} B)`);
-    b.title = h.size_match ? t('locate.sameSize') : t('locate.diffSize');
-    b.addEventListener('click', () => {
-      ov.remove();
-      showLoadbar(t('locate.prepBar', { name }), { indet: true });
-      extractFlow(h.path);
-    });
-    card.appendChild(b);
-  }
-  const cancel = document.createElement('button');
-  cancel.textContent = t('common.cancel');
-  cancel.style.cssText = 'margin-top:10px;font-size:11px';
-  cancel.addEventListener('click', () => { ov.remove(); hideLoadOverlay(); });
-  card.appendChild(cancel);
-  ov.appendChild(card);
-  loadBackdrop.parentElement.appendChild(ov);
 }
 
 let dragDepth = 0;
@@ -4665,7 +4629,6 @@ window.sw2robot = {
   dump: sw2robotDump,
   collision: () => ({ ready: colReady, links: [...collisionLinks] }),
   extractFlow: p => extractFlow(p),     // for E2E (fetch is mocked there)
-  locateAndExtract: (p, sz) => locateAndExtract(p, { size: sz }),
   boxSelect: rect => selectLinksInBox(rect ??
     { l: -1e9, t: -1e9, r: 1e9, b: 1e9 }),   // no rect => everything on screen
   boxSelected: () => [...boxSelected],
