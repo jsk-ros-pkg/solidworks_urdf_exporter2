@@ -498,6 +498,64 @@ class _CancelExtract(Exception):
 # by far the slowest stage (~1-2 min), so pay it once per server lifetime
 _sw = {"sess": None}
 
+# We prefer to ATTACH to the user's running SolidWorks (no new process). When we
+# can't (no attachable instance) we spawn a private one -- and that one can leak
+# if the server is hard-killed (atexit never runs).  Record each PID we spawn to
+# a file so the NEXT startup (and a clean shutdown) can reap exactly our own
+# orphans, never the user's interactive SolidWorks.
+_SW_PID_FILE = os.path.join(_DATA_DIR, "_sw_spawned_pids.txt")
+
+
+def _sldworks_pids():
+    """Set of PIDs of every running SLDWORKS.exe (empty on failure/non-Windows)."""
+    import subprocess
+    try:
+        out = subprocess.run(
+            ["tasklist", "/FI", "IMAGENAME eq SLDWORKS.exe", "/FO", "CSV",
+             "/NH"], capture_output=True, text=True, timeout=10).stdout
+    except Exception:
+        return set()
+    pids = set()
+    for line in out.splitlines():
+        parts = [p.strip().strip('"') for p in line.split('","')]
+        if len(parts) >= 2 and parts[0].lower().startswith("sldworks"):
+            try:
+                pids.add(int(parts[1]))
+            except ValueError:
+                pass
+    return pids
+
+
+def _record_spawned_pid(pid):
+    try:
+        with open(_SW_PID_FILE, "a", encoding="utf-8") as f:
+            f.write(f"{pid}\n")
+    except OSError as e:
+        print(f"[sw2robot.web] could not record spawned SW pid: {e!r}")
+
+
+def _reap_spawned_sw():
+    """Kill any SLDWORKS.exe THIS tool spawned in a previous/this run (matched
+    by recorded PID, and only if it is still a live SLDWORKS.exe), then clear
+    the record.  Never touches the user's interactive SolidWorks."""
+    try:
+        with open(_SW_PID_FILE, encoding="utf-8") as f:
+            recorded = {int(x) for x in f.read().split() if x.strip().isdigit()}
+    except OSError:
+        return
+    import subprocess
+    for pid in recorded & _sldworks_pids():       # PID-reuse safe: must still be SW
+        try:
+            subprocess.run(["taskkill", "/PID", str(pid), "/F", "/T"],
+                           capture_output=True, timeout=10)
+            print(f"[sw2robot.web] reaped leftover spawned SolidWorks (pid {pid})")
+        except Exception:
+            pass
+    try:
+        os.remove(_SW_PID_FILE)
+    except OSError:
+        pass
+
 
 def _warm_sw(progress):
     sess = _sw["sess"]
@@ -569,10 +627,11 @@ def _shutdown_sw():
     sess = _sw.get("sess")
     if sess is not None:
         try:
-            sess.shutdown()
+            sess.shutdown()        # attach mode leaves the user's SW alone
         except Exception:
             pass
         _sw["sess"] = None
+    _reap_spawned_sw()             # belt-and-suspenders: kill any we spawned
 
 
 def _run_extract(sldasm):
@@ -626,13 +685,26 @@ def _run_extract(sldasm):
         sw = _warm_sw(progress)
         if sw is None:
             from sw2robot.exporter.swcom import SolidWorks
-            progress("starting SolidWorks (this can take a minute; later "
-                     "extractions reuse this session) ...")
-            # Create the COM object in THIS thread.  SolidWorks is STA-bound:
-            # an instance built on another thread (e.g. a timeout worker) loses
-            # its apartment when that thread ends, so OpenDoc6 then fails with
-            # CO_E_OBJNOTCONNECTED ("object not connected to server").
-            sw = SolidWorks(visible=False)
+            # Reuse the user's ALREADY-RUNNING SolidWorks if we can attach to it
+            # (same login session): no new process to start (instant, no ~1 min
+            # cold start) and nothing to leak.  The throwaway copy is opened in
+            # that instance and closed afterwards; the user's own documents are
+            # never modified.
+            try:
+                progress("attaching to the running SolidWorks ...")
+                sw = SolidWorks(attach=True)
+                progress("attached to the running SolidWorks ✓ (reusing it)")
+            except Exception:
+                progress("no attachable SolidWorks; starting a private instance "
+                         "(this can take a minute; later extractions reuse it) ...")
+                # Create the COM object in THIS thread.  SolidWorks is STA-bound:
+                # an instance built on another thread (e.g. a timeout worker)
+                # loses its apartment when that thread ends, so OpenDoc6 then
+                # fails with CO_E_OBJNOTCONNECTED ("object not connected").
+                before = _sldworks_pids()
+                sw = SolidWorks(visible=False)
+                for pid in _sldworks_pids() - before:   # the one(s) we just spawned
+                    _record_spawned_pid(pid)
             _sw["sess"] = sw
         state = core.extract_and_import(
             sldasm, out_dir=_Handler.root_dir, progress=progress, sw=sw)
@@ -1862,7 +1934,19 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 
 def serve(package_dir=None, root_dir=None, port=8090, open_browser=True):
     import atexit
+    import signal
+    # reap any private SolidWorks instance a PREVIOUS run spawned and leaked
+    # (hard-killed before atexit could run) -- by recorded PID, never the user's
+    _reap_spawned_sw()
     atexit.register(_shutdown_sw)     # close the warm session on exit
+    # also catch Ctrl+C / termination so the spawned instance is torn down
+    # rather than orphaned (atexit does not run on a signal default-kill)
+    for _sig in (getattr(signal, "SIGINT", None), getattr(signal, "SIGTERM", None)):
+        if _sig is not None:
+            try:
+                signal.signal(_sig, lambda *_a: (_shutdown_sw(), os._exit(0)))
+            except (ValueError, OSError):
+                pass            # not in main thread / unsupported -- atexit covers it
     threading.Thread(target=_keepalive_loop, daemon=True).start()
     _Handler.root_dir = os.path.abspath(root_dir or _default_root())
     if package_dir:
