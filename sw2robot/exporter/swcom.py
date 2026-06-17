@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 import tempfile
 
 # pywin32 is Windows-only and only needed for the SolidWorks `extract` phase.
@@ -47,6 +48,36 @@ _TYPELIBS = [
 _sld_module = None
 
 
+def _prepare_gencache():
+    """Make win32com able to GENERATE makepy wrappers at runtime.
+
+    In a PyInstaller-frozen exe the default gen_py output dir is the read-only
+    bundle (_MEIPASS) and ``gencache.is_readonly`` defaults True, so
+    ``EnsureDispatch`` silently falls back to a LATE-bound object that cannot
+    reach typelib-only methods such as ``OpenDoc6`` (the "AttributeError:
+    SldWorks.Application.OpenDoc6" seen only in the frozen build).  Redirect
+    gen_py to a writable temp dir and allow generation.  Idempotent; safe on a
+    normal (non-frozen) run where it is essentially a no-op."""
+    if gencache is None:
+        return
+    try:
+        import win32com
+        if getattr(sys, "frozen", False):
+            gen = os.path.join(tempfile.gettempdir(), "sw2robot_gen_py")
+            os.makedirs(gen, exist_ok=True)
+            win32com.__gen_path__ = gen
+            win32com.__build_path__ = gen
+            try:        # repoint the package too, whatever the import order was
+                import win32com.gen_py as _gp
+                _gp.__path__ = [gen]
+            except Exception:
+                pass
+        gencache.is_readonly = False
+        gencache.GetGeneratePath()      # creates the package + __init__ if absent
+    except Exception as e:
+        print(f"  [swcom] gencache prep warning: {e!r}")
+
+
 def ensure_typelibs():
     """Load the makepy-generated SolidWorks typelibs; return the sldworks module.
 
@@ -56,6 +87,7 @@ def ensure_typelibs():
     global _sld_module
     if _sld_module is not None:
         return _sld_module
+    _prepare_gencache()
     mod = _load_modules()
     if mod is None:
         # First run on this machine: generate the wrappers from the .tlb files.
@@ -242,8 +274,18 @@ class SolidWorks:
         try:
             self.app = win32com.client.gencache.EnsureDispatch(
                 "SldWorks.Application")
-        except Exception:
+        except Exception as e:
+            print(f"  [swcom] EnsureDispatch (early binding) failed: {e!r}")
             self.app = win32com.client.Dispatch("SldWorks.Application")
+        # A LATE-bound object (the EnsureDispatch fallback, common in a frozen
+        # build) cannot reach typelib-only methods like OpenDoc6.  Upgrade the
+        # live object to an early-bound wrapper now that gencache is writable.
+        if not hasattr(self.app, "OpenDoc6"):
+            try:
+                _prepare_gencache()
+                self.app = win32com.client.gencache.EnsureDispatch(self.app)
+            except Exception as e:
+                print(f"  [swcom] could not upgrade to early binding: {e!r}")
         try:
             self.app.Visible = visible
         except Exception:
