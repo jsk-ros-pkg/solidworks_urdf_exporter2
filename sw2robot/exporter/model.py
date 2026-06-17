@@ -51,6 +51,56 @@ def safe_name(raw):
     return s
 
 
+def _sw_mass_props(mp):
+    """(mass, com3, inertia6) of a part from its SolidWorks ``IMassProperty``.
+
+    The inertia tensor is taken ABOUT THE CENTRE OF MASS, in the part's own
+    coordinate axes (the frame the mesh is exported in), in SI units (kg, m,
+    kg.m^2).  We reconstruct it from the principal moments + principal axes,
+    both of which the classic ``IMassProperty`` exposes::
+
+        I_part = R^T @ diag(Px, Py, Pz) @ R
+
+    where ``R``'s rows are the three principal-axis unit vectors expressed in
+    the part frame (SolidWorks returns them as three consecutive triples).
+    Returns ``(None, None, None)`` if the values are unavailable / degenerate
+    so the caller falls back to the mesh estimate."""
+    # Force SI output if this build's interface exposes the toggle
+    # (IMassProperty2); the classic IMassProperty is already SI, so the
+    # attribute is simply absent and this is a no-op.
+    try:
+        mp.UseSystemUnits = True
+    except Exception:
+        pass
+
+    def _arr(name, n):
+        v = safe_prop(mp, name)
+        try:
+            vals = [float(x) for x in v]
+        except (TypeError, ValueError):
+            return None
+        return vals if len(vals) == n else None
+
+    try:
+        mass = safe_prop(mp, "Mass")
+        mass = float(mass) if mass is not None else None
+    except (TypeError, ValueError):
+        mass = None
+    com = _arr("CenterOfMass", 3)
+    pm = _arr("PrincipalMomentsOfInertia", 3)
+    pax = _arr("PrincipalAxesOfInertia", 9)
+    if not (mass and mass > 0 and com and pm and pax):
+        return None, None, None
+    if not (np.all(np.isfinite(com)) and np.all(np.isfinite(pm))
+            and np.all(np.isfinite(pax))):
+        return None, None, None
+    R = np.asarray(pax, float).reshape(3, 3)     # rows = principal axes (part frame)
+    I = R.T @ np.diag(pm) @ R                      # tensor about COM, part axes
+    inertia6 = (float(I[0, 0]), float(I[0, 1]), float(I[0, 2]),
+                float(I[1, 1]), float(I[1, 2]), float(I[2, 2]))
+    return mass, [float(x) for x in com], inertia6
+
+
 @dataclass
 class Component:
     name: str
@@ -65,6 +115,14 @@ class Component:
     visual_rpy: list = field(default_factory=lambda: [0, 0, 0])
     material: str | None = None      # SolidWorks material name
     density: float | None = None     # kg/m^3 from that material
+    # SolidWorks-native mass properties (part-local frame, SI), preferred over
+    # the mesh estimate when present -- see exporter.inertia.link_inertial_from_sw
+    sw_mass: float | None = None              # kg
+    sw_com: list | None = None                # centre of mass [x,y,z] (m)
+    sw_inertia: list | None = None            # (ixx,ixy,ixz,iyy,iyz,izz) about COM
+    # set when a per-link density override (config / web editor) should drive
+    # the inertial from the mesh, overriding the SolidWorks-native values
+    density_override: bool = False
 
 
 @dataclass
@@ -200,6 +258,7 @@ def extract_components(doc, exclude=None):
         if key in matcache:
             return matcache[key]
         material = density = None
+        sw = None
         try:
             md = safe_call(ct, "GetModelDoc2")
             if md is not None:
@@ -220,12 +279,17 @@ def extract_components(doc, exclude=None):
                     d = getattr(mp, "Density", None)
                     if d and d > 1.0:           # kg/m^3
                         density = float(d)
+                    # SolidWorks-native mass/COM/inertia (exact CAD geometry +
+                    # material/override) -- preferred over the mesh estimate
+                    mass, com, inertia6 = _sw_mass_props(mp)
+                    if mass is not None:
+                        sw = {"mass": mass, "com": com, "inertia": inertia6}
                 except Exception:
                     pass
         except Exception:
             pass
-        matcache[key] = (material, density)
-        return material, density
+        matcache[key] = (material, density, sw)
+        return material, density, sw
     for c in raw:
         ct = as_iface(c, "IComponent2")
         name = safe_prop(ct, "Name2")
@@ -260,12 +324,16 @@ def extract_components(doc, exclude=None):
             ln = f"{base}_{i}"
         used.add(ln)
         material = density = None
+        sw = None
         if path and not is_asm:
-            material, density = _material_of(ct, path)
+            material, density, sw = _material_of(ct, path)
+        sw = sw or {}
         comps.append(Component(name=name, link_name=ln, part_path=path,
                                is_subassembly=is_asm, world=world,
                                fixed=fixed, dof=dof,
-                               material=material, density=density))
+                               material=material, density=density,
+                               sw_mass=sw.get("mass"), sw_com=sw.get("com"),
+                               sw_inertia=sw.get("inertia")))
     if n_skipped or n_excluded:
         print(f"      (skipped {n_skipped} suppressed/unnamed, "
               f"excluded {n_excluded} components)")
@@ -1572,7 +1640,8 @@ def _component_states(comps):
             is_subassembly=c.is_subassembly,
             world=[float(x) for x in c.world.flatten()],
             fixed=c.fixed, dof=c.dof, mesh_file=c.mesh_file,
-            material=c.material, density=c.density)
+            material=c.material, density=c.density,
+            sw_mass=c.sw_mass, sw_com=c.sw_com, sw_inertia=c.sw_inertia)
             for c in comps]
 
 
@@ -1711,7 +1780,8 @@ def from_graph(graph, exclude=None, expand=None, no_expand=None):
             name=cs.name, link_name=cs.link_name, part_path=cs.part_path,
             is_subassembly=cs.is_subassembly, world=cs.world_matrix(),
             fixed=cs.fixed, dof=cs.dof, mesh_file=cs.mesh_file,
-            material=cs.material, density=cs.density))
+            material=cs.material, density=cs.density,
+            sw_mass=cs.sw_mass, sw_com=cs.sw_com, sw_inertia=cs.sw_inertia))
     names = {c.name for c in comps}
     adjacency = {}
     for e in graph.edges:
@@ -1808,7 +1878,8 @@ def _expand_one(inst, sub, comps, adjacency, ground, deep=None, hidden=None):
             name=gname, link_name=ln, part_path=cs.part_path,
             is_subassembly=cs.is_subassembly, world=world,
             fixed=False, dof=None, mesh_file=cs.mesh_file,
-            material=cs.material, density=cs.density))
+            material=cs.material, density=cs.density,
+            sw_mass=cs.sw_mass, sw_com=cs.sw_com, sw_inertia=cs.sw_inertia))
         name_map[cs.name] = gname
         local_of[cs.name] = local
         world_of[cs.name] = world
@@ -1985,6 +2056,9 @@ def build_model(graph, robot_name=None, base_hint=None, config=None,
             c = by_ln.get(str(k)) or by_nm.get(str(k))
             if c is not None:
                 c.density = float(v)
+                # explicit density => drive mass from the mesh, not the
+                # SolidWorks-native value computed with the CAD material
+                c.density_override = True
             else:
                 print(f"      WARN: densities: '{k}' matched no link")
 

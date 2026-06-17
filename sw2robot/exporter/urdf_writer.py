@@ -33,18 +33,37 @@ def _fmt(v):
 
 
 def _inertial_xml(comp, mesh_dir, density):
-    """Compute and format a link's <inertial> from its mesh; fall back to a
-    small placeholder if the mesh is missing or has no usable volume.  Returns
-    ``(xml_lines, method)`` so the caller can report approximations."""
+    """Compute and format a link's ``<inertial>``.
+
+    Source priority:
+
+    1. SolidWorks-native mass properties (exact CAD geometry + material /
+       manual override), unless the caller passed an explicit global
+       ``density`` or the link carries a per-link density override -- both of
+       which mean "drive the mass from this density instead".
+    2. The mesh estimate (volume x density via trimesh), with the part's
+       SolidWorks material density winning over the global default.
+    3. A small placeholder if neither is usable.
+
+    Returns ``(xml_lines, method)`` so the caller can report which source /
+    approximation each link used."""
     info = None
-    if comp.mesh_file and mesh_dir:
+    # 1. SolidWorks-native values (only when no density override is in force)
+    if density is None and not getattr(comp, "density_override", False):
+        info = _inertia.link_inertial_from_sw(
+            getattr(comp, "sw_mass", None), getattr(comp, "sw_com", None),
+            getattr(comp, "sw_inertia", None),
+            comp.visual_xyz, comp.visual_rpy)
+    # 2. Mesh estimate
+    if info is None and comp.mesh_file and mesh_dir:
         # mesh_file may carry Windows backslashes (extracted on Windows); split
         # on them so os.path.join builds a valid path on any platform.
         rel = comp.mesh_file.replace("\\", "/")
         # per-link density: the part's SolidWorks material wins over the
         # global default (config `density:` still overrides everything via
         # the caller)
-        d = getattr(comp, "density", None) or density
+        d = (getattr(comp, "density", None)
+             or (density if density is not None else _inertia.DEFAULT_DENSITY))
         info = _inertia.link_inertial(
             os.path.join(mesh_dir, *rel.split("/")),
             comp.visual_xyz, comp.visual_rpy, density=d)
@@ -64,12 +83,17 @@ def _inertial_xml(comp, mesh_dir, density):
 
 def _report_inertia(methods):
     """Print a one-line summary of how each link's inertia was obtained, so any
-    approximation (non-watertight mesh) is visible rather than silent."""
+    approximation (non-watertight mesh / placeholder) is visible rather than
+    silent.  ``solidworks`` (exact CAD value) and ``mesh`` (watertight volume
+    integral) are exact; ``hull``/``bbox``/``placeholder`` are approximations."""
     if not methods:
         return
-    exact = methods.get("mesh", 0)
-    approx = {k: v for k, v in methods.items() if k != "mesh"}
-    msg = f"      inertia: {exact} from mesh"
+    _EXACT = ("solidworks", "mesh")
+    exact = {k: v for k, v in methods.items() if k in _EXACT}
+    approx = {k: v for k, v in methods.items() if k not in _EXACT}
+    msg = "      inertia: " + (", ".join(f"{v} from {k}"
+                                         for k, v in sorted(exact.items()))
+                               or "0 exact")
     if approx:
         detail = ", ".join(f"{v} {k}" for k, v in sorted(approx.items()))
         msg += f"; APPROX -> {detail}"
@@ -142,7 +166,7 @@ def _port_xml(port, rn=lambda n: n, link_name=None, joint_name=None):
     ])
 
 
-def write_urdf(model, urdf_path, ros_pkg=None, density=_inertia.DEFAULT_DENSITY,
+def write_urdf(model, urdf_path, ros_pkg=None, density=None,
                link_overrides=None, joint_overrides=None):
     """Write the URDF.  ``link_overrides`` / ``joint_overrides`` map a COMPONENT
     link name / joint name to a user-chosen display name (from the editor's

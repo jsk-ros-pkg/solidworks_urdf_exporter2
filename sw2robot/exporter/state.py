@@ -23,6 +23,13 @@ class ComponentState(BaseModel):
     mesh_file: str | None = None    # relative path, e.g. "meshes/x.3dxml"
     material: str | None = None     # SolidWorks material name (e.g. "ABS")
     density: float | None = None    # kg/m^3 from that material
+    # SolidWorks-native mass properties of the PART, in its own (part-local)
+    # frame and SI units -- the same frame the mesh is exported in.  Preferred
+    # over the mesh-derived estimate at build time (exact CAD geometry +
+    # material/override, not a tessellation).  None on older extracts.
+    sw_mass: float | None = None              # kg
+    sw_com: list[float] | None = None         # centre of mass [x,y,z] (m)
+    sw_inertia: list[float] | None = None     # (ixx,ixy,ixz,iyy,iyz,izz) about COM
 
     def world_matrix(self):
         return np.array(self.world, float).reshape(4, 4)

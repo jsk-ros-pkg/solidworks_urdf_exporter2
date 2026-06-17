@@ -100,6 +100,49 @@ def link_inertial(mesh_path, visual_xyz, visual_rpy,
     }
 
 
+def link_inertial_from_sw(mass, com_local, inertia6_local,
+                          visual_xyz, visual_rpy):
+    """Inertial in the LINK frame from SolidWorks-native mass properties.
+
+    ``mass``/``com_local``/``inertia6_local`` come straight from the part's
+    ``IMassProperty`` (see ``model._sw_mass_props``): SI units already (kg,
+    metres, kg.m^2) and expressed in the part's OWN coordinate frame -- the
+    very frame the mesh is exported in -- so the visual origin maps them into
+    the link frame exactly as the mesh path does, with NO extra scaling.
+
+    ``inertia6_local`` is ``(ixx, ixy, ixz, iyy, iyz, izz)`` of the tensor
+    about the centre of mass.  Returns the same dict shape as
+    :func:`link_inertial` (``method="solidworks"``), or ``None`` if the values
+    are missing / non-finite so the caller can fall back to the mesh."""
+    if mass is None or com_local is None or inertia6_local is None:
+        return None
+    try:
+        m = float(mass)
+        com_l = np.asarray(com_local, dtype=float)
+        ixx, ixy, ixz, iyy, iyz, izz = (float(x) for x in inertia6_local)
+    except (TypeError, ValueError):
+        return None
+    I_l = np.array([[ixx, ixy, ixz],
+                    [ixy, iyy, iyz],
+                    [ixz, iyz, izz]], dtype=float)
+    if not (np.isfinite(m) and m > 0 and com_l.shape == (3,)
+            and np.all(np.isfinite(com_l)) and np.all(np.isfinite(I_l))):
+        return None
+    # mesh-frame -> link-frame, identical transform to link_inertial: the
+    # rotation rotates the tensor about the (unchanged) com, the translation
+    # moves the com.
+    R = _rpy_matrix(visual_rpy)[:3, :3]
+    com = R @ com_l + np.asarray(visual_xyz, dtype=float)
+    I = R @ I_l @ R.T
+    return {
+        "mass": m,
+        "com": [float(c) for c in com],
+        "inertia": (float(I[0, 0]), float(I[0, 1]), float(I[0, 2]),
+                    float(I[1, 1]), float(I[1, 2]), float(I[2, 2])),
+        "method": "solidworks",
+    }
+
+
 _PROPS_CACHE = {}
 
 
