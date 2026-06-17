@@ -143,6 +143,45 @@ def link_inertial_from_sw(mass, com_local, inertia6_local,
     }
 
 
+def validate_inertia(mass, inertia6, rel_tol=1e-6):
+    """Physics sanity-check one link's inertial; return a list of problem
+    strings (empty list == OK).
+
+    A real rigid body's inertia tensor (taken about the centre of mass) must be
+    symmetric **positive definite** -- all principal moments (eigenvalues
+    ``I1 <= I2 <= I3``) strictly positive -- and those moments must satisfy the
+    **triangle inequality** ``I1 + I2 >= I3`` (the geometric constraint every
+    physical mass distribution obeys; the other two combinations follow once all
+    are positive).  Violating either makes a simulator's integrator diverge, and
+    usually signals a units / frame / transform bug upstream.
+
+    ``rel_tol`` is applied relative to the largest principal moment so ordinary
+    floating-point / tessellation noise does not trip the checks."""
+    problems = []
+    if mass is None or not np.isfinite(mass) or mass <= 0:
+        problems.append(f"mass is not positive (= {mass})")
+    try:
+        ixx, ixy, ixz, iyy, iyz, izz = (float(x) for x in inertia6)
+    except (TypeError, ValueError):
+        problems.append("inertia is not a 6-tuple (ixx,ixy,ixz,iyy,iyz,izz)")
+        return problems
+    I = np.array([[ixx, ixy, ixz], [ixy, iyy, iyz], [ixz, iyz, izz]], float)
+    if not np.all(np.isfinite(I)):
+        problems.append("inertia tensor has non-finite entries")
+        return problems
+    e = np.linalg.eigvalsh(I)                 # ascending, real (symmetric)
+    atol = rel_tol * max(abs(float(e[-1])), 1e-12)
+    if e[0] <= atol:
+        problems.append(
+            "inertia tensor is not positive definite "
+            f"(smallest principal moment {e[0]:.4g} <= 0)")
+    elif e[0] + e[1] < e[2] - atol:           # triangle inequality (binding pair)
+        problems.append(
+            "principal moments violate the triangle inequality "
+            f"(I1+I2 < I3: {e[0]:.4g} + {e[1]:.4g} < {e[2]:.4g})")
+    return problems
+
+
 _PROPS_CACHE = {}
 
 

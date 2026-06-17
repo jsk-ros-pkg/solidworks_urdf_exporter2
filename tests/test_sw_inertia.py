@@ -115,3 +115,39 @@ def test_explicit_density_overrides_solidworks(tmp_path):
     inertial = ET.parse(out).getroot().find("link/inertial")
     # placeholder mass (0.1), not the SW 3.5
     assert float(inertial.find("mass").get("value")) == 0.1
+
+
+# ---------------------------------------------------------------- validate_inertia
+def test_validate_inertia_accepts_a_real_tensor():
+    from sw2robot.exporter.inertia import validate_inertia
+    # a plausible solid block: diagonal, triangle inequality holds
+    assert validate_inertia(2.0, (3.0, 0.0, 0.0, 4.0, 0.0, 5.0)) == []
+    # off-diagonal but still SPD + valid
+    assert validate_inertia(1.0, (5.0, 0.5, 0.0, 5.0, 0.0, 6.0)) == []
+
+
+def test_validate_inertia_flags_bad_mass():
+    from sw2robot.exporter.inertia import validate_inertia
+    probs = validate_inertia(0.0, (1.0, 0.0, 0.0, 1.0, 0.0, 1.0))
+    assert any("mass" in p for p in probs)
+    assert validate_inertia(-1.0, (1.0, 0.0, 0.0, 1.0, 0.0, 1.0))
+
+
+def test_validate_inertia_flags_non_positive_definite():
+    from sw2robot.exporter.inertia import validate_inertia
+    # a negative principal moment (e.g. a sign/units bug) -> not SPD
+    probs = validate_inertia(1.0, (-1.0, 0.0, 0.0, 2.0, 0.0, 3.0))
+    assert any("positive definite" in p for p in probs)
+
+
+def test_validate_inertia_flags_triangle_violation():
+    from sw2robot.exporter.inertia import validate_inertia
+    # all positive, but I1+I2 < I3 (1 + 1 < 10) -> physically impossible
+    probs = validate_inertia(1.0, (1.0, 0.0, 0.0, 1.0, 0.0, 10.0))
+    assert any("triangle inequality" in p for p in probs)
+
+
+def test_validate_inertia_placeholder_is_valid():
+    from sw2robot.exporter.inertia import validate_inertia
+    from sw2robot.exporter.urdf_writer import _PLACEHOLDER_INERTIAL as P
+    assert validate_inertia(P["mass"], P["inertia"]) == []

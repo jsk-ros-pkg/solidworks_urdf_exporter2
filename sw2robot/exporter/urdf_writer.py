@@ -45,8 +45,9 @@ def _inertial_xml(comp, mesh_dir, density):
        SolidWorks material density winning over the global default.
     3. A small placeholder if neither is usable.
 
-    Returns ``(xml_lines, method)`` so the caller can report which source /
-    approximation each link used."""
+    Returns ``(xml_lines, method, problems)`` so the caller can report which
+    source / approximation each link used and flag any physically invalid
+    inertial (``problems`` is a list of sanity-check failures, empty if OK)."""
     info = None
     # 1. SolidWorks-native values (only when no density override is in force)
     if density is None and not getattr(comp, "density_override", False):
@@ -78,7 +79,8 @@ def _inertial_xml(comp, mesh_dir, density):
         f'iyy="{iyy:.6g}" iyz="{iyz:.6g}" izz="{izz:.6g}"/>',
         "    </inertial>",
     ]
-    return lines, info["method"]
+    problems = _inertia.validate_inertia(info["mass"], info["inertia"])
+    return lines, info["method"], problems
 
 
 def _report_inertia(methods):
@@ -100,6 +102,20 @@ def _report_inertia(methods):
     print(msg)
 
 
+def _report_inertia_problems(bad):
+    """Loudly flag links whose ``<inertial>`` fails a physics sanity check
+    (non-positive-definite tensor, triangle-inequality violation, bad mass).
+    These make simulators diverge and usually mean a units/frame/transform bug,
+    so surface them rather than emit silently."""
+    if not bad:
+        return
+    print(f"      WARN: {len(bad)} link(s) have a physically invalid inertial "
+          f"(may diverge in simulation):")
+    for link, problems in sorted(bad.items()):
+        for p in problems:
+            print(f"        - {link}: {p}")
+
+
 def _link_xml(comp, ros_pkg=None, rn=lambda n: n, mesh_dir=None, density=None):
     lines = [f'  <link name="{rn(comp.link_name)}">']
     if comp.mesh_file:
@@ -114,10 +130,10 @@ def _link_xml(comp, ros_pkg=None, rn=lambda n: n, mesh_dir=None, density=None):
             lines.append(f'        <mesh filename="{mesh_ref}"/>')
             lines.append("      </geometry>")
             lines.append(f"    </{tag}>")
-    inertial_lines, method = _inertial_xml(comp, mesh_dir, density)
+    inertial_lines, method, problems = _inertial_xml(comp, mesh_dir, density)
     lines.extend(inertial_lines)
     lines.append("  </link>")
-    return "\n".join(lines), method
+    return "\n".join(lines), method, problems
 
 
 def _joint_xml(joint, rn=lambda n: n, jn=lambda n: n):
@@ -227,12 +243,16 @@ def write_urdf(model, urdf_path, ros_pkg=None, density=None,
 
     parts = ['<?xml version="1.0"?>', f'<robot name="{model.name}">']
     methods = {}
+    bad_inertia = {}
     for comp in model.components:
-        xml, method = _link_xml(comp, ros_pkg, rn, mesh_dir=mesh_dir,
-                                density=density)
+        xml, method, problems = _link_xml(comp, ros_pkg, rn, mesh_dir=mesh_dir,
+                                          density=density)
         parts.append(xml)
         methods[method] = methods.get(method, 0) + 1
+        if problems:
+            bad_inertia[rn(comp.link_name)] = problems
     _report_inertia(methods)
+    _report_inertia_problems(bad_inertia)
     for joint in model.joints:
         parts.append(_joint_xml(joint, rn, jn))
     for i, port in enumerate(ports):
