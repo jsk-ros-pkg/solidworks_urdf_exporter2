@@ -51,6 +51,62 @@ def safe_name(raw):
     return s
 
 
+# Standard-hardware nomenclature, matched (case-insensitively) against BOTH a
+# part's containing library FOLDER and its own name.  A bolt threaded into a
+# tapped hole shows up as a concentric mate, which the joint classifier would
+# otherwise read as a hinge -- so every screw/nut/washer/pin spawns a spurious
+# revolute (and, mate-less mirror copies inherit one from a twin).  CAD does not
+# expose a clean "I am a fastener" flag here (these are an in-house purchased-
+# parts library, not SolidWorks Toolbox, and the threads are modelled geometry,
+# not cosmetic-thread features), so we key off the catalogue naming that the
+# library does carry.  EN + JP tokens; the size pattern (M3x6, FS-M3) is the
+# unambiguous fastener tell.
+# 'screw'/'pin' are bounded so they fire on the hardware noun but NOT on
+# compound part names that merely contain them -- NejiNeji's "screwlock" /
+# "ScrewRing" connectors and "Pinion" gears are structural, not fasteners.
+_FASTENER_WORD = re.compile(
+    r"(?i)(?:bolt|screw(?![a-z])|hex[\s_-]*socket|socket[\s_-]*head|washer|"
+    r"[\s_-]nut\b|clinch|self[\s_-]*clinch|rivet|dowel|(?<![a-z])pin(?![a-z])|"
+    r"[\s_-]stud\b|fastener|"
+    r"ねじ|ネジ|ビス|ボルト|ナット|ワッシャ|座金|止めねじ|皿ねじ|ピン)")
+# e.g. M3x6, M3X8, FS-M3, M4x10 -- a metric size designation, the strongest
+# tell.  chr(0xD7) = the full-width multiplication sign some catalogues use
+_FASTENER_SIZE = re.compile(
+    r"(?i)(?<![a-z0-9])(?:fs[\s_-]*)?m\d+(?:\.\d+)?\s*[x"
+    + chr(0xD7) + r"]\s*\d+")
+# a bare metric thread call-out used as a stand-alone library folder (e.g. "M3")
+_FASTENER_FOLDER_BARE = re.compile(r"(?i)^(?:fs[\s_-]*)?m\d+(?:[\s_-]\w+)*$")
+
+
+def is_fastener_part(name, part_path, extra=None, keep=None):
+    """True if ``name``/``part_path`` looks like standard fastener hardware.
+
+    ``extra`` -- additional case-insensitive substrings that also mark a
+    fastener (config ``fastener:``); ``keep`` -- substrings that VETO the match
+    (config ``not_fastener:``), so a wrongly-caught part stays a real link."""
+    hay_name = name or ""
+    # part_path is captured on Windows (backslash separators) but the build runs
+    # on any OS, so split on BOTH separators rather than os.path (which only
+    # honours the host's) -- otherwise the library folder is unreadable on Linux
+    folder = ""
+    if part_path:
+        segs = [s for s in re.split(r"[\\/]+", part_path) if s]
+        folder = segs[-2] if len(segs) >= 2 else ""
+    hay = f"{folder}/{hay_name}"
+    low = hay.lower()
+    if keep and any(k.lower() in low for k in keep):
+        return False
+    if extra and any(e.lower() in low for e in extra):
+        return True
+    if _FASTENER_WORD.search(hay) or _FASTENER_SIZE.search(hay):
+        return True
+    # a leaf part sitting directly in a folder whose whole name is a thread
+    # call-out ("Bolt/", "M3/") -- folder is the library category, very reliable
+    if folder and _FASTENER_FOLDER_BARE.match(folder):
+        return True
+    return False
+
+
 def _sw_mass_props(mp):
     """(mass, com3, inertia6) of a part from its SolidWorks ``IMassProperty``.
 
@@ -123,6 +179,9 @@ class Component:
     # set when a per-link density override (config / web editor) should drive
     # the inertial from the mesh, overriding the SolidWorks-native values
     density_override: bool = False
+    # standard hardware (screw/bolt/nut/washer/pin): weld it FIXED to whatever it
+    # fastens and never let it be a tree parent -- see is_fastener_part
+    is_fastener: bool = False
 
 
 @dataclass
@@ -804,6 +863,8 @@ def classify_edge_auto(rec):
     """(jtype, axis, note): geometric when the graph has it, else legacy."""
     if rec.get("force_fixed"):
         return "fixed", None, "config: force_fixed"
+    if rec.get("fastener"):
+        return "fixed", None, "fastener welded fixed"
     mates = rec.get("mates")
     if mates:
         try:
@@ -984,6 +1045,8 @@ def _mirror_axis_fallback(comps, edge_info, inherit_type=False):
         cR = by_name.get(child)
         if cR is None or not cR.part_path:
             continue
+        if cR.is_fastener:
+            continue          # hardware welds fixed -- no twin spin axis to copy
         sibs = [ch for ch in axis_by_child
                 if ch != child and by_name.get(ch)
                 and by_name[ch].part_path == cR.part_path]
@@ -1248,6 +1311,11 @@ def _auto_parent_map(comps, adjacency, base):
     for child, parent in parent_of.items():
         jt, ax, note = edge.get(frozenset((child, parent)),
                                 ("fixed", None, None))
+        # a fastener welds rigidly to its host -- never a hinge, even when it was
+        # attached mate-less (nearest/twin) and would otherwise default-then-
+        # inherit a movable axis from the mirror fallback below
+        if by_name[child].is_fastener or by_name[parent].is_fastener:
+            jt, ax, note = "fixed", None, "fastener welded fixed"
         lo, hi = (-0.05, 0.05) if jt == "prismatic" else (-3.141592, 3.141592)
         edge_info[(child, parent)] = {"type": jt, "axis": ax, "note": note,
                                       "lower": lo, "upper": hi}
@@ -2030,6 +2098,26 @@ def build_model(graph, robot_name=None, base_hint=None, config=None,
         graph, exclude=exclude,
         expand=config.get("expand") if config else None,
         no_expand=config.get("no_expand") if config else None)
+
+    # Standard hardware (screws/nuts/washers/pins) welds RIGIDLY to whatever it
+    # fastens: tag it so its concentric-into-tapped-hole mate is never read as a
+    # hinge.  On by default; `weld_fasteners: false` keeps the old behaviour,
+    # `fastener:`/`not_fastener:` tune the match.
+    weld = True if config is None else config.get("weld_fasteners", True)
+    if weld:
+        extra = config.get("fastener") if config else None
+        keep = config.get("not_fastener") if config else None
+        fastener_names = set()
+        for c in comps:
+            if is_fastener_part(c.name, c.part_path, extra=extra, keep=keep):
+                c.is_fastener = True
+                fastener_names.add(c.name)
+        if fastener_names:
+            for key, rec in adjacency.items():
+                if any(n in fastener_names for n in key):
+                    rec["fastener"] = True
+            print(f"      fasteners welded fixed: {len(fastener_names)} "
+                  f"parts (screws/nuts/washers/pins)")
 
     if config and config.get("force_fixed"):
         # weld these edges and REBUILD the auto tree around them (editing a

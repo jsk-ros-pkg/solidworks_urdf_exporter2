@@ -35,6 +35,10 @@ _MIN_MESH_BYTES = 2000
 _RPC_DISCONNECTED = -2147417848
 _crash_suspects = set()
 _recent_opens = []
+# meshes/<file>.glb -> source part path, for per-part meshes persisted while
+# composing a sub-assembly (so two parts that sanitize to the same name never
+# clobber each other across the several compose passes in one extract)
+_persisted = {}
 
 
 def _open_doc(app, path):
@@ -149,7 +153,8 @@ def export_meshes(app, doc, comps, meshes_dir, progress=None, by_path=None):
             # always export) into a single .glb in sub-assembly coordinates
             out = os.path.join(meshes_dir, comp.link_name + ".glb")
             print(f"  composing {comp.link_name}.glb from child parts ...")
-            ok = _compose_from_parts(app, md, path, out)
+            ok = _compose_from_parts(app, md, path, out,
+                                     meshes_dir=meshes_dir, by_path=by_path)
         if ok:
             rel = os.path.join("meshes", os.path.basename(out))
             by_path[path] = rel
@@ -197,7 +202,8 @@ def export_subgraph_meshes(app, subgraphs, meshes_dir, by_path=None):
             if not ok and p.lower().endswith(".sldasm"):
                 out = os.path.join(meshes_dir, base + ".glb")
                 print(f"  composing {base}.glb from child parts ...")
-                ok = _compose_from_parts(app, None, p, out)
+                ok = _compose_from_parts(app, None, p, out,
+                                         meshes_dir=meshes_dir, by_path=by_path)
             if ok:
                 rel = os.path.join("meshes", os.path.basename(out))
                 by_path[p] = rel
@@ -211,16 +217,24 @@ def export_subgraph_meshes(app, subgraphs, meshes_dir, by_path=None):
     return n
 
 
-def _compose_from_parts(app, md, path, out_glb):
+def _compose_from_parts(app, md, path, out_glb, meshes_dir=None, by_path=None):
     """Merge a sub-assembly's child PART meshes into one .glb (sub-assembly
     local coordinates, metres).  Used when the sub-assembly's own 3DXML
-    export is empty.  ``md`` may be None -- then ``path`` is opened."""
+    export is empty.  ``md`` may be None -- then ``path`` is opened.
+
+    When ``meshes_dir``/``by_path`` are given, each child PART is ALSO persisted
+    as its own part-local ``.glb`` and registered in ``by_path`` (keyed by its
+    file path).  A standalone cold open of these parts reliably comes up empty,
+    so this in-session walk is the only place their geometry exports -- saving
+    it here gives a build-time sub-assembly expansion real per-child visuals
+    (otherwise every expanded leaf link is mesh-less and vanishes)."""
     import tempfile
 
     import numpy as np
     import trimesh
 
     from .geometry import transform_to_matrix
+    from .model import safe_name
 
     opened = None
     if md is None:
@@ -230,6 +244,28 @@ def _compose_from_parts(app, md, path, out_glb):
             return False
     tmpd = tempfile.mkdtemp(prefix="sw2urdf_sub_")
     meshes = []
+
+    def _persist_part(cpath, m_local):
+        """Save a part-local trimesh as its own meshes/<name>.glb (once)."""
+        if meshes_dir is None or by_path is None or cpath in by_path:
+            return
+        stem = safe_name(os.path.splitext(os.path.basename(cpath))[0])
+        dst = os.path.join(meshes_dir, stem + ".glb")
+        # two different part files may sanitize to the same stem -- never clobber
+        i = 1
+        while dst in _persisted and _persisted[dst] != cpath:
+            i += 1
+            dst = os.path.join(meshes_dir, f"{stem}_{i}.glb")
+        try:
+            tmp = dst + ".part.glb"
+            m_local.export(tmp, file_type="glb")
+            if os.path.exists(tmp) and os.path.getsize(tmp) > 500:
+                os.replace(tmp, dst)
+                _persisted[dst] = cpath
+                by_path[cpath] = os.path.join("meshes", os.path.basename(dst))
+        except Exception as e:
+            print(f"    compose: could not persist part mesh "
+                  f"{os.path.basename(cpath)}: {e!r}")
 
     def walk(doc_md, T_parent):
         for c in list(safe_call(doc_md, "GetComponents", True) or []):
@@ -289,6 +325,10 @@ def _compose_from_parts(app, md, path, out_glb):
                 # the 'mm' units tag survives apply_scale; left as-is it
                 # makes unit-aware loaders (skrobot) shrink the mesh 1000x
                 m.units = "meter"
+                # persist the part-local mesh (pre-transform) for reuse as an
+                # expanded child's own visual, THEN place it for the merge
+                _persist_part(cpath, m)
+                m = m.copy()
                 m.apply_transform(T)
                 meshes.append(m)
             except Exception as e:
