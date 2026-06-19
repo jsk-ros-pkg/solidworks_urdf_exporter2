@@ -67,14 +67,29 @@ jobs:
         # it predates the FK/collision API used here) + python-fcl
         run: pip install scikit-robot python-fcl
 
+      # Put the release version right before the .exe extension so the binary
+      # is self-identifying (sw2robot-web-windows-x64-v0.1.9.exe).  On a vX.Y.Z
+      # tag that is the tag; a workflow_dispatch build (no tag) falls back to
+      # dev-<short sha> so the name is still unambiguous.
+      - name: Compose exe name
+        id: exe
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            ver="${GITHUB_REF_NAME}"
+          else
+            ver="dev-${GITHUB_SHA::7}"
+          fi
+          echo "name=sw2robot-web-windows-${{ matrix.arch }}-${ver}" >> "$GITHUB_OUTPUT"
+
       - name: Build the web editor .exe
-        run: python build_exe.py ${{ matrix.build_args }} --name sw2robot-web-windows-${{ matrix.arch }}
+        run: python build_exe.py ${{ matrix.build_args }} --name ${{ steps.exe.outputs.name }}
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: sw2robot-web-windows-${{ matrix.arch }}
-          path: dist/sw2robot-web-windows-${{ matrix.arch }}.exe
+          name: ${{ steps.exe.outputs.name }}
+          path: dist/${{ steps.exe.outputs.name }}.exe
           if-no-files-found: error
 
   release:
