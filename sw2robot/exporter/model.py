@@ -85,7 +85,13 @@ def is_fastener_part(name, part_path, extra=None, keep=None):
     fastener (config ``fastener:``); ``keep`` -- substrings that VETO the match
     (config ``not_fastener:``), so a wrongly-caught part stays a real link."""
     hay_name = name or ""
-    folder = os.path.basename(os.path.dirname(part_path)) if part_path else ""
+    # part_path is captured on Windows (backslash separators) but the build runs
+    # on any OS, so split on BOTH separators rather than os.path (which only
+    # honours the host's) -- otherwise the library folder is unreadable on Linux
+    folder = ""
+    if part_path:
+        segs = [s for s in re.split(r"[\\/]+", part_path) if s]
+        folder = segs[-2] if len(segs) >= 2 else ""
     hay = f"{folder}/{hay_name}"
     low = hay.lower()
     if keep and any(k.lower() in low for k in keep):

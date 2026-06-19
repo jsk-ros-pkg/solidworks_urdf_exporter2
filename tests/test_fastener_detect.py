@@ -56,6 +56,18 @@ def test_no_part_path_uses_name_only():
     assert is_fastener_part("some_link", None) is False
 
 
+def test_folder_read_is_os_independent():
+    # part_path is captured on Windows (backslashes) but the build runs on
+    # Linux too -- the library folder must parse regardless of host separator
+    for sep in ("\\", "/"):
+        path = sep.join(["X", "Parts", "Purchase", "clinching-nut",
+                         "FS-M3-1-3W.SLDPRT"])
+        assert is_fastener_part("FS-M3-1-3W", path) is True
+    # a bare folder category ("Pin") on either separator
+    assert is_fastener_part("Pint_fai6_L12", "X/Parts/Pin/Pint_fai6_L12.SLDPRT") \
+        is True
+
+
 def test_fastener_rec_welds_fixed():
     # a flagged edge classifies fixed regardless of its (hinge-looking) mates
     rec = {"types": ["CONCENTRIC"], "axis": None, "mates": [], "fastener": True}
