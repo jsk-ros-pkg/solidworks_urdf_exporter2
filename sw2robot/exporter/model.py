@@ -61,13 +61,19 @@ def safe_name(raw):
 # not cosmetic-thread features), so we key off the catalogue naming that the
 # library does carry.  EN + JP tokens; the size pattern (M3x6, FS-M3) is the
 # unambiguous fastener tell.
+# 'screw'/'pin' are bounded so they fire on the hardware noun but NOT on
+# compound part names that merely contain them -- NejiNeji's "screwlock" /
+# "ScrewRing" connectors and "Pinion" gears are structural, not fasteners.
 _FASTENER_WORD = re.compile(
-    r"(?i)(?:bolt|screw|cap[\s_-]*screw|set[\s_-]*screw|machine[\s_-]*screw|"
-    r"hex[\s_-]*socket|socket[\s_-]*head|washer|[\s_-]nut\b|clinch|self[\s_-]*clinch|"
-    r"rivet|dowel|(?<![a-z])pin(?![a-z])|[\s_-]stud\b|fastener|"
+    r"(?i)(?:bolt|screw(?![a-z])|hex[\s_-]*socket|socket[\s_-]*head|washer|"
+    r"[\s_-]nut\b|clinch|self[\s_-]*clinch|rivet|dowel|(?<![a-z])pin(?![a-z])|"
+    r"[\s_-]stud\b|fastener|"
     r"ねじ|ネジ|ビス|ボルト|ナット|ワッシャ|座金|止めねじ|皿ねじ|ピン)")
-# e.g. M3x6, M3X8, FS-M3, M4x10 -- a metric size designation, the strongest tell
-_FASTENER_SIZE = re.compile(r"(?i)\b(?:fs[\s_-]*)?m\d+(?:\.\d+)?\s*[x×]\s*\d+")
+# e.g. M3x6, M3X8, FS-M3, M4x10 -- a metric size designation, the strongest
+# tell.  chr(0xD7) = the full-width multiplication sign some catalogues use
+_FASTENER_SIZE = re.compile(
+    r"(?i)(?<![a-z0-9])(?:fs[\s_-]*)?m\d+(?:\.\d+)?\s*[x"
+    + chr(0xD7) + r"]\s*\d+")
 # a bare metric thread call-out used as a stand-alone library folder (e.g. "M3")
 _FASTENER_FOLDER_BARE = re.compile(r"(?i)^(?:fs[\s_-]*)?m\d+(?:[\s_-]\w+)*$")
 

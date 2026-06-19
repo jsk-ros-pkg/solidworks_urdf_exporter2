@@ -31,6 +31,9 @@ CASES = [
     ("Gear", "Pinion_gear", False),       # 'pin' must not match 'pinion'
     ("Motor", "Spindle_AT4130", False),   # 'pin' must not match 'spindle'
     ("Bearing", "NSK_MR126ZZ", False),
+    # NejiNeji connector parts merely CONTAIN 'screw' -- not fasteners
+    ("Connector", "screwlock_male_hard_jointbase_v4", False),
+    ("Connector", "ScrewRing_F", False),
 ]
 
 
