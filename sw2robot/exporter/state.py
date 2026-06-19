@@ -19,6 +19,11 @@ class ComponentState(BaseModel):
     is_subassembly: bool = False
     world: list[float]              # 16 floats, row-major 4x4 (local->world)
     fixed: bool = False
+    # screw/bolt/nut/washer/pin -- standard hardware that should weld RIGIDLY to
+    # whatever it fastens, never spin on its hole's concentric mate.  Set at
+    # build time from the part's library folder + nomenclature (see
+    # model.is_fastener_part); persisted so an extract can also pre-tag it.
+    is_fastener: bool = False
     dof: int | None = None
     mesh_file: str | None = None    # relative path, e.g. "meshes/x.3dxml"
     material: str | None = None     # SolidWorks material name (e.g. "ABS")
