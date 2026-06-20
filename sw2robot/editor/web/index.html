@@ -115,6 +115,33 @@
   .joint select.t-continuous, .jpanel select.t-continuous { color: #ffc09d; }
   .joint select.t-prismatic, .jpanel select.t-prismatic   { color: #9dc4ff; }
   .joint select.t-fixed, .jpanel select.t-fixed           { color: #888; }
+  /* "move" mode: hide the editor sections, show only the movable-joint sliders */
+  #playpanel { display: none; }
+  #panel.playmode #picker, #panel.playmode #toolrow,
+  #panel.playmode #autorow, #panel.playmode #rootbox,
+  #panel.playmode #bulk, #panel.playmode #joints,
+  #panel.playmode #exportbox, #panel.playmode #hint { display: none; }
+  #panel.playmode #playpanel { display: block; }
+  #playhead { display: flex; align-items: center; gap: 6px; margin: 4px 0 8px; }
+  #playhead .pcount { color: #8a93a3; font-size: 11px; flex: 1; }
+  .prow { padding: 5px 7px; margin-bottom: 7px; border-radius: 5px;
+          background: #1b1f25; border: 1px solid #2a2f37; }
+  .prow.hl { outline: 1px solid #ffe93d; background: #20242b; }
+  .prow .ptop { display: flex; align-items: center; gap: 6px; margin-bottom: 2px; }
+  .prow .pname { flex: 1; overflow: hidden; text-overflow: ellipsis;
+                 white-space: nowrap; font-size: 12px; color: #dde; cursor: pointer; }
+  .prow .pval { width: 52px; text-align: right; font-size: 11px;
+                font-variant-numeric: tabular-nums; color: #7fd0ff;
+                background: #15171a; border: 1px solid #3a4750; border-radius: 3px;
+                padding: 1px 3px; }
+  .prow .punit { color: #7c8a98; font-size: 10px; width: 14px; }
+  .prow .preset { font-size: 11px; padding: 0 5px; opacity: .55; }
+  .prow:hover .preset { opacity: 1; }
+  .prow .pslide { display: flex; align-items: center; gap: 5px; }
+  .prow .pslide input[type=range] { flex: 1; }
+  .prow .plim { color: #6b7480; font-size: 9px; min-width: 30px;
+                font-variant-numeric: tabular-nums; }
+  .prow .plim.hi { text-align: right; }
   /* in-viewer joint editor (shown when a joint/link is clicked) */
   .jpanel { border: 1px solid #3a4750; border-radius: 4px; padding: 5px 6px;
             margin-bottom: 6px; background: #161c22e0; }
@@ -304,6 +331,9 @@
       <button id="posedrag" class="toggle" data-i18n-title="t.posedrag"
               title="OFF: ドラッグで視点回転 / ON: リンクをドラッグして関節を動かす">
         🖐 pose</button>
+      <button id="playmode" class="toggle" data-i18n-title="t.playmode"
+              title="動かすモード: 右パネルを可動関節のスライダーだけにする（たくさんのリンクを隠してシンプルに動かせる）">
+        ▶ 動かす</button>
       <button id="keycast" class="toggle" data-i18n-title="t.keycast"
               title="デモ録画用: 押したキー/マウス操作を画面左下に表示">
         ⌨ keys</button>
@@ -421,7 +451,7 @@
           🗄 開く…</button>
       </div>
     </div>
-    <div>
+    <div id="toolrow">
       <button id="reset" data-i18n="ui.reset">Reset pose</button>
       <button id="resetview" data-i18n="ui.resetview"
               data-i18n-title="t.resetview"
@@ -440,7 +470,7 @@
               title="壊れたらこれ: 操作ログ+状態をサーバーに送る">🐞
       </button>
     </div>
-    <div>
+    <div id="autorow">
       <button id="autolimits" style="width:100%" data-i18n="ui.autolimits"
               data-i18n-title="t.autolimits"
               title="各回転関節を ±2π(±360°)の範囲で自己干渉が起きる角度まで掃引(粗スキャン+二分探索)して lower/upper を自動設定。±2π まで自由に回る関節は continuous に。Ctrl+Zで戻せます">
@@ -491,6 +521,21 @@
       <button id="exclchip" style="display:none;font-size:11px"></button>
     </div>
     <div id="joints"></div>
+    <div id="playpanel">
+      <div id="playhead">
+        <span class="pcount" id="playcount"></span>
+        <button id="playhome" data-i18n="ui.playhome"
+                data-i18n-title="t.playhome"
+                title="すべての可動関節を 0 に戻す">↺ 全部0に</button>
+      </div>
+      <div id="playhint" style="color:#6b7480;font-size:10px;margin:-2px 0 7px"
+           data-i18n="ui.playhint">
+        ヒント: 関節を選んで t で fixed/可動 を切替（スライダー上でもOK）</div>
+      <div id="playrows"></div>
+      <div id="playempty" style="display:none;color:#8a93a3;font-size:12px;
+           padding:8px 2px" data-i18n="ui.playempty">
+        動く関節がありません（すべて fixed）。</div>
+    </div>
     <div id="exportbox" style="border:1px solid #2d4a35;border-radius:4px;
          padding:6px 8px;margin:6px 0;background:#1e2620;font-size:12px">
       <div style="color:#8fd99f;font-size:11px;margin-bottom:4px">
@@ -614,6 +659,19 @@ skrobot / native-mesh consumers (not RViz-loadable)">⬇ glb</button></a>
                     ja: a => `関節軸を ${a.k} 本描画（リンクごとにサイズ調整。赤=回転 橙=連続回転 青=直動 紫=mimic）` },
     'axes.ghostSuffix': { en: a => `; ${a.g} ghost axes on fixed joints (hover to see)`,
                           ja: a => `；固定関節のゴースト軸 ${a.g} 本（ホバーで表示）` },
+    // "move" mode (movable-joints-only slider panel)
+    't.playmode': { en: 'Move mode: shrink the right panel to just the movable-joint sliders (hide the hundreds of links)',
+                    ja: '動かすモード: 右パネルを可動関節のスライダーだけにする（たくさんのリンクを隠してシンプルに動かせる）' },
+    'ui.playhome': { en: '↺ all to 0', ja: '↺ 全部0に' },
+    't.playhome': { en: 'set every movable joint back to 0', ja: 'すべての可動関節を 0 に戻す' },
+    'ui.playempty': { en: 'No movable joints (all fixed).', ja: '動く関節がありません（すべて fixed）。' },
+    'ui.playhint': { en: 'tip: select a joint and press t to toggle fixed / movable (works on a slider too)',
+                     ja: 'ヒント: 関節を選んで t で fixed/可動 を切替（スライダー上でもOK）' },
+    'play.count': { en: a => `${a.n} movable joint${a.n === 1 ? '' : 's'}`,
+                    ja: a => `可動関節 ${a.n}` },
+    'play.resetTitle': { en: 'reset this joint to 0', ja: 'この関節を 0 に戻す' },
+    'play.on': { en: 'move mode: movable joints only', ja: '動かすモード: 可動関節だけ表示' },
+    'play.off': { en: 'edit mode', ja: '編集モードに戻りました' },
     // pose / orbit
     'pose.on': { en: 'pose: drag a link to move its joint', ja: 'pose: リンクをドラッグで関節を動かす' },
     'pose.off': { en: 'orbit: drag to rotate the view (use the panel sliders for joints)',
@@ -1273,6 +1331,8 @@ viewer.loadMeshFunc = (path, manager, done) => {
 // ---- joint rows: slider (movable) + type select + bulk checkbox ---------
 const fmt = v => (Math.abs(v) < 1e-10 ? 0 : v).toFixed(2);
 const rows = new Map();        // joint name -> row record
+const playRows = new Map();    // joint name -> "move" mode slider record
+let playMode = false;          // movable-joints-only panel active
 
 // the in-viewer joint editor's live-sync hook, set while #linkinfo shows a
 // movable joint: {name, set(nativeVal)} so the sidebar slider and the overlay
@@ -1292,6 +1352,8 @@ function previewJoint(name, val) {
     if (rec.slider) { rec.slider.value = val; }
     if (rec.val) { rec.val.textContent = rec.fmtDisp ? rec.fmtDisp(val) : fmt(val); }
   }
+  const pr = playRows.get(name);
+  if (pr) { pr.slider.value = val; pr.val.value = pr.fmt(val); }
   if (jpSync && jpSync.name === name) { jpSync.set(val); }
 }
 
@@ -1627,11 +1689,128 @@ function buildJointRows(robot) {
   return movable;
 }
 
+// ---- "move" mode: a clean slider list of ONLY the movable joints ----------
+// Same kinematic order as the edit tree (base -> tip) but stripped to one
+// slider per movable, non-mimic joint -- so a 300-link assembly is reduced to
+// the ~dozen things you actually drive.
+const playRowsEl = document.getElementById('playrows');
+const playCountEl = document.getElementById('playcount');
+const playEmptyEl = document.getElementById('playempty');
+
+function addPlayRow(j, child) {
+  const um = _jointUnit(j.jointType);
+  const [lo, hi] = _jointLimits(j);
+  const fmt = v => {
+    let d = um.toDisp(v);
+    if (Math.abs(d) < Math.pow(10, -um.dec) / 2) { d = 0; }
+    return d.toFixed(um.dec);
+  };
+  const clamp = v => Math.min(hi, Math.max(lo, v));
+  const row = document.createElement('div');
+  row.className = 'prow';
+  row.innerHTML =
+    `<div class="ptop">` +
+      `<span class="pname" title="${child}">${child}</span>` +
+      `<input class="pval" type="number" step="${um.pris ? 0.5 : 1}">` +
+      `<span class="punit">${um.unit}</span>` +
+      `<button class="preset" title="${t('play.resetTitle')}">↺</button>` +
+    `</div>` +
+    `<div class="pslide">` +
+      `<span class="plim">${fmt(lo)}</span>` +
+      `<input type="range" min="${lo}" max="${hi}" step="0.005" ` +
+      `value="${Number(j.angle) || 0}">` +
+      `<span class="plim hi">${fmt(hi)}</span>` +
+    `</div>`;
+  const slider = row.querySelector('input[type=range]');
+  const valIn = row.querySelector('.pval');
+  valIn.value = fmt(Number(j.angle) || 0);
+  const drive = v => previewJoint(j.name, clamp(v));
+  slider.addEventListener('input', () => drive(parseFloat(slider.value)));
+  valIn.addEventListener('change', () => {
+    const d = parseFloat(valIn.value);
+    if (!Number.isNaN(d)) { drive(um.toNat(d)); }
+  });
+  // Shift+←/→ = coarse nudge (the native arrow keys already do a fine step)
+  slider.addEventListener('keydown', ev => {
+    if (ev.shiftKey && (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight')) {
+      ev.preventDefault();
+      drive(parseFloat(slider.value)
+        + (hi - lo) / 20 * (ev.key === 'ArrowRight' ? 1 : -1));
+    }
+  });
+  row.querySelector('.preset').addEventListener('click', () => drive(0));
+  row.querySelector('.pname').addEventListener('click', () => selectLink(child));
+  row.addEventListener('mouseenter', () => {
+    highlightJoint(j.name, true); highlightLink(child, true);
+  });
+  row.addEventListener('mouseleave', () => {
+    highlightJoint(j.name, false); highlightLink(child, false);
+  });
+  playRows.set(j.name, { joint: j, row, slider, val: valIn, child, lo, hi, fmt });
+  playRowsEl.appendChild(row);
+}
+
+function buildPlayRows(robot) {
+  playRowsEl.innerHTML = '';
+  playRows.clear();
+  if (!robot) { playCountEl.textContent = ''; return; }
+  const linkOf = (j, tag) => [...(j.urdfNode?.children ?? [])]
+    .find(el => el.tagName === tag)?.getAttribute('link') ?? '';
+  const byParent = new Map();
+  const childLinks = new Set();
+  for (const j of Object.values(robot.joints)) {
+    const p = linkOf(j, 'parent') || (j.parent?.name ?? '');
+    childLinks.add(linkOf(j, 'child'));
+    if (!byParent.has(p)) { byParent.set(p, []); }
+    byParent.get(p).push(j);
+  }
+  byParent.forEach(list => list.sort(
+    (a, b) => linkOf(a, 'child').localeCompare(linkOf(b, 'child'))));
+  const seen = new Set();
+  let n = 0;
+  const walk = j => {
+    if (seen.has(j.name)) { return; }
+    seen.add(j.name);
+    const child = linkOf(j, 'child');
+    if (j.jointType !== 'fixed' && !j.mimicJoint) { addPlayRow(j, child); n += 1; }
+    for (const k of byParent.get(child) ?? []) { walk(k); }
+  };
+  const roots = Object.keys(robot.links).filter(x => !childLinks.has(x)).sort();
+  for (const r of roots) { for (const j of byParent.get(r) ?? []) { walk(j); } }
+  playCountEl.textContent = t('play.count', { n });
+  playEmptyEl.style.display = n ? 'none' : 'block';
+}
+
+const playBtn = document.getElementById('playmode');
+const _panelEl = document.getElementById('panel');
+playBtn.addEventListener('click', () => {
+  playMode = playBtn.classList.toggle('active');
+  _panelEl.classList.toggle('playmode', playMode);
+  if (playMode) {
+    buildPlayRows(viewer.robot);
+  } else {
+    playRows.clear();                 // drop refs to the now-hidden rows
+    playRowsEl.innerHTML = '';
+  }
+  log(playMode ? t('play.on') : t('play.off'), 'ok');
+});
+document.getElementById('playhome').addEventListener('click', () => {
+  for (const [name, r] of playRows) {
+    previewJoint(name, Math.min(r.hi, Math.max(r.lo, 0)));
+  }
+});
+
 viewer.addEventListener('angle-change', e => {
   const rec = rows.get(e.detail);
   if (rec && rec.slider) {
     rec.slider.value = Number(rec.joint.angle);
     rec.val.textContent = fmt(Number(rec.joint.angle));
+  }
+  const pr = playRows.get(e.detail);
+  if (pr) {
+    const a = Number(pr.joint.angle);
+    pr.slider.value = a;
+    pr.val.value = pr.fmt(a);
   }
 });
 
@@ -2574,7 +2753,15 @@ function selectLink(linkName) {
     fillLinkInfo(linkName);
     const rec = [...rows.values()].find(r => r.child === linkName);
     rec?.row.scrollIntoView({ block: 'nearest' });
+    if (playMode) {                       // 3D click -> jump to the play slider
+      for (const r of playRows.values()) { r.row.classList.remove('hl'); }
+      const pr = [...playRows.values()].find(r => r.child === linkName);
+      if (pr) { pr.row.classList.add('hl'); pr.row.scrollIntoView({ block: 'nearest' }); }
+    }
   } else {
+    if (playMode) {
+      for (const r of playRows.values()) { r.row.classList.remove('hl'); }
+    }
     bar.style.display = 'none';
     selVis?.removeFromParent();
     selVis = null;
@@ -2747,6 +2934,11 @@ function toggleJointFixed() {
     rec = [...rows.values()].find(r => r.child === selectedLink);
   } else if (hoveredAxis) {
     rec = rows.get(hoveredAxis);
+  } else {
+    // "move" mode: target the joint whose slider/value field is focused
+    const pr = document.activeElement?.closest?.('.prow');
+    const entry = pr && [...playRows.values()].find(r => r.row === pr);
+    if (entry) { rec = [...rows.values()].find(r => r.child === entry.child); }
   }
   if (!rec) { log(t('jtype.noTarget'), 'wrn'); return; }
   const cur = rec.joint.jointType;
@@ -3786,8 +3978,15 @@ async function bulkSetType(type) {
 bulkbarEl.querySelectorAll('button[data-bt]').forEach(b =>
   b.addEventListener('click', () => bulkSetType(b.dataset.bt)));
 window.addEventListener('keydown', ev => {
-  if (/INPUT|SELECT|TEXTAREA/.test(document.activeElement?.tagName)
-      || document.activeElement?.isContentEditable) {
+  const ae = document.activeElement;
+  const inField = /INPUT|SELECT|TEXTAREA/.test(ae?.tagName)
+      || ae?.isContentEditable;
+  // a focused field swallows the command shortcuts (you're typing) -- EXCEPT a
+  // "move" mode slider/field, where 't' still toggles that joint's type (the
+  // slider never consumes the 't' key) so you can drag then press t.
+  const playTKey = (ev.key === 't' || ev.key === 'T')
+      && ae?.closest?.('#playpanel');
+  if (inField && !playTKey) {
     return;                       // typing in a field, not a command
   }
   if (ecTool) {                   // a placement session owns the shortcuts
@@ -3917,6 +4116,7 @@ gridBtn.addEventListener('click', () => {
 
 viewer.addEventListener('urdf-processed', () => {
   const n = buildJointRows(viewer.robot);
+  if (playMode) { buildPlayRows(viewer.robot); }   // keep the move panel in sync
   log(t('urdf.parsed', { n: Object.keys(viewer.robot.links).length, m: n }), 'ok');
 });
 let pendingRestore = null;   // {angles} saved across an edit-rebuild reload
