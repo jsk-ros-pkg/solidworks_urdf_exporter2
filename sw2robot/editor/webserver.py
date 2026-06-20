@@ -1932,6 +1932,22 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         pass
 
 
+def _bind_free_port(handler, port, tries=20):
+    """Bind a ThreadingTCPServer on the first free port >= ``port``.
+
+    A second editor instance (or a leftover one) would otherwise collide on the
+    default port and the launch crashes with ``WinError 10048`` (address in
+    use); walking forward to the next free port lets every instance just come
+    up. Returns ``(httpd, bound_port)``."""
+    last = None
+    for p in range(port, port + tries):
+        try:
+            return socketserver.ThreadingTCPServer(("", p), handler), p
+        except OSError as e:
+            last = e
+    raise OSError(f"no free port in {port}..{port + tries - 1}: {last}")
+
+
 def serve(package_dir=None, root_dir=None, port=8090, open_browser=True):
     import atexit
     import signal
@@ -1957,7 +1973,10 @@ def serve(package_dir=None, root_dir=None, port=8090, open_browser=True):
     else:
         print(f"[sw2robot.web] no package yet -- pick one in the browser "
               f"(root: {_Handler.root_dir})")
-    httpd = socketserver.ThreadingTCPServer(("", port), _Handler)
+    httpd, bound = _bind_free_port(_Handler, port)
+    if bound != port:
+        print(f"[sw2robot.web] port {port} busy -> using {bound}")
+    port = bound
     httpd.daemon_threads = True
     url = f"http://localhost:{port}"
     print(f"[sw2robot.web] open {url}")
