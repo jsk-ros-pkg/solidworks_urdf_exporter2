@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 
 from . import jointcfg
 from .mesh import _SAVE_OPTS, export_meshes, export_subgraph_meshes
@@ -23,6 +24,7 @@ from .model import (
     build_model,
     capture_deep_worlds,
     extract_graph,
+    extract_limit_joints,
     extract_subgraphs,
     safe_name,
     to_graph_state,
@@ -32,6 +34,16 @@ from .swcom import SolidWorks, as_iface
 from .urdf_writer import write_ros_package, write_urdf
 
 GRAPH_FILE = "graph.json"
+
+
+def _tolerant_console():
+    """Don't let a non-ASCII component name (e.g. a Turkish 'gövde') crash a
+    print on a legacy console code page (Japanese cp932, ...)."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="backslashreplace")
+        except Exception:
+            pass
 
 
 def _pkg_paths(assembly_path, out_dir, robot_name):
@@ -67,6 +79,11 @@ def _extract_into(sw, assembly_path, pkg_dir, meshes_dir, robot_name, _say):
             "SolidWorks 'Pack and Go' to gather the assembly + all references "
             "into one folder and point sw2robot at the .SLDASM inside it.")
 
+    _say("reading limit mates (sliders/hinges) ...")
+    limit_joints = extract_limit_joints(doc, comps)
+    if limit_joints:
+        _say(f"found {len(limit_joints)} limit-mate joint(s)")
+
     _say("reading sub-assembly internals ...")
     subgraphs = extract_subgraphs(doc, comps, sw=sw)
     deep_worlds, hidden = capture_deep_worlds(doc)
@@ -97,7 +114,7 @@ def _extract_into(sw, assembly_path, pkg_dir, meshes_dir, robot_name, _say):
     graph = to_graph_state(comps, adjacency, ground, robot_name,
                            assembly_path, assembly_mesh=whole_rel,
                            subassemblies=subgraphs, deep_worlds=deep_worlds,
-                           hidden=hidden)
+                           hidden=hidden, limit_joints=limit_joints)
     graph.save(os.path.join(pkg_dir, GRAPH_FILE))
     sw.close_doc(doc)
     return pkg_dir
@@ -110,6 +127,7 @@ def extract(assembly_path, out_dir=None, robot_name=None, visible=False,
     per exported mesh, so a UI can show how far along the (multi-minute) extract
     is.  Pass an existing ``SolidWorks`` session as ``sw`` to reuse it across
     many assemblies (batch); otherwise a private one is started and shut down."""
+    _tolerant_console()
     import time as _time
     t_state = {"last": _time.time()}
 
@@ -141,6 +159,7 @@ def extract(assembly_path, out_dir=None, robot_name=None, visible=False,
 # ---------------------------------------------------------------- build
 def build(pkg_dir, config_path=None, base_hint=None, exclude=None,
           ros_pkg=False, density=None, ros_version=1):
+    _tolerant_console()
     graph = GraphState.load(os.path.join(pkg_dir, GRAPH_FILE))
     robot_name = graph.robot_name
     urdf_path = os.path.join(pkg_dir, "urdf", robot_name + ".urdf")

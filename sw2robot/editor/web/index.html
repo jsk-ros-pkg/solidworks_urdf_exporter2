@@ -165,6 +165,13 @@
   .jp-snaps button.cur { background: #2d6acc; color: #fff;
                          border-color: #2d6acc; }
   .jp-lim { color: #6b7480; font-size: 10px; margin-top: 3px; }
+  .jp-limedit input.jp-num { width: 52px; color: #cdd6e0; }
+  .jp-limedit .jp-dash { color: #8a93a3; }
+  .jp-lim-apply { font-size: 10px; padding: 1px 8px; border-radius: 3px;
+    background: #25303c; color: #cfe3ff; border: 1px solid #38516b;
+    cursor: pointer; }
+  .jp-lim-apply:hover { background: #2d4a55; }
+  .jp-lim-apply:disabled { opacity: .5; cursor: default; }
   .jp-name { flex: 1; min-width: 0; color: #cfe3ff; word-break: break-all; }
   /* rename (double-click a name in the tree/panel, or the ≣ 改名 list) */
   .renamable { cursor: text; }
@@ -689,6 +696,19 @@ skrobot / native-mesh consumers (not RViz-loadable)">⬇ glb</button></a>
     'jp.lblType': { en: 'type', ja: '種類' },
     'jp.limit': { en: a => `limit ${a.lo} … ${a.hi} ${a.unit}${a.rad}`,
                   ja: a => `可動域 ${a.lo} … ${a.hi} ${a.unit}${a.rad}` },
+    'jp.range': { en: 'range', ja: '可動域' },
+    'jp.limApply': { en: 'set', ja: '設定' },
+    'jp.contLimit': { en: 'continuous — spins freely (no limits)',
+                      ja: 'continuous — 無制限に回転（範囲なし）' },
+    'jp.limBad': { en: 'enter a valid range (lower < upper)',
+                   ja: '正しい範囲を入力してください（lower < upper）' },
+    'limits.applying': { en: 'setting joint limits — rebuilding …',
+                         ja: '可動域を設定して再ビルド中 …' },
+    'limits.done': { en: 'joint limits applied', ja: '可動域を反映しました' },
+    'limits.noneMatched': { en: a => `no joint matched '${a.child}'`,
+                            ja: a => `'${a.child}' に一致する関節がありません` },
+    'limits.fail': { en: a => `set limits failed: ${a.e}`,
+                     ja: a => `可動域の設定に失敗: ${a.e}` },
     'jp.mimic': { en: a => `driven by <b>${a.mn}</b> (mimic)`, ja: a => `<b>${a.mn}</b> に追従 (mimic)` },
     'jp.mimicMult': { en: 'multiplier', ja: '倍率' },
     'jp.mimicOff': { en: 'offset', ja: 'オフセット' },
@@ -2492,6 +2512,22 @@ function jointPanelHtml(j, parentLink, childLink) {
     .join('');
   let body = '';
   if (movable && !mimic) {
+    // continuous has no endpoints; revolute/prismatic get editable lo/hi that
+    // POST to /api/set_limits (the same path the auto-limit sweep writes) so a
+    // joint WITHOUT a SolidWorks limit mate -- e.g. the Z gantry -- can still
+    // be given its travel range straight from the browser.
+    const limRow = (j.jointType === 'continuous')
+      ? `<div class="jp-lim">${t('jp.contLimit')}</div>`
+      : `<div class="jp-row jp-limedit">` +
+          `<span class="jp-lbl">${t('jp.range')}</span>` +
+          `<input type="number" class="jp-num jp-lo" step="${um.step}" ` +
+            `value="${dLo.toFixed(um.dec)}">` +
+          `<span class="jp-dash">…</span>` +
+          `<input type="number" class="jp-num jp-hi" step="${um.step}" ` +
+            `value="${dHi.toFixed(um.dec)}">` +
+          `<span class="jp-unit">${um.unit}</span>` +
+          `<button class="jp-lim-apply">${t('jp.limApply')}</button>` +
+        `</div>`;
     body =
       `<div class="jp-row">` +
         `<input type="range" class="jp-slider" min="${dLo}" max="${dHi}" ` +
@@ -2502,10 +2538,7 @@ function jointPanelHtml(j, parentLink, childLink) {
       `</div>` +
       `<div class="jp-snaps">` +
         snaps.map(s => `<button data-v="${s}">${s}${um.unit}</button>`).join('') +
-      `</div>` +
-      `<div class="jp-lim">${t('jp.limit', {
-        lo: dLo.toFixed(um.dec), hi: dHi.toFixed(um.dec), unit: um.unit,
-        rad: ang ? ` &nbsp;(${lo.toFixed(2)} … ${hi.toFixed(2)} rad)` : '' })}</div>`;
+      `</div>` + limRow;
   } else if (mimic) {
     // read the live coupling from the URDF <mimic> element (the loader exposes
     // only the master link, not multiplier/offset)
@@ -2614,6 +2647,23 @@ function wireJointPanel(el, j) {
   markCur(parseFloat(slider.value));
   // external moves (the sidebar slider) refresh this panel without re-firing
   jpSync = { name: j.name, set: nat => show(clamp(um.toDisp(nat))) };
+
+  // editable travel range (revolute/prismatic): write lower/upper -> rebuild
+  const limApply = panel.querySelector('.jp-lim-apply');
+  if (limApply) {
+    const loIn = panel.querySelector('.jp-lo');
+    const hiIn = panel.querySelector('.jp-hi');
+    limApply.addEventListener('click', () => {
+      const dlo = parseFloat(loIn.value), dhi = parseFloat(hiIn.value);
+      if (isNaN(dlo) || isNaN(dhi) || !(dhi > dlo)) {
+        log(t('jp.limBad'), 'err');
+        return;
+      }
+      limApply.disabled = true;
+      reselectAfterLoad = childLink;     // keep this panel open after rebuild
+      applyJointLimits(childLink, um.toNat(dlo), um.toNat(dhi));
+    });
+  }
 }
 
 function fillLinkInfo(name) {
@@ -2921,6 +2971,38 @@ async function applyTypeChanges(changes) {
     log(t('types.applyFail', { e: e.message ?? e }), 'err');
     reselectAfterLoad = null;
     return false;
+  }
+}
+
+// write one joint's travel range to joints.yaml (lower/upper, in NATIVE units:
+// rad for revolute, m for prismatic) and rebuild -- shares /api/set_limits with
+// the auto-limit sweep, so a joint with no SolidWorks limit mate is editable too
+async function applyJointLimits(child, lowerNat, upperNat) {
+  if (!currentInfo) {
+    reselectAfterLoad = null;
+    return;
+  }
+  log(t('limits.applying'));
+  statusEl.textContent = t('status.rebuilding');
+  try {
+    const resp = await fetch('/api/set_limits', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ limits: [{ child, lower: lowerNat,
+                                        upper: upperNat, continuous: false }] }) });
+    const r = await resp.json();
+    if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
+    if (!r.applied?.length) {
+      log(t('limits.noneMatched', { child }), 'err');
+      reselectAfterLoad = null;
+      return;
+    }
+    log(t('limits.done'), 'ok');
+    loadRobot(currentInfo, { keepPose: true });
+    refreshHistory();
+  } catch (e) {
+    log(t('limits.fail', { e: e.message ?? e }), 'err');
+    reselectAfterLoad = null;
   }
 }
 

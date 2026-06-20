@@ -69,6 +69,22 @@ class MateEdge(BaseModel):
     mates: list[MateGeo] | None = None
 
 
+class LimitJoint(BaseModel):
+    """A SolidWorks LimitDistance/LimitAngle mate = a real slider/hinge.
+
+    These carry the assembly's actual DOFs (the geometric classifier only sees a
+    plain DISTANCE/ANGLE constraint and over-fixes them), so the build uses them
+    to override the joint type/axis/limits on the ``a``--``b`` edge.  ``lower``/
+    ``upper`` are travel relative to the assembled pose (m or rad)."""
+    a: str                          # top-level component Name2
+    b: str
+    type: str                       # "prismatic" | "revolute"
+    axis_point: list[float]
+    axis_dir: list[float]
+    lower: float
+    upper: float
+
+
 class SubGraph(BaseModel):
     """Internal structure of ONE sub-assembly part file, in ITS OWN frame.
 
@@ -98,6 +114,9 @@ class GraphState(BaseModel):
     # full nested Name2 of components that are HIDDEN in the assembly --
     # SolidWorks renders (and exports) without them, so the build drops them
     hidden: list[str] = []
+    # LimitDistance/LimitAngle mates = the assembly's real sliders/hinges; the
+    # build promotes these edges to prismatic/revolute (empty on older extracts)
+    limit_joints: list[LimitJoint] = []
 
     def save(self, path):
         with open(path, "w", encoding="utf-8") as f:

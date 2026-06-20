@@ -30,7 +30,14 @@ from .geometry import (
     relative_matrix,
     transform_to_matrix,
 )
-from .state import ComponentState, GraphState, MateEdge, MateGeo, SubGraph
+from .state import (
+    ComponentState,
+    GraphState,
+    LimitJoint,
+    MateEdge,
+    MateGeo,
+    SubGraph,
+)
 from .swcom import as_iface, safe_call, safe_prop
 
 MATE_TYPES = {0: "COINCIDENT", 1: "CONCENTRIC", 2: "PERPENDICULAR",
@@ -67,7 +74,7 @@ def safe_name(raw):
 _FASTENER_WORD = re.compile(
     r"(?i)(?:bolt|screw(?![a-z])|hex[\s_-]*socket|socket[\s_-]*head|washer|"
     r"[\s_-]nut\b|clinch|self[\s_-]*clinch|rivet|dowel|(?<![a-z])pin(?![a-z])|"
-    r"[\s_-]stud\b|fastener|"
+    r"[\s_-]stud\b|fastener|(?<![a-z])vida(?![a-z])|"   # vida = screw (TR)
     r"ねじ|ネジ|ビス|ボルト|ナット|ワッシャ|座金|止めねじ|皿ねじ|ピン)")
 # e.g. M3x6, M3X8, FS-M3, M4x10 -- a metric size designation, the strongest
 # tell.  chr(0xD7) = the full-width multiplication sign some catalogues use
@@ -423,6 +430,25 @@ def _entity_axis_world(me):
     return (p, d / n)
 
 
+def _com_int(v):
+    """Coerce a SolidWorks enum property to ``int`` (or None).
+
+    A typed interface returns these as plain ints, but when ``as_iface`` could
+    not wrap the object (some entities marshal late-bound) the same property
+    comes back as a win32com ``VARIANT`` -- ``int(VARIANT)`` then raises and
+    aborts the whole extract.  Pull the value out of the VARIANT instead."""
+    if v is None:
+        return None
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        inner = getattr(v, "value", None)
+        try:
+            return int(inner) if inner is not None else None
+        except (TypeError, ValueError):
+            return None
+
+
 def _entity_geo(me):
     """(etype, point, dir, radius) of one mate entity in WORLD coords.
 
@@ -445,7 +471,7 @@ def _entity_geo(me):
         if n > 1e-9:
             d = [float(x) for x in dv / n]
     radius = float(vals[6]) if len(vals) >= 7 else None
-    return (int(etype) if etype is not None else None, p, d, radius)
+    return (_com_int(etype), p, d, radius)
 
 
 def build_mate_graph(doc, comps):
@@ -472,7 +498,7 @@ def build_mate_graph(doc, comps):
         mate_count[own_name] = mate_count.get(own_name, 0) + len(_mates)
         for m in _mates:
             mate = as_iface(m, "IMate2")
-            mtype = safe_prop(mate, "Type")
+            mtype = _com_int(safe_prop(mate, "Type"))
             mname = MATE_TYPES.get(mtype, str(mtype))
             ne = safe_call(mate, "GetMateEntityCount") or 0
             tops = []
@@ -546,6 +572,118 @@ def build_mate_graph(doc, comps):
               + (f"; entities resolved to {refs}" if refs else "")
               + ") -> attaches FIXED")
     return adjacency, ground
+
+
+def _limit_joint_from_feature(sfi, name_set):
+    """A LimitDistance/LimitAngle mate FEATURE -> a joint spec, or None.
+
+    A SolidWorks *limit* mate (a DISTANCE/ANGLE mate with min != max) is a real
+    slider / hinge -- it lets the part travel between min..max.  Our geometric
+    classifier only sees a plain DISTANCE/ANGLE constraint and over-fixes it, so
+    we read the feature data: which two components, the axis, and the min/max
+    travel (which become the URDF joint limits, relative to the assembled pose)."""
+    mate2 = as_iface(safe_call(sfi, "GetSpecificFeature2"), "IMate2")
+    if mate2 is None:
+        return None
+    mtype = _com_int(safe_prop(mate2, "Type"))
+    if mtype not in (5, 6):                       # 5=DISTANCE, 6=ANGLE
+        return None
+    defn = safe_call(sfi, "GetDefinition")
+    if defn is None:
+        return None
+    if mtype == 5:
+        d = as_iface(defn, "IDistanceMateFeatureData")
+        lo = safe_prop(d, "MinimumDistance")
+        hi = safe_prop(d, "MaximumDistance")
+        cur = safe_prop(d, "Distance")
+        jtype = "prismatic"
+    else:
+        d = as_iface(defn, "IAngleMateFeatureData")
+        lo = safe_prop(d, "MinimumAngle")
+        hi = safe_prop(d, "MaximumAngle")
+        cur = safe_prop(d, "Angle")
+        jtype = "revolute"
+    try:
+        lo, hi, cur = float(lo), float(hi), float(cur)
+    except (TypeError, ValueError):
+        return None
+    if not (hi - lo) > 1e-9:                       # min==max -> a fixed mate
+        return None
+
+    ne = safe_call(mate2, "GetMateEntityCount") or 0
+    ents = []                                      # [(top_name, (etype,p,d,r))]
+    for i in range(ne):
+        me = as_iface(safe_call(mate2, "MateEntity", i), "IMateEntity2")
+        rc = as_iface(safe_prop(me, "ReferenceComponent"), "IComponent2")
+        rn = safe_prop(rc, "Name2") if rc else None
+        ents.append((_top_level(rn) if rn else None, _entity_geo(me)))
+    pair = list(dict.fromkeys(t for t, _ in ents if t in name_set))
+    if len(pair) != 2:
+        return None
+    geo_of = {}                                    # top component -> its entity geo
+    for top, geo in ents:
+        if top in pair and geo is not None:
+            geo_of.setdefault(top, geo)
+    ga, gb = geo_of.get(pair[0]), geo_of.get(pair[1])
+    if ga is None or gb is None:
+        return None
+    pa, pb = np.asarray(ga[1], float), np.asarray(gb[1], float)
+    na, nb = np.asarray(ga[2], float), np.asarray(gb[2], float)
+    pt = pa
+    if jtype == "prismatic":
+        # face normal = slide axis, ORIENTED so component `a` (=pair[0]) moving
+        # +axis grows the mate distance -- the build flips it when `a` is the
+        # tree CHILD's parent.  Without this the travel reads the wrong way.
+        axis = na.copy()
+        if float((pa - pb) @ na) < 0:
+            axis = -axis
+    else:
+        # a hinge rotates about the intersection line of the two faces
+        axis = np.cross(na, nb)
+        if np.linalg.norm(axis) < 1e-9:
+            axis = na.copy()
+    n = float(np.linalg.norm(axis))
+    if n < 1e-9:
+        return None
+    axis = axis / n
+    # URDF joint position 0 == the assembled pose (current distance/angle)
+    return {"a": pair[0], "b": pair[1], "type": jtype,
+            "axis_point": [float(x) for x in pt],
+            "axis_dir": [float(x) for x in axis],
+            "lower": lo - cur, "upper": hi - cur}
+
+
+def extract_limit_joints(doc, comps):
+    """Walk the assembly's mate features -> explicit limit-mate joints.
+
+    These ARE the assembly's real DOFs (SolidWorks LimitDistance/LimitAngle
+    mates).  Returned as ``[{a,b,type,axis_point,axis_dir,lower,upper}]`` with
+    ``a``/``b`` top-level component Name2; the build uses them to override the
+    over-constrained geometric classification on those edges."""
+    name_set = {c.name for c in comps}
+    out = []
+    feat = safe_call(doc, "FirstFeature")
+    guard = 0
+    while feat is not None and guard < 100000:
+        guard += 1
+        fi = as_iface(feat, "IFeature")
+        if safe_call(fi, "GetTypeName2") == "MateGroup":
+            sub = safe_call(fi, "GetFirstSubFeature")
+            while sub is not None:
+                sfi = as_iface(sub, "IFeature")
+                try:
+                    spec = _limit_joint_from_feature(sfi, name_set)
+                except Exception as e:
+                    spec = None
+                    print(f"      WARN: limit-mate read failed: {e!r}")
+                if spec:
+                    print("      limit joint: {} {} <-> {} [{:.3f}, {:.3f}]"
+                          .format(spec["type"], ascii(spec["a"]),
+                                  ascii(spec["b"]), spec["lower"], spec["upper"]))
+                    out.append(spec)
+                sub = safe_call(sfi, "GetNextSubFeature")
+        feat = safe_call(fi, "GetNextFeature")
+    return out
 
 
 def choose_base(comps, ground, base_hint=None, adjacency=None):
@@ -863,6 +1001,9 @@ def classify_edge_auto(rec):
     """(jtype, axis, note): geometric when the graph has it, else legacy."""
     if rec.get("force_fixed"):
         return "fixed", None, "config: force_fixed"
+    lj = rec.get("limit_joint")
+    if lj:                                  # SolidWorks LimitDistance/LimitAngle
+        return lj["type"], lj["axis"], "limit mate (SolidWorks slider/hinge)"
     if rec.get("fastener"):
         return "fixed", None, "fastener welded fixed"
     mates = rec.get("mates")
@@ -896,6 +1037,44 @@ def _edge_is_weak(jt_ax_note, types):
     return False
 
 
+def _concentric_axis_of(rec):
+    """(point, unit dir) of an edge's concentric/cylinder axis, or None."""
+    try:
+        recs = _dedup_geo(rec.get("mates") or [])
+    except Exception:
+        return None
+    for m in recs:
+        if m.get("type") in ("CONCENTRIC", "HINGE"):
+            pts, dirs = m.get("points") or [], m.get("dirs") or []
+            if pts and dirs:
+                d = np.asarray(dirs[0], float)
+                n = float(np.linalg.norm(d))
+                if n > 1e-9:
+                    return np.asarray(pts[0], float), d / n
+    return None
+
+
+def _axis_translation_is_free(rel, d, tol=1e-4):
+    """True if the relative-twist nullspace ``rel`` (6 x k: rows wx,wy,wz,
+    vx,vy,vz) can realise a PURE translation along unit ``d`` (zero rotation).
+
+    Used to second-guess the single-edge axial-slide weld with the assembly-
+    wide solve: if the two bodies can still slide freely along the concentric
+    axis once EVERY mate in the assembly is accounted for, that slide is a real
+    linear guide (the printer's Z gantry on its rails), not a bolt's unmodelled
+    face contact -- exactly what SolidWorks lets you drag."""
+    if rel.shape[1] == 0:
+        return False
+    d = np.asarray(d, float)
+    nd = float(np.linalg.norm(d))
+    if nd < 1e-9:
+        return False
+    target = np.concatenate([np.zeros(3), d / nd])
+    Q, _ = np.linalg.qr(rel)                  # orthonormal basis of col-space
+    resid = target - Q @ (Q.T @ target)
+    return float(np.linalg.norm(resid)) < tol
+
+
 def _demote_globally_locked(comps, adjacency, edge):
     """Replicate SolidWorks' GLOBAL drag solve.
 
@@ -915,6 +1094,11 @@ def _demote_globally_locked(comps, adjacency, edge):
     for key, rec in adjacency.items():
         a, b = tuple(key)
         if a not in idx or b not in idx:
+            continue
+        # a SolidWorks limit mate IS a slider/hinge -- its DISTANCE/ANGLE mate
+        # rows would (over-)constrain the global system and falsely lock the
+        # mechanism, so keep them out (and never demote it, below)
+        if rec.get("limit_joint"):
             continue
         # CLOCKING mates encode a display pose, not structure, yet they
         # really do freeze the mechanism in SolidWorks.  Two shapes:
@@ -963,6 +1147,8 @@ def _demote_globally_locked(comps, adjacency, edge):
     rigid = set()
     for key in list(edge.keys()):
         a, b = tuple(key)
+        if adjacency.get(key, {}).get("limit_joint"):
+            continue                          # authoritative slider/hinge
         rel = N[6 * idx[b]:6 * idx[b] + 6, :] - N[6 * idx[a]:6 * idx[a] + 6, :]
         if np.linalg.norm(rel) < 1e-6:
             rigid.add(key)
@@ -976,6 +1162,64 @@ def _demote_globally_locked(comps, adjacency, edge):
     if demoted:
         print(f"      global solve: {demoted} pairwise-movable edge(s) "
               f"are locked by the rest of the assembly")
+    # The reverse of demotion: classify_edge_geo welds a lone concentric-axis
+    # slide to fixed because, edge-on-its-own, it cannot tell a linear guide
+    # from a bolt's unmodelled face contact.  The assembly-wide solve CAN -- if
+    # the pair still slides freely along that axis with EVERY mate accounted
+    # for, it is a real prismatic (the Z gantry rides its rails), so promote it
+    # back.  Tagged fasteners never reach here (their edge is already "fastener
+    # welded fixed", a different note), so this won't resurrect the bolt forest.
+    promoted = 0
+    for key in list(edge.keys()):
+        jt, _ax, note = edge[key]
+        if jt != "fixed" or not note or "only axial slide" not in note:
+            continue
+        if key in rigid:
+            continue                          # global solve says it's locked
+        a, b = tuple(key)
+        if a not in idx or b not in idx:
+            continue
+        cax = _concentric_axis_of(adjacency.get(key, {}))
+        if cax is None:
+            continue
+        rel = N[6 * idx[b]:6 * idx[b] + 6, :] - N[6 * idx[a]:6 * idx[a] + 6, :]
+        if not _axis_translation_is_free(rel, cax[1]):
+            continue
+        edge[key] = ("prismatic", cax,
+                     "geo: concentric slide the global solve proves FREE "
+                     "(linear guide, not a fastener) -> prismatic")
+        promoted += 1
+    if promoted:
+        print(f"      global solve: {promoted} concentric slide(s) are FREE in "
+              f"the assembly -> prismatic (linear guide, not a fastener)")
+        # Two PARALLEL promoted slides off a common frame part, whose moving
+        # ends are directly tied, are one carriage on twin rails (the gantry's
+        # two rail holders): only ONE is the real DOF.  Weld the tie between
+        # them rigid so the spanning tree keeps the carriage in one group and
+        # drops the second rail as a loop closure -- otherwise the second
+        # holder is a phantom slider that floats off when the gantry moves.
+        prom = [k for k in edge if "linear guide" in (edge[k][2] or "")]
+        welded = 0
+        for i in range(len(prom)):
+            for j in range(i + 1, len(prom)):
+                k1, k2 = prom[i], prom[j]
+                common = k1 & k2
+                if len(common) != 1:
+                    continue
+                frame = next(iter(common))
+                c1 = next(iter(k1 - {frame}))
+                c2 = next(iter(k2 - {frame}))
+                d1 = np.asarray(edge[k1][1][1], float)
+                d2 = np.asarray(edge[k2][1][1], float)
+                if abs(float(d1 @ d2)) < 0.999:
+                    continue                  # not the same rail direction
+                tie = frozenset((c1, c2))
+                if tie in edge and edge[tie][0] == "fixed" and tie not in rigid:
+                    rigid.add(tie)
+                    welded += 1
+        if welded:
+            print(f"      global solve: {welded} twin-rail tie(s) welded "
+                  f"rigid (one carriage, one slide DOF)")
     return rigid
 
 
@@ -1039,7 +1283,7 @@ def _mirror_axis_fallback(comps, edge_info, inherit_type=False):
                      if info.get("axis") is not None}
     type_by_child = {ch: info.get("type") for (ch, _pa), info in
                      edge_info.items() if info.get("axis") is not None}
-    for (child, _parent), info in edge_info.items():
+    for (child, parent), info in edge_info.items():
         if info.get("axis") is not None:
             continue
         cR = by_name.get(child)
@@ -1047,6 +1291,14 @@ def _mirror_axis_fallback(comps, edge_info, inherit_type=False):
             continue
         if cR.is_fastener:
             continue          # hardware welds fixed -- no twin spin axis to copy
+        # a part RIGIDLY fixed onto its OWN same-part twin rides that twin's
+        # joint (the gantry's two rail holders are one carriage on one slide);
+        # inheriting a second copy of the joint here would double the DOF and
+        # the part would float off when the real joint moves -- leave it fixed.
+        pR = by_name.get(parent)
+        if info.get("type") == "fixed" and pR is not None \
+                and pR.part_path == cR.part_path:
+            continue
         sibs = [ch for ch in axis_by_child
                 if ch != child and by_name.get(ch)
                 and by_name[ch].part_path == cR.part_path]
@@ -1105,6 +1357,19 @@ def _auto_parent_map(comps, adjacency, base):
         neighbors[a].append(b)
         neighbors[b].append(a)
     rigid = _demote_globally_locked(comps, adjacency, edge) or set()
+    # A fixed edge the classifier is CONFIDENT about (a bolted/fastener mount, an
+    # explicit weld, a fully-constrained pair) is rigid STRUCTURE even when the
+    # global twist solve left it a spurious slide (an unmodelled face contact
+    # behind a bolt's concentric).  Treat it as backbone so a bolted sub-frame
+    # (e.g. the rail holder on the body) stays grouped with its parent instead of
+    # being entered through a joint from the far side.  "under-constrained" stays
+    # weak -- that one really is a low-confidence guess.
+    for key, (jt, _ax, note) in edge.items():
+        if jt == "fixed" and key not in rigid and any(
+                s in (note or "") for s in
+                ("fastener", "axial slide", "fully constrained",
+                 "force_fixed", "welded")):
+            rigid.add(key)
     _demote_coaxial_duplicates(edge, adjacency)
     weak = set()
     for key, rec in adjacency.items():
@@ -1122,8 +1387,13 @@ def _auto_parent_map(comps, adjacency, base):
     for key, (jt, ax, _note) in edge.items():
         if jt in _MOVABLE_TYPES and ax is not None:
             driven.update(key)
+    # ... but a GLOBALLY-RIGID fixed edge is structure, not a loop closure, even
+    # when both ends also carry a movable joint: the bed plate is fixed to the
+    # bed carriage while each separately slides, so this edge keeps the two in
+    # ONE rigid group instead of being split across the tree.
     loop_closure = {key for key, (jt, _ax, _n) in edge.items()
-                    if jt == "fixed" and all(n in driven for n in key)}
+                    if jt == "fixed" and key not in rigid
+                    and all(n in driven for n in key)}
     # Synthetic LOCK edges tie a sub-assembly's grounded children (fixed to its
     # frame) rigidly together.  They carry no mate geometry, so the global twist
     # solve cannot see them as rigid and they fall to the weak tier -- then a
@@ -1317,6 +1587,11 @@ def _auto_parent_map(comps, adjacency, base):
         if by_name[child].is_fastener or by_name[parent].is_fastener:
             jt, ax, note = "fixed", None, "fastener welded fixed"
         lo, hi = (-0.05, 0.05) if jt == "prismatic" else (-3.141592, 3.141592)
+        # a SolidWorks limit mate carries the real axis + travel range; orient it
+        # parent -> child so the slider moves the way it does in SolidWorks
+        lj = adjacency.get(frozenset((child, parent)), {}).get("limit_joint")
+        if lj and jt == lj["type"]:
+            ax, lo, hi = _oriented_limit(lj, by_name[child], by_name[parent])
         edge_info[(child, parent)] = {"type": jt, "axis": ax, "note": note,
                                       "lower": lo, "upper": hi}
     # mate-less mirror/pattern copies inherit the joint (type + reflected axis)
@@ -1327,6 +1602,22 @@ def _auto_parent_map(comps, adjacency, base):
 
 
 _MOVABLE_TYPES = ("revolute", "continuous", "prismatic")
+
+
+def _oriented_limit(lj, child_comp, parent_comp):
+    """(axis, lower, upper) for a limit-mate joint, oriented for the tree CHILD.
+
+    The extracted axis is oriented so the reference component ``lj['ref']``
+    (=mate side ``a``) moving +axis GROWS the mate distance, and lower/upper are
+    that growing travel.  In the URDF the joint moves the CHILD: if the child IS
+    the reference, +axis already grows the distance; if it's the other side, its
+    + motion shrinks it, so flip the axis -- then ``joint > 0`` always travels
+    toward the maximum, matching the SolidWorks slider."""
+    pt, d = lj["axis"]
+    d = np.asarray(d, float)
+    if lj.get("ref") and child_comp.name != lj["ref"]:
+        d = -d
+    return (np.asarray(pt, float), d), lj["lower"], lj["upper"]
 
 
 def _auto_mimic(comps, adjacency, parent_of, edge_info):
@@ -1412,18 +1703,29 @@ def _config_parent_map(comps, adjacency, base, directed):
     mate between the two components.  Components not mentioned are attached to
     the base with a fixed joint so the URDF stays a connected tree."""
     names = {c.name for c in comps}
+    by_name = {c.name: c for c in comps}
     parent_of = {}
     edge_info = {}
     for d in directed:
         child, parent = d["child"], d["parent"]
         if child not in names or parent not in names or child == base.name:
             continue
+        jtype = d.get("type", "fixed")
+        rec = adjacency.get(frozenset((child, parent)), {})
+        lj = rec.get("limit_joint")
         ax = None
-        if d.get("axis_point") and d.get("axis_dir"):
-            ax = (np.asarray(d["axis_point"], float),
-                  np.asarray(d["axis_dir"], float))
+        if d.get("axis_dir"):
+            # explicit direction wins; a point is optional (default: child origin)
+            pt = (np.asarray(d["axis_point"], float) if d.get("axis_point")
+                  else by_name[child].world[:3, 3].copy())
+            ax = (pt, np.asarray(d["axis_dir"], float))
+        elif lj and jtype == lj["type"]:
+            # a SolidWorks LimitDistance/LimitAngle mate is authoritative -- use
+            # its CAD axis (the joints.yaml the editor rebuilds from stores the
+            # TYPE but not the axis, so without this the limit joint silently
+            # falls back to the world +Z default below), oriented parent -> child
+            ax, _lo, _hi = _oriented_limit(lj, by_name[child], by_name[parent])
         else:
-            rec = adjacency.get(frozenset((child, parent)), {})
             ax = rec.get("axis")
             if ax is None and rec.get("mates"):
                 # No CONCENTRIC mate axis -- e.g. a MIRRORED part whose hinge is
@@ -1440,8 +1742,12 @@ def _config_parent_map(comps, adjacency, base, directed):
                     ax = geo[1]
         parent_of[child] = parent
         lo = d.get("lower"); up = d.get("upper")
+        if lj and jtype == lj["type"]:        # oriented limit-mate travel
+            _, olo, ohi = _oriented_limit(lj, by_name[child], by_name[parent])
+            lo = olo if lo is None else lo
+            up = ohi if up is None else up
         edge_info[(child, parent)] = {
-            "type": d.get("type", "fixed"), "axis": ax,
+            "type": jtype, "axis": ax,
             "lower": -3.141592 if lo is None else lo,
             "upper": 3.141592 if up is None else up,
             "mimic": d.get("mimic")}
@@ -1450,6 +1756,25 @@ def _config_parent_map(comps, adjacency, base, directed):
     # its mated twin's axis.  The config already supplies the joint TYPE here, so
     # only the axis is filled (inherit_type left off).
     _mirror_axis_fallback(comps, edge_info)
+    # A movable joint the user asked for that STILL has no axis -- no CAD mate
+    # (or a fully-constrained DISTANCE-locked one) and no mirror twin -- defaults
+    # to world +Z through the child origin, so flipping a joint to prismatic /
+    # revolute actually MOVES instead of silently snapping back to fixed.  Point
+    # it with axis_dir (e.g. [0,1,0]).  EXCEPT a part whose same-part twin DID
+    # resolve an axis: that one was left axis-less on purpose (ambiguous mirror).
+    axed_parts = {by_name[ch].part_path
+                  for (ch, _pa), info in edge_info.items()
+                  if info.get("axis") is not None and by_name.get(ch)
+                  and by_name[ch].part_path}
+    for (child, parent), info in edge_info.items():
+        if info["type"] in _MOVABLE_TYPES and info.get("axis") is None:
+            cp = by_name[child].part_path
+            if cp and cp in axed_parts:
+                continue                      # ambiguous mirror twin -- leave it
+            info["axis"] = (by_name[child].world[:3, 3].copy(),
+                            np.array([0.0, 0.0, 1.0]))
+            print(f"      note: {parent}->{child} {info['type']}: no CAD axis, "
+                  f"defaulting to world +Z (set axis_dir to change)")
     # anything unlisted -> fixed to base
     for c in comps:
         if c.name != base.name and c.name not in parent_of:
@@ -1729,7 +2054,7 @@ def _mate_edges(adjacency):
 
 def to_graph_state(comps, adjacency, ground, robot_name, source_assembly,
                    assembly_mesh=None, subassemblies=None, deep_worlds=None,
-                   hidden=None):
+                   hidden=None, limit_joints=None):
     subs = {}
     for path, (scomps, sadj, sground) in (subassemblies or {}).items():
         subs[path] = SubGraph(components=_component_states(scomps),
@@ -1739,7 +2064,9 @@ def to_graph_state(comps, adjacency, ground, robot_name, source_assembly,
                       components=_component_states(comps),
                       edges=_mate_edges(adjacency), ground=sorted(ground),
                       assembly_mesh=assembly_mesh, subassemblies=subs,
-                      deep_worlds=deep_worlds or {}, hidden=hidden or [])
+                      deep_worlds=deep_worlds or {}, hidden=hidden or [],
+                      limit_joints=[LimitJoint(**j) for j in
+                                    (limit_joints or [])])
 
 
 def capture_deep_worlds(doc):
@@ -2098,6 +2425,27 @@ def build_model(graph, robot_name=None, base_hint=None, config=None,
         graph, exclude=exclude,
         expand=config.get("expand") if config else None,
         no_expand=config.get("no_expand") if config else None)
+
+    # SolidWorks LimitDistance/LimitAngle mates ARE the assembly's real DOFs --
+    # promote those edges to prismatic/revolute with the CAD axis + travel
+    # limits, overriding the (over-constrained) geometric classification.  On by
+    # default; `use_limit_joints: false` falls back to pure geometry.
+    if config is None or config.get("use_limit_joints", True):
+        comp_names = {c.name for c in comps}
+        n_lim = 0
+        for lj in getattr(graph, "limit_joints", None) or []:
+            if lj.a not in comp_names or lj.b not in comp_names:
+                continue
+            rec = adjacency.setdefault(frozenset((lj.a, lj.b)),
+                                       {"types": [], "axis": None, "mates": []})
+            rec["limit_joint"] = {
+                "type": lj.type, "ref": lj.a,
+                "axis": (np.asarray(lj.axis_point, float),
+                         np.asarray(lj.axis_dir, float)),
+                "lower": float(lj.lower), "upper": float(lj.upper)}
+            n_lim += 1
+        if n_lim:
+            print(f"      limit-mate joints: {n_lim} (SolidWorks sliders/hinges)")
 
     # Standard hardware (screws/nuts/washers/pins) welds RIGIDLY to whatever it
     # fastens: tag it so its concentric-into-tapped-hole mate is never read as a
