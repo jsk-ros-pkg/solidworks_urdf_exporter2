@@ -447,6 +447,34 @@ class SolidWorks:
         self._tempdirs.append(tmpdir)
         tmp = os.path.join(tmpdir, os.path.basename(path))
         shutil.copy2(path, tmp)
+        # Co-locate the assembly's sibling CAD files in the SAME temp dir so
+        # SolidWorks' "same folder as the assembly" rule resolves them by name.
+        # The search-folder registration above does NOT always override the
+        # absolute paths a downloaded (Pack-and-Go) assembly bakes in -- those
+        # then open with every component unresolved even though the parts sit
+        # right next to the .SLDASM.  A flat copy of the folder fixes that; deep
+        # sub-folder layouts still fall back to the search folders.
+        if doc_type_for(path) == SW_DOC_ASSEMBLY:
+            try:
+                siblings = os.listdir(os.path.dirname(path))
+            except OSError:
+                siblings = []
+            n_sib = 0
+            for fn in siblings:
+                if fn.startswith("~$") or not fn.lower().endswith(
+                        (".sldprt", ".sldasm", ".slddrw")):
+                    continue                    # lock files / non-CAD
+                s = os.path.join(os.path.dirname(path), fn)
+                d = os.path.join(tmpdir, fn)
+                if os.path.isfile(s) and not os.path.exists(d):
+                    try:
+                        shutil.copy2(s, d)
+                        n_sib += 1
+                    except OSError:
+                        pass
+            if n_sib:
+                print(f"      co-located {n_sib} sibling CAD file(s) for "
+                      f"reference resolution")
         t1 = _time.time()
 
         errors = byref_long()
