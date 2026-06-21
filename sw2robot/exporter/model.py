@@ -2438,10 +2438,26 @@ def build_model(graph, robot_name=None, base_hint=None, config=None,
                 continue
             rec = adjacency.setdefault(frozenset((lj.a, lj.b)),
                                        {"types": [], "axis": None, "mates": []})
+            ax_pt = np.asarray(lj.axis_point, float)
+            ax_dir = np.asarray(lj.axis_dir, float)
+            if lj.type == "revolute":
+                # a LimitAngle mate fixes the travel but its plane point is NOT
+                # on the rotation axis -- the hinge is the concentric/cylinder
+                # mate on the same pair.  Pivoting about the angle-plane point
+                # swings the part around an offset centre (the screen hinge was
+                # ~5 cm off); use the concentric axis line so it rotates in
+                # place.  Keep the limit's direction SIGN (lower/upper + ref are
+                # relative to it).
+                cax = _concentric_axis_of(rec)
+                if cax is not None:
+                    cp, cd = cax
+                    n = np.linalg.norm(ax_dir) or 1.0
+                    if abs(float(cd @ (ax_dir / n))) > 0.99:
+                        ax_pt = cp
+                        ax_dir = cd if float(cd @ ax_dir) >= 0 else -cd
             rec["limit_joint"] = {
                 "type": lj.type, "ref": lj.a,
-                "axis": (np.asarray(lj.axis_point, float),
-                         np.asarray(lj.axis_dir, float)),
+                "axis": (ax_pt, ax_dir),
                 "lower": float(lj.lower), "upper": float(lj.upper)}
             n_lim += 1
         if n_lim:

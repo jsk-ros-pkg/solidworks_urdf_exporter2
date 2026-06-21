@@ -90,6 +90,31 @@ def test_limit_joint_axis_flips_for_the_other_side():
     np.testing.assert_allclose([round(x) for x in j.axis], [0, -1, 0])
 
 
+def test_revolute_limit_joint_pivots_on_concentric_axis():
+    # a LimitAngle mate stores its plane point, which is NOT on the rotation
+    # axis; the hinge is the concentric mate.  build_model must pivot the
+    # revolute on the concentric axis line, not the (offset) angle point.
+    from sw2robot.exporter.state import MateGeo
+    base = _comp("base"); base.fixed = True
+    door = _comp("door", (0.2, 0, 0))
+    conc = MateGeo(type="CONCENTRIC", etypes=[4, 4],
+                   points=[[0.05, 0.0, 0.0], [0.05, 0.0, 0.02]],
+                   dirs=[[0, 0, 1], [0, 0, 1]], radii=[None, None])
+    edge = MateEdge(a="base", b="door", types=["CONCENTRIC"],
+                    axis_point=None, axis_dir=None, mates=[conc])
+    lj = LimitJoint(a="door", b="base", type="revolute",
+                    axis_point=[0.3, 0.4, 0.1],   # bogus off-axis angle point
+                    axis_dir=[0, 0, 1], lower=-0.5, upper=0.5)
+    g = GraphState(robot_name="t", source_assembly="t.SLDASM",
+                   components=[base, door], edges=[edge], ground=["base"],
+                   limit_joints=[lj])
+    model = build_model(g)
+    j = next(jj for jj in model.joints if jj.child == "door")
+    assert j.jtype == "revolute"
+    # the axis line goes through the concentric point (x=0.05, y=0), NOT (0.3,0.4)
+    np.testing.assert_allclose(j.sw_axis_point[:2], [0.05, 0.0], atol=1e-6)
+
+
 def test_without_limit_joint_the_distance_mate_fixes_it():
     # same geometry, no limit joint -> the lone DISTANCE constraint leaves it
     # NOT a clean prismatic (regression guard that the win comes from the limit)
