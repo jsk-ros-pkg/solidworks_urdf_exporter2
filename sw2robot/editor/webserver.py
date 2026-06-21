@@ -446,6 +446,36 @@ def _parse_urdf(pkg_dir, urdf_rel):
         return None
 
 
+def _rename_in_urdf(pkg_dir, urdf_rel, kind, old, new):
+    """Apply a cosmetic link/joint rename DIRECTLY in the served URDF -- rewrite
+    just the name and its references, no full rebuild.
+
+    A rename is purely a display change: the kinematics, meshes and inertias are
+    untouched, so re-running the whole build (which recomputes every link's
+    convex-hull inertia) just to change a string is slow.  joints.yaml already
+    carries the rename overlay, so a later full build reproduces the same names;
+    this only makes the IMMEDIATE update instant.  Targets the exact ``name="..."``
+    / ``link="..."`` attributes (quote-delimited) so it never hits a substring."""
+    import re
+    path = os.path.join(pkg_dir, urdf_rel)
+    with open(path, encoding="utf-8") as f:
+        txt = f.read()
+    o = re.escape(old)
+    if kind == "link":
+        pats = [rf'(<link\s+name="){o}(")',
+                rf'(<(?:parent|child)\s+link="){o}(")']
+    else:
+        pats = [rf'(<joint\s+name="){o}(")',
+                rf'(<mimic\s+joint="){o}(")']
+    n = 0
+    for pat in pats:
+        txt, k = re.subn(pat, lambda m: m.group(1) + new + m.group(2), txt)
+        n += k
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(txt)
+    return n
+
+
 def _urdf_names(pkg_dir, urdf_rel, tag):
     """Current ``<link>``/``<joint>`` names in the served URDF (the source of
     truth for what's on screen), for the rename collision check + root detect."""
@@ -1735,9 +1765,16 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                         txt = _upsert_yaml_map(txt, mapkey, key, new)
                 with open(yml, "w", encoding="utf-8") as f:
                     f.write(txt)
-                from sw2robot.exporter.export import build
                 try:
-                    build(cls.pkg_dir, config_path=yml)
+                    if reset:
+                        # reset needs the DEFAULT name back, which only the full
+                        # build knows -- rare, so a rebuild is fine here
+                        from sw2robot.exporter.export import build
+                        build(cls.pkg_dir, config_path=yml)
+                    else:
+                        # the common path: rewrite the name in the URDF in place
+                        # (instant) instead of a full inertia-recomputing rebuild
+                        _rename_in_urdf(cls.pkg_dir, cls.urdf_rel, kind, old, new)
                 except Exception as e:
                     return self._send_json(
                         {"error": f"rebuild failed: {e}"}, 500)
