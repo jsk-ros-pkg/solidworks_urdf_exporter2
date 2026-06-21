@@ -70,11 +70,12 @@ def test_build_ros_description_layout(tmp_path):
 
     assert "fing_description/package.xml" in arcs
     assert "fing_description/CMakeLists.txt" in arcs
-    assert "fing_description/urdf/fing.urdf" in arcs
+    # URDF inside is named after the package by default (not the assembly name)
+    assert "fing_description/urdf/fing_description.urdf" in arcs
     assert "fing_description/meshes/part.dae" in arcs       # visual
     assert "fing_description/meshes/part.stl" in arcs       # collision
 
-    urdf = files["fing_description/urdf/fing.urdf"].decode()
+    urdf = files["fing_description/urdf/fing_description.urdf"].decode()
     import xml.etree.ElementTree as ET
     link = ET.fromstring(urdf).find("link")
     vis = link.find("visual").find(".//mesh").get("filename")
@@ -105,16 +106,16 @@ def test_build_ros2_description_layout(tmp_path):
     files = dict(build_ros_description(pkg_dir, "fing", ros_version=2))
     arcs = set(files)
 
-    # same description payload as ROS 1
-    assert "fing_description/urdf/fing.urdf" in arcs
+    # same description payload as ROS 1 (URDF named after the package)
+    assert "fing_description/urdf/fing_description.urdf" in arcs
     assert "fing_description/meshes/part.dae" in arcs
     assert "fing_description/meshes/part.stl" in arcs
-    urdf = files["fing_description/urdf/fing.urdf"].decode()
+    urdf = files["fing_description/urdf/fing_description.urdf"].decode()
     assert "package://fing_description/meshes/part.dae" in urdf
 
     # ROS 2 specific files
     assert "fing_description/launch/display.launch.py" in arcs
-    assert "fing_description/rviz/fing.rviz" in arcs
+    assert "fing_description/rviz/fing_description.rviz" in arcs
 
     pxml = files["fing_description/package.xml"].decode()
     assert 'format="3"' in pxml
@@ -129,10 +130,12 @@ def test_build_ros2_description_layout(tmp_path):
     launch = files["fing_description/launch/display.launch.py"].decode()
     assert "robot_state_publisher" in launch
     assert 'get_package_share_directory("fing_description")' in launch
+    assert '"fing_description.urdf"' in launch     # urdf named after the package
+    assert '"fing_description.rviz"' in launch
     # the launch python must be syntactically valid
     compile(launch, "display.launch.py", "exec")
 
-    rviz = files["fing_description/rviz/fing.rviz"].decode()
+    rviz = files["fing_description/rviz/fing_description.rviz"].decode()
     assert "RobotModel" in rviz
     assert "Fixed Frame: base_link" in rviz   # the urdf's first link
 
@@ -160,7 +163,8 @@ def test_glb_ctx_exports_uniform_glb(tmp_path):
 
     assert "g_description/meshes/part.glb" in files
     assert not any(a.endswith((".dae", ".stl")) for a in files)   # uniform glb
-    link = ET.fromstring(files["g_description/urdf/g.urdf"].decode()).find("link")
+    link = ET.fromstring(
+        files["g_description/urdf/g_description.urdf"].decode()).find("link")
     for ctx in ("visual", "collision"):
         assert (link.find(ctx).find(".//mesh").get("filename")
                 == "package://g_description/meshes/part.glb")
@@ -266,13 +270,109 @@ def test_urdf_loads_in_skrobot_with_package_meshes_resolved(tmp_path,
     from skrobot.models.urdf import RobotModelFromURDF
 
     desc = _write_desc(tmp_path, "fing", ros_version)
-    robot = RobotModelFromURDF(urdf_file=os.path.join(desc, "urdf", "fing.urdf"))
+    robot = RobotModelFromURDF(
+        urdf_file=os.path.join(desc, "urdf", "fing_description.urdf"))
 
     assert "base_link" in [link.name for link in robot.link_list]
     vms = robot.link_list[0].visual_mesh
     vms = vms if isinstance(vms, (list, tuple)) else [vms]
     faces = sum(len(m.faces) for m in vms if hasattr(m, "faces"))
     assert faces > 0, "package:// visual mesh did not resolve to real geometry"
+
+
+def test_custom_pkg_name_renames_everything(tmp_path):
+    """An explicit ``pkg_name`` renames the package dir, the manifest <name>,
+    the project(), every ``package://`` URL, AND the urdf file (which defaults
+    to the package name) -- the assembly name 'fing' must not leak through."""
+    from sw2robot.exporter.ros_export import build_ros_description
+
+    pkg_dir = _make_pkg(tmp_path, robot="fing")
+    files = dict(build_ros_description(pkg_dir, "fing",
+                                       pkg_name="bambu_a1_description"))
+    arcs = set(files)
+
+    assert "bambu_a1_description/package.xml" in arcs
+    # urdf defaults to the package name, not the assembly name
+    assert "bambu_a1_description/urdf/bambu_a1_description.urdf" in arcs
+    assert "bambu_a1_description/meshes/part.dae" in arcs
+    assert not any("/fing.urdf" in a for a in arcs)
+    assert not any(a.startswith("fing_description/") for a in arcs)
+
+    urdf = files["bambu_a1_description/urdf/bambu_a1_description.urdf"].decode()
+    assert "package://bambu_a1_description/meshes/part.dae" in urdf
+    pxml = files["bambu_a1_description/package.xml"].decode()
+    assert re.search(r"<name>\s*bambu_a1_description\s*</name>", pxml)
+    cmake = files["bambu_a1_description/CMakeLists.txt"].decode()
+    assert "project(bambu_a1_description)" in cmake
+
+
+def test_explicit_urdf_name_overrides_package_default(tmp_path):
+    """An explicit ``urdf_name`` names the urdf (and ros2 launch/rviz), while
+    the package keeps its own name; an empty urdf_name falls back to the pkg."""
+    from sw2robot.exporter.ros_export import build_ros_description
+
+    pkg_dir = _make_pkg(tmp_path, robot="fing")
+    files = dict(build_ros_description(pkg_dir, "fing", ros_version=2,
+                                       pkg_name="my_arm", urdf_name="bambu_a1"))
+    assert "my_arm/urdf/bambu_a1.urdf" in files            # explicit stem
+    assert "my_arm/rviz/bambu_a1.rviz" in files
+    launch = files["my_arm/launch/display.launch.py"].decode()
+    assert 'get_package_share_directory("my_arm")' in launch   # pkg unchanged
+    assert '"bambu_a1.urdf"' in launch                         # urdf stem
+    compile(launch, "display.launch.py", "exec")
+
+    # a '.urdf' suffix on the input is stripped, not doubled
+    files2 = dict(build_ros_description(pkg_dir, "fing",
+                                        pkg_name="my_arm", urdf_name="foo.urdf"))
+    assert "my_arm/urdf/foo.urdf" in files2
+
+
+def test_custom_pkg_name_ros2_launch_and_rviz(tmp_path):
+    from sw2robot.exporter.ros_export import build_ros_description
+
+    pkg_dir = _make_pkg(tmp_path, robot="fing")
+    files = dict(build_ros_description(pkg_dir, "fing", ros_version=2,
+                                       pkg_name="my_arm"))
+    assert "my_arm/launch/display.launch.py" in files
+    assert "my_arm/urdf/my_arm.urdf" in files              # urdf = pkg by default
+    launch = files["my_arm/launch/display.launch.py"].decode()
+    assert 'get_package_share_directory("my_arm")' in launch
+    compile(launch, "display.launch.py", "exec")
+
+
+def test_invalid_pkg_name_rejected():
+    import pytest
+
+    from sw2robot.exporter.ros_export import ros_pkg_name, ros_urdf_stem
+
+    assert ros_pkg_name("fing") == "fing_description"          # default
+    # the default sanitises an assembly name with capitals/punctuation into a
+    # VALID ROS package name (so the no-name export never 400s)
+    assert ros_pkg_name("Assem1") == "assem1_description"
+    assert ros_pkg_name("My-Robot 2") == "my_robot_2_description"
+    assert ros_pkg_name("123") == "robot_123_description"      # must start alpha
+    assert ros_pkg_name("fing", "robot_x2") == "robot_x2"      # valid passes
+    for bad in ("Bad-Name", "2leading", "has space", "Caps", "-x"):
+        with pytest.raises(ValueError, match="invalid ROS package name"):
+            ros_pkg_name("fing", bad)
+    # urdf stem: defaults to the package, accepts filename-ish names, rejects junk
+    assert ros_urdf_stem("my_pkg") == "my_pkg"
+    assert ros_urdf_stem("my_pkg", "Bambu_A1-v2") == "Bambu_A1-v2"
+    for bad in ("has space", "/etc/passwd", "-x", ".hidden"):
+        with pytest.raises(ValueError, match="invalid URDF name"):
+            ros_urdf_stem("my_pkg", bad)
+
+
+def test_write_pkg_with_custom_name_returns_that_dir(tmp_path):
+    from sw2robot.exporter.ros_export import write_ros_description_package
+
+    src = tmp_path / "src"
+    src.mkdir()
+    pkg_dir = _make_pkg(src, robot="fing")
+    out = write_ros_description_package(pkg_dir, "fing", str(tmp_path / "out"),
+                                        pkg_name="custom_desc")
+    assert os.path.basename(out) == "custom_desc"
+    assert os.path.exists(os.path.join(out, "package.xml"))
 
 
 def test_missing_mesh_aborts_instead_of_half_broken_package(tmp_path):

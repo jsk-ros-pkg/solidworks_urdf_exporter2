@@ -158,7 +158,8 @@ def extract(assembly_path, out_dir=None, robot_name=None, visible=False,
 
 # ---------------------------------------------------------------- build
 def build(pkg_dir, config_path=None, base_hint=None, exclude=None,
-          ros_pkg=False, density=None, ros_version=1):
+          ros_pkg=False, density=None, ros_version=1, ros_pkg_name=None,
+          ros_urdf_name=None):
     _tolerant_console()
     graph = GraphState.load(os.path.join(pkg_dir, GRAPH_FILE))
     robot_name = graph.robot_name
@@ -189,13 +190,14 @@ def build(pkg_dir, config_path=None, base_hint=None, exclude=None,
 
     desc_dir = None
     if ros_pkg:
-        # a standalone <robot_name>_description package next to pkg_dir:
-        # package:// URLs + COLLADA .dae meshes (RViz/Gazebo-ready).
-        # ros_version 2 also bundles launch/ + rviz/ for `ros2 launch`.
+        # a standalone package next to pkg_dir (default <robot_name>_description,
+        # or --ros-pkg-name): package:// URLs + COLLADA .dae meshes
+        # (RViz/Gazebo-ready).  ros_version 2 also bundles launch/ + rviz/.
         from .ros_export import write_ros_description_package
         desc_dir = write_ros_description_package(
             pkg_dir, robot_name, os.path.dirname(os.path.abspath(pkg_dir)),
-            ros_version=ros_version)
+            ros_version=ros_version, pkg_name=ros_pkg_name,
+            urdf_name=ros_urdf_name)
 
     print(f"\nDONE. Package: {pkg_dir}")
     print(f"  URDF:   {urdf_path}")
@@ -211,10 +213,11 @@ def build(pkg_dir, config_path=None, base_hint=None, exclude=None,
 # ---------------------------------------------------------------- export
 def export(assembly_path, out_dir=None, robot_name=None, visible=False,
            config_path=None, base_hint=None, exclude=None, ros_pkg=False,
-           ros_version=1):
+           ros_version=1, ros_pkg_name=None, ros_urdf_name=None):
     pkg_dir = extract(assembly_path, out_dir, robot_name, visible)
     return build(pkg_dir, config_path=config_path, base_hint=base_hint,
-                 exclude=exclude, ros_pkg=ros_pkg, ros_version=ros_version)
+                 exclude=exclude, ros_pkg=ros_pkg, ros_version=ros_version,
+                 ros_pkg_name=ros_pkg_name, ros_urdf_name=ros_urdf_name)
 
 
 def _exclude_list(s):
@@ -238,12 +241,20 @@ def main():
                     help="make the --ros-pkg an ament_cmake (ROS 2) package "
                          "with launch/ + rviz/ instead of catkin (ROS 1); "
                          "implies --ros-pkg")
+    ap.add_argument("--ros-pkg-name", default=None,
+                    help="name for the --ros-pkg package (default "
+                         "<name>_description); must be a valid ROS package "
+                         "name: lowercase letters, digits, underscores")
+    ap.add_argument("--ros-urdf-name", default=None,
+                    help="stem for the URDF file inside the --ros-pkg package "
+                         "(default: the package name)")
     args = ap.parse_args()
     export(args.assembly, args.out, args.name, args.visible,
            config_path=args.config, base_hint=args.base,
            exclude=_exclude_list(args.exclude),
            ros_pkg=args.ros_pkg or args.ros2,
-           ros_version=2 if args.ros2 else 1)
+           ros_version=2 if args.ros2 else 1,
+           ros_pkg_name=args.ros_pkg_name, ros_urdf_name=args.ros_urdf_name)
 
 
 if __name__ == "__main__":

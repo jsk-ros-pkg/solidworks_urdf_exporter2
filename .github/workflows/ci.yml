@@ -214,8 +214,9 @@ jobs:
           catkin config --install     # run the install rules into install/
           catkin build --no-status
           source install/setup.bash
-          # the URDF must parse with ROS's own urdfdom parser
-          check_urdf install/share/fingertip_description/urdf/fingertip.urdf
+          # the URDF must parse with ROS's own urdfdom parser (the URDF defaults
+          # to the package name now, so <pkg>/urdf/<pkg>.urdf)
+          check_urdf install/share/fingertip_description/urdf/fingertip_description.urdf
           # the install rules must place the package's runtime files
           test -d install/share/fingertip_description/meshes
 
@@ -246,8 +247,8 @@ jobs:
           cd ws
           colcon build
           source install/setup.bash
-          check_urdf src/fingertip_description/urdf/fingertip.urdf
+          check_urdf src/fingertip_description/urdf/fingertip_description.urdf
           share=install/fingertip_description/share/fingertip_description
-          test -f "$share/urdf/fingertip.urdf"
+          test -f "$share/urdf/fingertip_description.urdf"
           test -f "$share/launch/display.launch.py"
-          test -f "$share/rviz/fingertip.rviz"
+          test -f "$share/rviz/fingertip_description.rviz"

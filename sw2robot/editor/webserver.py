@@ -174,30 +174,41 @@ def _read_root_pose(txt):
             float(m.group(1)) if m else 0.0)
 
 
-def _export_zip(pkg_dir, robot_name, mesh_fmt="dae", ros_version=1):
-    """ZIP a portable ``<robot_name>_description`` package (package:// URLs).
+def _export_zip(pkg_dir, robot_name, mesh_fmt="dae", ros_version=1,
+                pkg_name=None, urdf_name=None):
+    """ZIP a portable ROS package (package:// URLs), named ``pkg_name`` if given
+    else ``<robot_name>_description``; the URDF inside is named ``urdf_name`` if
+    given, else the package name.
 
     ``mesh_fmt='dae'`` (default): ``<visual>`` as colour COLLADA ``.dae`` +
     ``<collision>`` as plain ``.stl`` -- the RViz/Gazebo-ready variant.
     ``mesh_fmt='glb'``: a uniform ``.glb`` package (colour kept) for three.js /
     skrobot / native-mesh consumers (not RViz-loadable).
 
-    ``ros_version`` (1 = catkin, 2 = ament_cmake) selects the build files."""
+    ``ros_version`` (1 = catkin, 2 = ament_cmake) selects the build files.
+    Returns ``(pkg, bytes)`` so the caller can name the download after the
+    actual package."""
     if mesh_fmt not in ("dae", "glb"):
         raise ValueError(f"unsupported mesh format: {mesh_fmt}")
 
     import io as _io
     import zipfile
 
-    from sw2robot.exporter.ros_export import GLB_CTX_FMT, build_ros_description
+    from sw2robot.exporter.ros_export import (
+        GLB_CTX_FMT,
+        build_ros_description,
+        ros_pkg_name,
+    )
+    pkg = ros_pkg_name(robot_name, pkg_name)
     kwargs = {"ctx_fmt": GLB_CTX_FMT} if mesh_fmt == "glb" else {}
     buf = _io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         for arc, data in build_ros_description(pkg_dir, robot_name,
                                                ros_version=ros_version,
-                                               **kwargs):
+                                               pkg_name=pkg,
+                                               urdf_name=urdf_name, **kwargs):
             z.writestr(arc, data)
-    return buf.getvalue()
+    return pkg, buf.getvalue()
 
 
 # --- joint/link rename overlay (joints.yaml link_names / joint_names) --------
@@ -1211,10 +1222,17 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                     return self._send_json(
                         {"error": f"unsupported ros version: {ros}"}, 400)
                 ros_version = int(ros)
-                data = _export_zip(cls.pkg_dir, cls.robot_name, fmt,
-                                   ros_version=ros_version)
+                pkg_name = (query.get("name") or [""])[0].strip() or None
+                urdf_name = (query.get("urdf") or [""])[0].strip() or None
+                try:
+                    pkg, data = _export_zip(cls.pkg_dir, cls.robot_name, fmt,
+                                            ros_version=ros_version,
+                                            pkg_name=pkg_name,
+                                            urdf_name=urdf_name)
+                except ValueError as e:
+                    return self._send_json({"error": str(e)}, 400)
                 fname = (f"{cls.robot_name}_glb.zip" if fmt == "glb"
-                         else f"{cls.robot_name}_description.zip")
+                         else f"{pkg}.zip")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/zip")
                 self.send_header("Content-Disposition",

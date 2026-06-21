@@ -547,6 +547,26 @@
          padding:6px 8px;margin:6px 0;background:#1e2620;font-size:12px">
       <div style="color:#8fd99f;font-size:11px;margin-bottom:4px">
         📦 Export</div>
+      <div style="display:flex;gap:4px;align-items:center;margin-bottom:4px">
+        <span style="color:#8a93a3;min-width:54px" data-i18n="ui.exppkgname">package</span>
+        <input id="exppkg" type="text" spellcheck="false"
+               data-i18n-title="t.exppkgname"
+               title="ROS package name for the exported ROS1/ROS2 package
+(default <name>_description). Lowercase letters, digits and underscores only."
+               style="flex:1;min-width:0;background:#15171a;color:#cfe3ff;
+                      border:1px solid #2d4a35;border-radius:3px;padding:2px 5px;
+                      font-size:11px" placeholder="robot_description">
+      </div>
+      <div style="display:flex;gap:4px;align-items:center;margin-bottom:4px">
+        <span style="color:#8a93a3;min-width:54px" data-i18n="ui.expurdfname">URDF</span>
+        <input id="expurdf" type="text" spellcheck="false"
+               data-i18n-title="t.expurdfname"
+               title="file name (stem) of the URDF inside the package.
+Leave empty to match the package name (e.g. bambulab_description.urdf)."
+               style="flex:1;min-width:0;background:#15171a;color:#cfe3ff;
+                      border:1px solid #2d4a35;border-radius:3px;padding:2px 5px;
+                      font-size:11px" placeholder="robot_description">
+      </div>
       <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">
         <a id="expdae" href="/api/export/zip?meshes=dae&ros=1" download>
           <button data-i18n="ui.expdae" data-i18n-title="t.expdae"
@@ -1023,6 +1043,12 @@ skrobot / native-mesh consumers (not RViz-loadable)">⬇ glb</button></a>
     't.selall': { en: 'select all', ja: 'すべて選択' },
     'ui.selectedArrow': { en: 'selected →', ja: '選択 →' },
     'ui.set': { en: 'Set', ja: '適用' },
+    'ui.exppkgname': { en: 'package', ja: 'パッケージ名' },
+    't.exppkgname': { en: 'ROS package name for the exported ROS1/ROS2 package (default <name>_description). Lowercase letters, digits and underscores only.',
+                      ja: 'エクスポートする ROS1/ROS2 パッケージの名前（既定: <name>_description）。英小文字・数字・アンダースコアのみ。' },
+    'ui.expurdfname': { en: 'URDF', ja: 'URDF名' },
+    't.expurdfname': { en: 'file name (stem) of the URDF inside the package. Leave empty to match the package name (e.g. bambulab_description.urdf).',
+                       ja: 'パッケージ内 URDF のファイル名（拡張子なし）。空欄ならパッケージ名と同じ（例: bambulab_description.urdf）。' },
     't.expdae': { en: 'portable ROS 1 (catkin) package (<name>_description): package:// URLs, visual = colour COLLADA .dae, collision = .stl (loads in RViz/Gazebo)',
                   ja: 'ポータブルな ROS 1 (catkin) パッケージ (<name>_description): package:// URL、visual = カラー COLLADA .dae、collision = .stl（RViz/Gazebo で読込可）' },
     'ui.expdae': { en: '⬇ ROS1 package', ja: '⬇ ROS1 パッケージ' },
@@ -3107,6 +3133,53 @@ autolimitsBtn.addEventListener('click', async () => {
   }
 });
 
+// ---- export names: thread the chosen package + URDF names into the ZIP links
+// the ROS1/ROS2/glb downloads are plain <a download> links; on click we rewrite
+// their ?name=&urdf= from these fields so the exported package (and zip) carry
+// them.  Empty URDF name -> the URDF inside is named after the package.
+const exppkg = document.getElementById('exppkg');
+const expurdf = document.getElementById('expurdf');
+const expLinks = ['expdae', 'expros2', 'expglb']
+  .map(id => document.getElementById(id)).filter(Boolean);
+function exportDefaultName() {
+  // mirror the server: sanitise the assembly name to a valid ROS package name
+  // ('Assem1' -> 'assem1_description') so the placeholder matches what ships
+  const n = currentInfo?.name;
+  if (!n) { return 'robot_description'; }
+  let base = n.toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/^_+|_+$/g, '');
+  if (!base || !/[a-z]/.test(base[0])) { base = base ? 'robot_' + base : 'robot'; }
+  return `${base}_description`;
+}
+function effectivePkgName() {
+  return (exppkg?.value || '').trim() || exportDefaultName();
+}
+function refreshExportName() {
+  if (exppkg) { exppkg.placeholder = exportDefaultName(); }
+  if (expurdf) { expurdf.placeholder = effectivePkgName(); }  // urdf = pkg name
+}
+// keep the package field a valid ROS package name as the user types (lowercase,
+// digits, underscore; must start with a letter) -- matches the server check
+exppkg?.addEventListener('input', () => {
+  const clean = exppkg.value.toLowerCase()
+    .replace(/[^a-z0-9_]/g, '_').replace(/^[^a-z]+/, '');
+  if (exppkg.value !== clean) { exppkg.value = clean; }
+  if (expurdf) { expurdf.placeholder = effectivePkgName(); }
+});
+// the URDF stem is a filename: letters/digits/_/-/. , starting alphanumeric
+expurdf?.addEventListener('input', () => {
+  const clean = expurdf.value
+    .replace(/[^A-Za-z0-9_.-]/g, '_').replace(/^[^A-Za-z0-9]+/, '');
+  if (expurdf.value !== clean) { expurdf.value = clean; }
+});
+expLinks.forEach(a => a.addEventListener('click', () => {
+  const base = a.getAttribute('href').split('&name=')[0].split('&urdf=')[0];
+  const name = (exppkg?.value || '').trim();
+  const urdf = (expurdf?.value || '').trim();
+  a.href = base
+    + (name ? `&name=${encodeURIComponent(name)}` : '')
+    + (urdf ? `&urdf=${encodeURIComponent(urdf)}` : '');
+}));
+
 // ---- camera: bbox helpers, SolidWorks-style view presets, auto-fit ------
 function robotBox() {
   // bbox of the actual MODEL: visible meshes only, helpers excluded
@@ -4398,6 +4471,7 @@ function loadRobot(info, { drop = false, keepPose = false,
   dropMode = drop;
   if (!drop) { viewer.urlModifierFunc = null; currentInfo = info; }
   else { currentInfo = null; }
+  refreshExportName();          // export field placeholder follows the open pkg
   // cover the reload gap with a display-only clone of the current robot
   // (same world pose -> the swap is pixel-invisible); geometry/materials
   // are shared so this costs milliseconds

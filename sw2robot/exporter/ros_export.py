@@ -22,6 +22,7 @@ zip it in memory and the CLI can write it to disk.
 from __future__ import annotations
 
 import os
+import re
 import xml.etree.ElementTree as ET
 
 from .urdf_writer import (
@@ -150,10 +151,55 @@ def _resolve_mesh(pkg_dir, ref):
     return base, src, ext
 
 
+def ros_pkg_name(robot_name, pkg_name=None):
+    """The ROS package name to emit: an explicit ``pkg_name`` (validated) or the
+    default ``<robot_name>_description``.  catkin/ament require a name starting
+    with a lowercase letter and containing only lowercase, digits and
+    underscores.
+
+    The default is SANITIZED to that form (a SolidWorks assembly like 'Assem1'
+    -> 'assem1_description'), since the assembly name often has capitals; an
+    EXPLICIT name is validated strictly and rejected if malformed, so a typo
+    surfaces instead of silently changing."""
+    if not pkg_name:
+        base = re.sub(r"[^a-z0-9_]", "_", robot_name.lower()).strip("_")
+        if not base or not base[0].isalpha():
+            base = "robot_" + base if base else "robot"
+        return f"{base}_description"
+    pkg = pkg_name.strip()
+    if not re.fullmatch(r"[a-z][a-z0-9_]*", pkg):
+        raise ValueError(
+            f"invalid ROS package name {pkg_name!r}: must start with a "
+            "lowercase letter and contain only lowercase letters, digits and "
+            "underscores (e.g. 'bambu_a1_description')")
+    return pkg
+
+
+def ros_urdf_stem(pkg, urdf_name=None):
+    """The URDF file stem to emit inside the package: an explicit ``urdf_name``
+    (validated) or, when blank, the package name itself -- so the package ships
+    ``<pkg>/urdf/<pkg>.urdf`` by default instead of leaking the SolidWorks
+    assembly name."""
+    if not urdf_name:
+        return pkg
+    stem = urdf_name.strip()
+    if stem.lower().endswith(".urdf"):
+        stem = stem[:-5]
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", stem):
+        raise ValueError(
+            f"invalid URDF name {urdf_name!r}: use letters, digits, '_', '-' "
+            "or '.' and start with a letter or digit (e.g. 'bambu_a1')")
+    return stem
+
+
 def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
-                          ctx_fmt=_CTX_FMT, ros_version=1):
+                          ctx_fmt=_CTX_FMT, ros_version=1, pkg_name=None,
+                          urdf_name=None):
     """``pkg_dir`` (a built package) -> ``[(arcname, bytes), ...]`` for a portable
-    ``<robot_name>_description`` ROS package, all behind ``package://`` URLs.
+    ROS package, all behind ``package://`` URLs.  The package is named
+    ``pkg_name`` if given (validated, see :func:`ros_pkg_name`), else
+    ``<robot_name>_description``.  The URDF inside is named ``urdf_name`` if
+    given, else the package name (so ``<pkg>/urdf/<pkg>.urdf`` by default).
 
     ``ctx_fmt`` maps each URDF context to a mesh format; the default emits
     ``<visual>`` as colour ``.dae`` and ``<collision>`` as plain ``.stl`` (the
@@ -162,7 +208,7 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
     ``ros_version`` picks the build system: ``1`` (default) writes a catkin
     ``package.xml`` (format 2) + ``CMakeLists.txt``; ``2`` writes an ament_cmake
     ``package.xml`` (format 3) + ``CMakeLists.txt`` and bundles a
-    ``launch/display.launch.py`` + ``rviz/<name>.rviz`` so the package runs with
+    ``launch/display.launch.py`` + ``rviz/<urdf>.rviz`` so the package runs with
     ``ros2 launch <name> display.launch.py``.
 
     Reads the on-disk ``urdf/<robot_name>.urdf`` (which already carries the
@@ -170,7 +216,8 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
     before any entries are emitted, so a half-rewritten package never ships."""
     if ros_version not in (1, 2):
         raise ValueError(f"unsupported ros_version: {ros_version}")
-    pkg = f"{robot_name}_description"
+    pkg = ros_pkg_name(robot_name, pkg_name)
+    urdf_stem = ros_urdf_stem(pkg, urdf_name)
     urdf_path = os.path.join(pkg_dir, "urdf", robot_name + ".urdf")
     root = ET.parse(urdf_path).getroot()
 
@@ -210,7 +257,7 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
     new_urdf = '<?xml version="1.0"?>\n' + ET.tostring(root, encoding="unicode")
     if not new_urdf.endswith("\n"):
         new_urdf += "\n"
-    files.append((f"{pkg}/urdf/{robot_name}.urdf", new_urdf.encode("utf-8")))
+    files.append((f"{pkg}/urdf/{urdf_stem}.urdf", new_urdf.encode("utf-8")))
 
     if ros_version == 2:
         # the root (first) link is the natural RViz fixed frame
@@ -223,9 +270,9 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
         files.append((f"{pkg}/CMakeLists.txt",
                       CMAKELISTS_ROS2.format(name=pkg).encode("utf-8")))
         files.append((f"{pkg}/launch/display.launch.py",
-                      DISPLAY_LAUNCH_ROS2.format(name=pkg, robot=robot_name)
+                      DISPLAY_LAUNCH_ROS2.format(name=pkg, robot=urdf_stem)
                       .encode("utf-8")))
-        files.append((f"{pkg}/rviz/{robot_name}.rviz",
+        files.append((f"{pkg}/rviz/{urdf_stem}.rviz",
                       RVIZ_CONFIG_ROS2.format(fixed_frame=fixed_frame)
                       .encode("utf-8")))
     else:
@@ -237,16 +284,21 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
 
 
 def write_ros_description_package(pkg_dir, robot_name, dest_dir,
-                                  email="auto@example.com", ros_version=1):
-    """Write the ``<robot_name>_description`` package under ``dest_dir`` and return
-    its directory path.  ``ros_version`` (1 = catkin, 2 = ament_cmake) is passed
-    through to :func:`build_ros_description`."""
+                                  email="auto@example.com", ros_version=1,
+                                  pkg_name=None, urdf_name=None):
+    """Write the ROS package under ``dest_dir`` and return its directory path.
+    The package is named ``pkg_name`` if given, else ``<robot_name>_description``;
+    the URDF inside is named ``urdf_name`` if given, else the package name.
+    ``ros_version`` (1 = catkin, 2 = ament_cmake) is passed through to
+    :func:`build_ros_description`."""
+    pkg = ros_pkg_name(robot_name, pkg_name)
     files = build_ros_description(pkg_dir, robot_name, email=email,
-                                  ros_version=ros_version)
+                                  ros_version=ros_version, pkg_name=pkg,
+                                  urdf_name=urdf_name)
     root = os.path.abspath(dest_dir)
     for arc, data in files:
         dst = os.path.join(root, *arc.split("/"))
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         with open(dst, "wb") as f:
             f.write(data)
-    return os.path.join(root, f"{robot_name}_description")
+    return os.path.join(root, pkg)
