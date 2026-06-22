@@ -1,0 +1,26 @@
+# Characterization fixture for the CAD->URDF edit pipeline (Step 0 golden).
+# Exercises the edits that will migrate to the unified overlay: rename
+# (link_names/joint_names), type override, per-joint limits, mimic, colors.
+base: fingertip_front_2
+root_link_name: base_link
+link_names:
+  fingertip_back_1: tip
+joint_names:
+  fingertip_front_2__fingertip_back_1: bend
+colors:
+  fingertip_back_1: '#ff0000'
+joints:
+  - parent: fingertip_front_2
+    child: screwlock_male_hard_jointbase_v4_1
+    type: revolute
+    lower: -0.5
+    upper: 0.5
+  - parent: fingertip_front_2
+    child: fingertip_back_1
+    type: revolute
+    lower: -1.0
+    upper: 1.5
+    mimic:
+      joint: fingertip_front_2__screwlock_male_hard_jointbase_v4_1
+      multiplier: 0.5
+      offset: 0.1
