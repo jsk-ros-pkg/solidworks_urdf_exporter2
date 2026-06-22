@@ -761,6 +761,14 @@ skrobot / native-mesh consumers (not RViz-loadable)">⬇ glb</button></a>
     'li.com': { en: 'CoM 🟣', ja: '重心 🟣' },
     'li.inertia': { en: 'inertia', ja: '慣性' },
     'li.color': { en: 'color', ja: '色' },
+    'li.setColor': { en: 'set color', ja: '色を変更' },
+    'li.colorReset': { en: 'reset', ja: '戻す' },
+    'li.recentColors': { en: 'palette', ja: 'よく使う色' },
+    'li.colorResetTitle': { en: 'back to the mesh’s original colour',
+                            ja: 'メッシュ本来の色に戻す' },
+    'li.colorOk': { en: 'colour updated ✓', ja: '色を更新しました ✓' },
+    'li.colorFail': { en: a => `set color failed: ${a.e}`,
+                      ja: a => `色の変更に失敗: ${a.e}` },
     'li.material': { en: 'material', ja: '材質' },
     'li.mesh': { en: 'mesh', ja: 'メッシュ' },
     'li.override': { en: '(override)', ja: '(上書き)' },
@@ -1260,6 +1268,7 @@ viewer.addEventListener('joint-mouseover', e => {
 let dropMode = false;          // meshes come from dropped blobs, not /pkg/
 let currentInfo = null;        // {name, urdf} of the open server package
 let compMeta = {};             // link -> {material, density, name, override}
+let linkColors = {};           // URDF/viewer link name -> '#rrggbb' override
 let excludedList = [];         // component names excluded from the URDF
 
 // ---- operation log + diagnostic dump: every user action is recorded, and
@@ -1277,6 +1286,8 @@ async function refreshCompMeta() {
     const r = await (await fetch('/api/components')).json();
     if (!r.error) {
       compMeta = r.links ?? {};
+      linkColors = r.colors ?? {};   // keyed by viewer link name (composed too)
+      applyPersistedColors();     // meta may arrive after geometry-loaded
       excludedList = r.excluded ?? [];
       const chip = document.getElementById('exclchip');
       chip.style.display = excludedList.length ? '' : 'none';
@@ -2316,7 +2327,136 @@ function _tintLink(linkName, kind) {   // kind: 'hov' | 'sel' | null
 // hover tint, but never repaint over the selection
 function highlightLink(linkName, on) {
   if (linkName === selectedLink) { return; }
-  _tintLink(linkName, on ? 'hov' : baseTint(linkName));
+  _tintLink(linkName, on ? 'hov' : _colorTint(linkName));
+}
+
+// ---- per-link visual colour override -----------------------------------
+// We repaint the link's OWN (non-marker) mesh materials -- the same materials
+// the tint system saves in `savedMats`, so a tint overlays the override and
+// deselect/dehover falls back to it (not the CAD colour).  The very first
+// override of a material stashes its original colour so 'reset' can restore it.
+// Materials are shared with the mesh cache, so this survives edit-rebuilds; on a
+// fresh page load applyPersistedColors() re-applies from the server.
+const origMatColor = new WeakMap();   // material -> THREE.Color before overrides
+// while the colour picker for a link is open we suppress that link's tint
+// (selection cyan etc.) so the user judges the TRUE colour, not the overlay
+let colorPreviewLink = null;
+// the tint a link should currently wear, honouring colour-preview suppression
+function _colorTint(name) {
+  return name === colorPreviewLink ? null : baseTint(name);
+}
+
+// recently-set colours, newest first, shown as a reusable palette and kept in
+// localStorage so they persist across sessions
+const RECENT_KEY = 'sw2robot.recentColors';
+const RECENT_MAX = 30;
+let recentColors = [];
+try {
+  const r = JSON.parse(localStorage.getItem(RECENT_KEY) || '[]');
+  if (Array.isArray(r)) {
+    recentColors = r.filter(h => /^#[0-9a-f]{6}$/.test(h)).slice(0, RECENT_MAX);
+  }
+} catch { /* corrupt/absent -> empty palette */ }
+function pushRecentColor(hex) {
+  if (!hex) { return; }
+  const h = hex.toLowerCase();
+  if (!/^#[0-9a-f]{6}$/.test(h)) { return; }
+  recentColors = [h, ...recentColors.filter(x => x !== h)].slice(0, RECENT_MAX);
+  try { localStorage.setItem(RECENT_KEY, JSON.stringify(recentColors)); }
+  catch { /* storage full/blocked -> keep in memory only */ }
+}
+
+// start previewing a link's true colour: strip its tint so the colour (picker
+// or freshly-applied swatch) is judged without the selection-cyan overlay.  The
+// preview persists until a DIFFERENT link is selected (selectLink clears it).
+function beginColorPreview(name) {
+  colorPreviewLink = name;
+  _tintLink(name, null);
+  viewer.redraw();
+}
+
+// the link's own mesh materials, reading through an in-progress drag-hover the
+// same way _tintLink does (so we never lose the true original)
+function _linkBaseMaterials(linkName) {
+  const link = viewer.robot?.links?.[linkName];
+  const out = [];
+  if (!link) { return out; }
+  (function walk(node) {
+    for (const c of node.children) {
+      if (c.isURDFJoint) { continue; }
+      if (c.isMesh && !c.userData.sw2robotMarker
+          && c.material !== viewer.highlightMaterial) {
+        const m = savedMats.get(c)
+          ?? (c.__origMaterial !== undefined ? c.__origMaterial : c.material);
+        if (m && m.color) { out.push(m); }
+      }
+      walk(c);
+    }
+  })(link);
+  return out;
+}
+
+function applyLinkColor(linkName, hex) {
+  const col = new THREE.Color(hex);
+  for (const m of _linkBaseMaterials(linkName)) {
+    // remember the true original so reset can restore it
+    if (!origMatColor.has(m)) {
+      origMatColor.set(m, { color: m.color.clone(), vc: m.vertexColors });
+    }
+    m.color.copy(col);
+    // the CAD colours are baked as VERTEX colours (GLB COLOR_0); while those are
+    // active the shader does material.color * vertexColour, so a colour change
+    // is barely visible -- disable them so the override shows as a solid colour
+    if (m.vertexColors) { m.vertexColors = false; m.needsUpdate = true; }
+    tintClones.delete(m);            // stale tints must rebuild from new base
+  }
+  _tintLink(linkName, _colorTint(linkName));   // re-overlay tint unless previewing
+  viewer.redraw();
+}
+
+function resetLinkColor(linkName) {
+  for (const m of _linkBaseMaterials(linkName)) {
+    const orig = origMatColor.get(m);
+    if (orig) {
+      m.color.copy(orig.color);
+      if (m.vertexColors !== orig.vc) { m.vertexColors = orig.vc; m.needsUpdate = true; }
+    }
+    tintClones.delete(m);
+  }
+  _tintLink(linkName, baseTint(linkName));
+  viewer.redraw();
+}
+
+// re-apply every server-persisted override (compMeta.color) to the live robot;
+// safe to call repeatedly (idempotent) once geometry + compMeta are both in
+function applyPersistedColors() {
+  if (!viewer.robot) { return; }
+  for (const [name, hex] of Object.entries(linkColors)) {
+    if (hex && viewer.robot.links[name]) { applyLinkColor(name, hex); }
+  }
+}
+
+// persist a colour (or null to clear) and apply it live; mirrors set_material's
+// flow but needs NO rebuild -- the override is purely a viewer/export concern
+async function setLinkColor(name, hex) {
+  op('setColor', { link: name, color: hex });
+  colorPreviewLink = name;          // keep the true colour visible after applying
+  if (hex) { applyLinkColor(name, hex); } else { resetLinkColor(name); }
+  try {
+    const resp = await fetch('/api/set_color', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ link: name, color: hex }) });
+    const r = await resp.json();
+    if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
+    if (compMeta[name]) { compMeta[name].color = r.color; }
+    if (r.color) { linkColors[name] = r.color; } else { delete linkColors[name]; }
+    if (r.color) { pushRecentColor(r.color); }   // remember for the palette
+    log(t('li.colorOk'), 'ok');
+    if (name === selectedLink) { selectLink(name); }   // refresh reset-btn state
+  } catch (e) {
+    log(t('li.colorFail', { e: e.message ?? e }), 'err');
+  }
 }
 
 // ---- live self-collision: NEW contacts (not present at the rest pose)
@@ -2767,8 +2907,35 @@ function fillLinkInfo(name) {
     }
   }
   const c = mat?.color?.getHexString?.();
-  add(t('li.color'), (c ? `<span class="sw" style="background:#${c}"></span> ` +
-                    `#${c}` : t('common.na')));
+  // editable colour: the picker shows the persisted override if any, else the
+  // mesh's own colour; the 'reset' button (active only when overridden) clears
+  // the override back to the CAD colour
+  const ov = linkColors[name];                         // '#rrggbb' or undefined
+  const cur = (ov || (c ? '#' + c : '#cccccc')).toLowerCase();
+  rowsHtml.push(
+    `<tr><td>${t('li.color')}</td><td>` +
+    `<input type="color" id="li_color" value="${cur}" ` +
+    `style="vertical-align:middle;width:36px;height:20px;padding:0;` +
+    `background:#15171a;border:1px solid #444;border-radius:3px;` +
+    `cursor:pointer">` +
+    ` <button id="li_color_reset" title="${t('li.colorResetTitle')}" ` +
+    `style="font-size:10px;background:#15171a;color:#bbb;border:1px solid #444;` +
+    `border-radius:3px;padding:1px 6px;cursor:pointer"` +
+    `${ov ? '' : ' disabled'}>${t('li.colorReset')}</button>` +
+    (ov ? ` <span style="color:#e8c468">${t('li.override')}</span>` : '') +
+    `</td></tr>`);
+  // reusable palette of recently-set colours: click a swatch to apply it
+  if (recentColors.length) {
+    const sw = recentColors.map(h =>
+      // pointer-events:auto -- #linkinfo is pointer-events:none and only
+      // re-enables select/button/input, so a bare <span> swatch would be unclickable
+      `<span class="palsw" data-c="${h}" title="${h}" style="display:inline-block;` +
+      `width:16px;height:16px;border-radius:3px;margin:1px;cursor:pointer;` +
+      `pointer-events:auto;` +
+      `vertical-align:middle;border:1px solid ${h === cur ? '#e8c468' : '#444'};` +
+      `background:${h}"></span>`).join('');
+    rowsHtml.push(`<tr><td>${t('li.recentColors')}</td><td>${sw}</td></tr>`);
+  }
   // SolidWorks material + density (with web override), editable below
   const meta = compMeta[name];
   const matTxt = meta?.override
@@ -2825,6 +2992,22 @@ function fillLinkInfo(name) {
       log(t('li.densityFail', { e: e.message ?? e }), 'err');
     }
   });
+  const colInp = el.querySelector('#li_color');
+  if (colInp) {
+    // focus strips the selection tint so the picker shows the TRUE colour;
+    // 'input' previews live while dragging; 'change' persists once.  The preview
+    // lingers (no blur restore) until another link is selected, so the applied
+    // colour stays visible instead of being re-masked by the selection cyan.
+    colInp.addEventListener('focus', () => beginColorPreview(name));
+    colInp.addEventListener('input', () => applyLinkColor(name, colInp.value));
+    colInp.addEventListener('change', () => setLinkColor(name, colInp.value));
+  }
+  const colReset = el.querySelector('#li_color_reset');
+  if (colReset) {
+    colReset.addEventListener('click', () => setLinkColor(name, null));
+  }
+  el.querySelectorAll('.palsw').forEach(s =>
+    s.addEventListener('click', () => setLinkColor(name, s.dataset.c)));
   el.style.display = 'block';   // '' would fall back to the stylesheet's
                                 // display:none and never show
 }
@@ -2832,12 +3015,15 @@ function fillLinkInfo(name) {
 function selectLink(linkName) {
   op('select', { link: linkName });
   if (linkName && boxSelected.size) { clearBoxSelection(); }  // single replaces box
+  // moving to a different link ends any colour preview, so the link we leave
+  // gets its normal resting tint back
+  if (linkName !== colorPreviewLink) { colorPreviewLink = null; }
   const prev = selectedLink;
   selectedLink = linkName;
-  if (prev) { _tintLink(prev, baseTint(prev)); }
+  if (prev) { _tintLink(prev, _colorTint(prev)); }
   const bar = document.getElementById('selbar');
   if (linkName) {
-    _tintLink(linkName, baseTint(linkName));   // red survives selection
+    _tintLink(linkName, _colorTint(linkName));   // red survives selection
     statusEl.textContent = t('sel.status', { name: linkName });
     document.getElementById('selname').textContent = linkName;
     document.getElementById('seleye').classList.toggle(
@@ -4351,6 +4537,7 @@ viewer.addEventListener('geometry-loaded', () => {
     hiddenLinks.forEach(n => applyLinkVisibility(n));
     tfNodes = [];                  // old robot's TF nodes died with it
     undimAll();                    // restore shared (cached) materials!
+    applyPersistedColors();        // re-paint server-saved colour overrides
     collisionLinks = new Set();    // fresh meshes wear no stale red
     initCollision();
     if (tfOn()) { setTF(true); }

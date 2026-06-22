@@ -175,7 +175,7 @@ def _read_root_pose(txt):
 
 
 def _export_zip(pkg_dir, robot_name, mesh_fmt="dae", ros_version=1,
-                pkg_name=None, urdf_name=None):
+                pkg_name=None, urdf_name=None, colors=None):
     """ZIP a portable ROS package (package:// URLs), named ``pkg_name`` if given
     else ``<robot_name>_description``; the URDF inside is named ``urdf_name`` if
     given, else the package name.
@@ -206,7 +206,8 @@ def _export_zip(pkg_dir, robot_name, mesh_fmt="dae", ros_version=1,
         for arc, data in build_ros_description(pkg_dir, robot_name,
                                                ros_version=ros_version,
                                                pkg_name=pkg,
-                                               urdf_name=urdf_name, **kwargs):
+                                               urdf_name=urdf_name,
+                                               colors=colors, **kwargs):
             z.writestr(arc, data)
     return pkg, buf.getvalue()
 
@@ -241,6 +242,24 @@ def _link_names_inverse(yml_txt):
     if base and root_name:
         inv[root_name] = base
     return inv
+
+
+def _read_colors(pkg_dir, urdf_rel):
+    """``{component link name -> '#RRGGBB'}`` from the package's joints.yaml
+    ``colors:`` block; empty when there is no package/config/block."""
+    if not pkg_dir or not urdf_rel:
+        return {}
+    name = os.path.splitext(os.path.basename(urdf_rel))[0]
+    yml = os.path.join(pkg_dir, name + ".joints.yaml")
+    if not os.path.exists(yml):
+        return {}
+    import yaml as _yaml
+    try:
+        cfg = _yaml.safe_load(open(yml, encoding="utf-8").read()) or {}
+    except Exception:
+        return {}
+    colors = cfg.get("colors")
+    return colors if isinstance(colors, dict) else {}
 
 
 def _upsert_yaml_map(txt, mapkey, key, value):
@@ -1064,12 +1083,14 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                                 overrides[k] = float(v)
                             except ValueError:
                                 pass
+                colors = _read_colors(cls.pkg_dir, cls.urdf_rel)
                 links = {}
                 for c in gs.components:
                     links[c.link_name] = {
                         "material": c.material, "density": c.density,
                         "name": c.name,
-                        "override": overrides.get(c.link_name)}
+                        "override": overrides.get(c.link_name),
+                        "color": colors.get(c.link_name)}
                 excluded = []
                 if os.path.exists(yml):
                     m = re.search(r"(?m)^exclude:\n((?:- .*\n)*)",
@@ -1077,8 +1098,13 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                     if m:
                         excluded = [ln[2:].strip()
                                     for ln in m.group(1).splitlines()]
+                # raw colour overrides keyed by URDF/viewer link name (composed
+                # sub-links like 'linkB_1__part_1' are NOT in `links`, which is
+                # built per top-level component, so the viewer keys colours off
+                # this map directly instead of compMeta)
                 return self._send_json({"links": links,
-                                        "excluded": excluded})
+                                        "excluded": excluded,
+                                        "colors": colors})
             if path == "/api/fs":
                 # tiny server-side file browser: the OS file dialog cannot
                 # hand a PATH to the page, so the page browses through us
@@ -1258,7 +1284,9 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                     pkg, data = _export_zip(cls.pkg_dir, cls.robot_name, fmt,
                                             ros_version=ros_version,
                                             pkg_name=pkg_name,
-                                            urdf_name=urdf_name)
+                                            urdf_name=urdf_name,
+                                            colors=_read_colors(
+                                                cls.pkg_dir, cls.urdf_rel))
                 except ValueError as e:
                     return self._send_json({"error": str(e)}, 400)
                 fname = (f"{cls.robot_name}_glb.zip" if fmt == "glb"
@@ -1706,6 +1734,52 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                         {"error": f"rebuild failed: {e}"}, 500)
                 print(f"[sw2robot.web] set_material: {link} -> {density}")
                 return self._send_json({"link": link, "density": density})
+            if parsed.path == "/api/set_color":
+                # per-link visual colour override, stored as a `colors:` block in
+                # joints.yaml ({component name -> '#RRGGBB'}).  The viewer paints
+                # it client-side, so NO rebuild is needed here; the exporter bakes
+                # it into the <visual> .dae/.glb at export time.
+                cls = type(self)
+                n = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(n) or b"{}")
+                link = body.get("link")
+                color = body.get("color")         # None / '' removes the override
+                if not cls.pkg_dir or not link:
+                    return self._send_json({"error": "no package/link"}, 400)
+                norm = None
+                if color:
+                    h = str(color).strip().lstrip("#").lower()
+                    if not re.fullmatch(r"[0-9a-f]{6}", h):
+                        return self._send_json(
+                            {"error": f"invalid color {color!r}: want #RRGGBB"},
+                            400)
+                    norm = "#" + h
+                name = os.path.splitext(os.path.basename(cls.urdf_rel))[0]
+                yml = os.path.join(cls.pkg_dir, name + ".joints.yaml")
+                if not os.path.exists(yml):
+                    return self._send_json(
+                        {"error": "joints.yaml not found"}, 400)
+                with open(yml, encoding="utf-8") as f:
+                    txt = f.read()
+                comp = _link_names_inverse(txt).get(link, link)
+                _snapshot(cls.pkg_dir, yml, f"color of {comp[:30]}")
+                m = re.search(r"(?m)^colors:\n((?:[ \t]+\S+:.*\n)*)", txt)
+                block = m.group(1) if m else ""
+                pat = re.compile(r"(?m)^[ \t]+" + re.escape(comp) + r":.*\n?")
+                block = pat.sub("", block)
+                if norm:
+                    # quote: a bare '#...' is a YAML comment
+                    block += f"  {comp}: '{norm}'\n"
+                if m:
+                    txt = txt[:m.start()] \
+                        + (f"colors:\n{block}" if block else "") \
+                        + txt[m.end():]
+                elif block:
+                    txt = f"colors:\n{block}" + txt
+                with open(yml, "w", encoding="utf-8") as f:
+                    f.write(txt)
+                print(f"[sw2robot.web] set_color: {comp} -> {norm}")
+                return self._send_json({"link": comp, "color": norm})
             if parsed.path == "/api/rename":
                 # rename a link or joint to a user-chosen name.  Stored as a
                 # component->display overlay in joints.yaml (link_names /

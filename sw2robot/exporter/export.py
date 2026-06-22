@@ -194,10 +194,13 @@ def build(pkg_dir, config_path=None, base_hint=None, exclude=None,
         # or --ros-pkg-name): package:// URLs + COLLADA .dae meshes
         # (RViz/Gazebo-ready).  ros_version 2 also bundles launch/ + rviz/.
         from .ros_export import write_ros_description_package
+        # per-link colour overrides (joints.yaml `colors:`) repaint <visual>
+        # meshes in the exported package
+        colors = config.get("colors") if isinstance(config, dict) else None
         desc_dir = write_ros_description_package(
             pkg_dir, robot_name, os.path.dirname(os.path.abspath(pkg_dir)),
             ros_version=ros_version, pkg_name=ros_pkg_name,
-            urdf_name=ros_urdf_name)
+            urdf_name=ros_urdf_name, colors=colors)
 
     print(f"\nDONE. Package: {pkg_dir}")
     print(f"  URDF:   {urdf_path}")

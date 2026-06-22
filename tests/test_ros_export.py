@@ -174,6 +174,50 @@ def test_glb_ctx_exports_uniform_glb(tmp_path):
     assert len(m.faces) > 0
 
 
+def test_colour_override_repaints_visual_mesh(tmp_path):
+    """A per-link colour override repaints the <visual> mesh one solid colour
+    (keyed by the mesh basename), overriding the CAD colours, in both the direct
+    GLB converter and the full .dae export."""
+    if not os.path.exists(_SAMPLE_MESH):
+        pytest.skip("sample .3dxml mesh not present")
+    import numpy as np
+    import trimesh
+
+    from sw2robot.exporter.ros_export import (
+        _hex_to_rgba,
+        _mesh_to_glb_bytes,
+        build_ros_description,
+    )
+
+    assert (_hex_to_rgba("#1188ff") == np.array([0x11, 0x88, 0xFF, 255])).all()
+    assert _hex_to_rgba("#abc") is None and _hex_to_rgba(None) is None
+
+    # direct GLB converter: every vertex/face wears the solid override colour
+    glb = _mesh_to_glb_bytes(_SAMPLE_MESH, color="#1188ff")
+    m = trimesh.load(io.BytesIO(glb), file_type="glb")
+    m = m.dump(concatenate=True) if isinstance(m, trimesh.Scene) else m
+    vis = m.visual.to_color() if m.visual.kind == "texture" else m.visual
+    cols = np.asarray(vis.vertex_colors)
+    assert len(cols) and (cols[:, :3] == [0x11, 0x88, 0xFF]).all()
+
+    # full export threads `colors` (keyed by the mesh basename 'part') into .dae
+    pkg_dir = _make_pkg(tmp_path, robot="fing")
+    files = dict(build_ros_description(pkg_dir, "fing",
+                                       colors={"part": "#1188ff"}))
+    dae_txt = files["fing_description/meshes/part.dae"].decode()
+    triples = {tuple(round(float(x), 2) for x in c.split()[:3])
+               for c in re.findall(r"<color[^>]*>([^<]+)</color>", dae_txt)}
+    assert (0.07, 0.53, 1.0) in triples           # #1188ff in 0..1 floats
+
+    # with no override the export keeps the mesh's own (non-override) colours
+    plain = dict(build_ros_description(pkg_dir, "fing"))
+    plain_txt = plain["fing_description/meshes/part.dae"].decode()
+    plain_triples = {tuple(round(float(x), 2) for x in c.split()[:3])
+                     for c in re.findall(r"<color[^>]*>([^<]+)</color>",
+                                         plain_txt)}
+    assert (0.07, 0.53, 1.0) not in plain_triples
+
+
 def test_working_package_is_not_modified(tmp_path):
     """The converter only READS the package -- the source urdf/mesh are untouched
     (the working URDF must stay mesh-relative for the viewer / auto-limits)."""

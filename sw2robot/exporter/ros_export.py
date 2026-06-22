@@ -63,24 +63,62 @@ def _load_mesh_metres(src):
     return mesh
 
 
-def _mesh_to_dae_bytes(src):
-    """COLLADA (.dae) bytes in metres, with colours baked into materials."""
-    meshes = _collada_meshes(_load_mesh_metres(src))
+def _hex_to_rgba(hex_color):
+    """``'#RRGGBB'`` / ``'#RRGGBBAA'`` (the leading ``#`` optional) -> a uint8
+    ``[R, G, B, A]`` numpy array, or ``None`` for a missing/malformed value."""
+    if not hex_color:
+        return None
+    import numpy as np
+
+    h = str(hex_color).strip().lstrip("#")
+    if len(h) == 6:
+        h += "ff"
+    if len(h) != 8:
+        return None
+    try:
+        return np.array([int(h[i:i + 2], 16) for i in (0, 2, 4, 6)],
+                        dtype=np.uint8)
+    except ValueError:
+        return None
+
+
+def _apply_uniform_color(mesh, hex_color):
+    """Repaint every face of ``mesh`` one solid colour (dropping any original
+    texture/material), so a per-link override wins in every output format.  A
+    falsy/invalid ``hex_color`` leaves the mesh untouched."""
+    rgba = _hex_to_rgba(hex_color)
+    if rgba is None:
+        return mesh
+    import numpy as np
+    import trimesh
+
+    mesh.visual = trimesh.visual.ColorVisuals(
+        mesh=mesh, face_colors=np.tile(rgba, (len(mesh.faces), 1)))
+    return mesh
+
+
+def _mesh_to_dae_bytes(src, color=None):
+    """COLLADA (.dae) bytes in metres, with colours baked into materials.
+    ``color`` (``'#RRGGBB'``) overrides the mesh's own colours when given."""
+    meshes = _collada_meshes(_apply_uniform_color(_load_mesh_metres(src), color))
     if len(meshes) == 1:
         return meshes[0].export(file_type="dae")
     from trimesh.exchange.dae import export_collada
     return export_collada(meshes)
 
 
-def _mesh_to_stl_bytes(src):
-    """STL bytes in metres (colour is dropped -- collision geometry needs none)."""
+def _mesh_to_stl_bytes(src, color=None):
+    """STL bytes in metres (colour is dropped -- collision geometry needs none,
+    so ``color`` is accepted for a uniform converter signature but ignored)."""
     return _load_mesh_metres(src).export(file_type="stl")
 
 
-def _mesh_to_glb_bytes(src):
+def _mesh_to_glb_bytes(src, color=None):
     """GLB bytes in metres, keeping the original material/texture (for
-    three.js / skrobot consumers, not RViz)."""
-    return _load_mesh_metres(src).export(file_type="glb")
+    three.js / skrobot consumers, not RViz).  ``color`` (``'#RRGGBB'``)
+    overrides the mesh's own colours when given."""
+    return _apply_uniform_color(_load_mesh_metres(src), color).export(
+        file_type="glb")
 
 
 _CONVERT = {"dae": _mesh_to_dae_bytes, "stl": _mesh_to_stl_bytes,
@@ -194,7 +232,7 @@ def ros_urdf_stem(pkg, urdf_name=None):
 
 def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
                           ctx_fmt=_CTX_FMT, ros_version=1, pkg_name=None,
-                          urdf_name=None):
+                          urdf_name=None, colors=None):
     """``pkg_dir`` (a built package) -> ``[(arcname, bytes), ...]`` for a portable
     ROS package, all behind ``package://`` URLs.  The package is named
     ``pkg_name`` if given (validated, see :func:`ros_pkg_name`), else
@@ -204,6 +242,11 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
     ``ctx_fmt`` maps each URDF context to a mesh format; the default emits
     ``<visual>`` as colour ``.dae`` and ``<collision>`` as plain ``.stl`` (the
     usual ROS split).  Pass :data:`GLB_CTX_FMT` for a uniform ``.glb`` package.
+
+    ``colors`` is an optional ``{component link name -> '#RRGGBB'}`` map (the
+    mesh basename equals the component link name) that repaints that link's
+    ``<visual>`` mesh a solid colour, overriding its CAD colours; collision STL
+    is colourless and unaffected.
 
     ``ros_version`` picks the build system: ``1`` (default) writes a catkin
     ``package.xml`` (format 2) + ``CMakeLists.txt``; ``2`` writes an ament_cmake
@@ -220,6 +263,7 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
     urdf_stem = ros_urdf_stem(pkg, urdf_name)
     urdf_path = os.path.join(pkg_dir, "urdf", robot_name + ".urdf")
     root = ET.parse(urdf_path).getroot()
+    colors = colors or {}
 
     files = []
     done = {}          # (base, fmt) -> arcname  (instances + visual/collision share)
@@ -229,7 +273,7 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
         if (base, fmt) in done:
             return
         try:
-            data = _CONVERT[fmt](src)
+            data = _CONVERT[fmt](src, color=colors.get(base))
         except Exception as e:
             errors.append(f"{base}: {fmt} convert failed ({e!r})")
             return
@@ -285,16 +329,16 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
 
 def write_ros_description_package(pkg_dir, robot_name, dest_dir,
                                   email="auto@example.com", ros_version=1,
-                                  pkg_name=None, urdf_name=None):
+                                  pkg_name=None, urdf_name=None, colors=None):
     """Write the ROS package under ``dest_dir`` and return its directory path.
     The package is named ``pkg_name`` if given, else ``<robot_name>_description``;
     the URDF inside is named ``urdf_name`` if given, else the package name.
-    ``ros_version`` (1 = catkin, 2 = ament_cmake) is passed through to
-    :func:`build_ros_description`."""
+    ``ros_version`` (1 = catkin, 2 = ament_cmake) and ``colors`` (per-link
+    colour overrides) are passed through to :func:`build_ros_description`."""
     pkg = ros_pkg_name(robot_name, pkg_name)
     files = build_ros_description(pkg_dir, robot_name, email=email,
                                   ros_version=ros_version, pkg_name=pkg,
-                                  urdf_name=urdf_name)
+                                  urdf_name=urdf_name, colors=colors)
     root = os.path.abspath(dest_dir)
     for arc, data in files:
         dst = os.path.join(root, *arc.split("/"))
