@@ -8,6 +8,8 @@ version = "0.1.19"
 description = "SolidWorks assembly -> URDF exporter with a browser-based editor"
 readme = "README.md"
 requires-python = ">=3.12"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 authors = [{ name = "Iori Yanokura", email = "ab.ioryz@gmail.com" }]
 dependencies = [
     "numpy>=2",

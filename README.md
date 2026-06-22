@@ -72,3 +72,7 @@ cd tests/e2e && npm i && node run.mjs    # UI suite (needs a running sw2robot-we
 
 Some pytest fixtures expect a cached `output/<pkg>/graph.json`; those skip when
 absent.
+
+## License
+
+[Apache License 2.0](LICENSE) © 2026 Iori Yanokura
