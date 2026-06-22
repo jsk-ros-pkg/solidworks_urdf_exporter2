@@ -495,6 +495,83 @@ def _rename_in_urdf(pkg_dir, urdf_rel, kind, old, new):
     return n
 
 
+def _fmt_num(v):
+    """Compact URDF numeric attribute -- no ``-0.0``, trims trailing zeros."""
+    return "0" if v == 0 else f"{v:.8g}"
+
+
+def _flip_axis_in_urdf(pkg_dir, urdf_rel, joint_name):
+    """Reverse one joint's rotation/translation SENSE directly in the served
+    URDF: negate its ``<axis xyz>``, swap+negate ``<limit lower/upper>`` (the
+    physical range is preserved -- only the command sign flips), and negate any
+    ``<mimic multiplier/offset>``.  The joint ORIGIN is untouched so the frame
+    does not move.  Self-inverse (flip twice = original).  Returns the number of
+    axes flipped (0 when the joint has none -- e.g. fixed)."""
+    import re
+    path = os.path.join(pkg_dir, urdf_rel)
+    with open(path, encoding="utf-8") as f:
+        txt = f.read()
+    jpat = re.compile(
+        r'(<joint\b[^>]*\bname="' + re.escape(joint_name)
+        + r'"[^>]*>)(.*?)(</joint>)', re.DOTALL)
+    m = jpat.search(txt)
+    if not m:
+        return 0
+    head, body, tail = m.group(1), m.group(2), m.group(3)
+
+    def neg_vec(s):
+        out = []
+        for tok in s.split():
+            try:
+                out.append(_fmt_num(-float(tok)))
+            except ValueError:
+                return s
+        return " ".join(out)
+
+    axm = re.search(r'<axis\b[^>]*\bxyz="([^"]*)"', body)
+    if axm is None:
+        return 0                                  # no axis -> nothing to flip
+    try:
+        if not any(float(x) for x in axm.group(1).split()):
+            return 0                              # zero axis (fixed) -> skip
+    except ValueError:
+        return 0
+    body, na = re.subn(
+        r'(<axis\b[^>]*\bxyz=")([^"]*)(")',
+        lambda mm: mm.group(1) + neg_vec(mm.group(2)) + mm.group(3), body)
+
+    def lim_repl(mm):                             # lower' = -upper, upper' = -lower
+        seg = mm.group(0)
+        lo = re.search(r'\blower="([^"]*)"', seg)
+        hi = re.search(r'\bupper="([^"]*)"', seg)
+        if lo and hi:
+            lov, hiv = float(lo.group(1)), float(hi.group(1))
+            seg = re.sub(r'\blower="[^"]*"', f'lower="{_fmt_num(-hiv)}"', seg)
+            seg = re.sub(r'\bupper="[^"]*"', f'upper="{_fmt_num(-lov)}"', seg)
+        elif lo:
+            seg = re.sub(r'\blower="[^"]*"',
+                         f'lower="{_fmt_num(-float(lo.group(1)))}"', seg)
+        elif hi:
+            seg = re.sub(r'\bupper="[^"]*"',
+                         f'upper="{_fmt_num(-float(hi.group(1)))}"', seg)
+        return seg
+    body = re.sub(r'<limit\b[^>]*?>', lim_repl, body)
+
+    def mim_repl(mm):                             # follower stays in phase: negate both
+        seg = mm.group(0)
+        for attr in ("multiplier", "offset"):
+            a = re.search(rf'\b{attr}="([^"]*)"', seg)
+            if a:
+                seg = re.sub(rf'\b{attr}="[^"]*"',
+                             f'{attr}="{_fmt_num(-float(a.group(1)))}"', seg)
+        return seg
+    body = re.sub(r'<mimic\b[^>]*?>', mim_repl, body)
+
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(txt[:m.start()] + head + body + tail + txt[m.end():])
+    return na
+
+
 def _urdf_names(pkg_dir, urdf_rel, tag):
     """Current ``<link>``/``<joint>`` names in the served URDF (the source of
     truth for what's on screen), for the rename collision check + root detect."""
@@ -1386,6 +1463,28 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                         return self._send_json(
                             {"error": f"rebuild failed: {e}"}, 500)
                 print(f"[sw2robot.web] set_limits: {len(applied)} applied, "
+                      f"{len(missed)} not matched")
+                return self._send_json({"applied": applied, "missed": missed})
+            if parsed.path == "/api/set_axis":
+                # reverse one or more joints' + direction directly in the served
+                # URDF (axis negated, limits swapped, mimic negated; frame kept).
+                # joints: [<urdf joint name>, ...].  Self-inverse; no rebuild, so
+                # it works on any loaded URDF and the export reads it as-is.
+                cls = type(self)
+                n = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(n) or b"{}")
+                names = body.get("joints") or []
+                if not cls.pkg_dir:
+                    return self._send_json({"error": "no package open"}, 400)
+                applied, missed = [], []
+                for jn in names:
+                    try:
+                        k = _flip_axis_in_urdf(cls.pkg_dir, cls.urdf_rel, jn)
+                    except Exception as e:
+                        return self._send_json(
+                            {"error": f"flip failed: {e}"}, 500)
+                    (applied if k else missed).append(jn)
+                print(f"[sw2robot.web] set_axis: {len(applied)} flipped, "
                       f"{len(missed)} not matched")
                 return self._send_json({"applied": applied, "missed": missed})
             if parsed.path == "/api/set_types":

@@ -322,6 +322,8 @@
       <button id="axes" class="toggle active" data-i18n-title="t.axes"
               title="joint axes">axes
       </button>
+      <button id="dirs" class="toggle" data-i18n-title="t.dirs"
+              title="show the + direction arrow + rotation arc on every joint (otherwise only on hover/selection)">↻ dir</button>
       <button id="origin" class="toggle active" data-i18n-title="t.origin"
               title="root origin triad">
         origin</button>
@@ -814,6 +816,22 @@ skrobot / native-mesh consumers (not RViz-loadable)">⬇ glb</button></a>
     'types.applyFail': { en: a => `apply failed: ${a.e}`, ja: a => `適用に失敗: ${a.e}` },
     'jtype.toggle': { en: a => `${a.joint}: ${a.from} → ${a.to} (t)`,
                       ja: a => `${a.joint}: ${a.from} → ${a.to} に変更 (t)` },
+    'flip.applying': { en: a => `reversing ${a.joint} …`,
+                       ja: a => `${a.joint} の＋方向を反転中 …` },
+    'flip.done': { en: a => `${a.joint}: + direction reversed (axis negated, limits swapped) ✓`,
+                   ja: a => `${a.joint}: ＋方向を反転（軸の符号反転・リミット入替）✓` },
+    'flip.fail': { en: a => `flip failed: ${a.e}`, ja: a => `反転に失敗: ${a.e}` },
+    'flip.noTarget': { en: 'press f with a joint selected (or hover its axis) to reverse its + direction',
+                       ja: 'f キーは関節を選択（または軸をホバー）してから。＋方向を反転します' },
+    'flip.notMovable': { en: 'a fixed joint has no + direction to flip',
+                         ja: '固定関節には反転する＋方向がありません' },
+    'flip.noneMatched': { en: 'joint not found in the served URDF',
+                          ja: '配信URDFに該当関節が見つかりません' },
+    'jp.flip': { en: '⇄ flip + direction', ja: '⇄ ＋方向を反転' },
+    'jp.flipTitle': { en: 'reverse this joint’s + direction: negate the axis and '
+                        + 'swap/negate the limits (physical range kept). Press again to undo.',
+                      ja: 'この関節の＋方向を反転：軸の符号を反転しリミットを入替（可動範囲は保持）。'
+                        + 'もう一度押すと元に戻ります' },
     'jtype.noTarget': { en: 'press t with a joint selected (or hover its axis) to toggle fixed/revolute',
                         ja: 't で fixed/revolute を切替: 関節を選択（または軸にホバー）してから押してください' },
     // auto limits
@@ -997,6 +1015,10 @@ skrobot / native-mesh consumers (not RViz-loadable)">⬇ glb</button></a>
     'ui.title': { en: 'sw2robot viewer', ja: 'sw2robot ビューア' },
     't.iso': { en: 'isometric', ja: '等角投影' },
     't.axes': { en: 'joint axes', ja: '関節軸' },
+    't.dirs': { en: 'show + direction (arrow + rotation arc) on every joint; '
+                  + 'otherwise it appears only on hover / selection',
+                ja: '全関節に＋方向（矢印＋回転弧）を常時表示。'
+                  + 'OFFのときはホバー／選択した関節のみ表示' },
     't.origin': { en: 'root origin triad', ja: 'ルート原点の座標軸' },
     't.tf': { en: 'TF view: frame triads at every link + parent lines, meshes dimmed',
               ja: 'TF 表示: 各リンクにフレーム軸 + 親への線、メッシュを淡色化' },
@@ -1881,7 +1903,14 @@ viewer.addEventListener('angle-change', e => {
 // children of the joint Object3D, so they follow FK for free ---------------
 const AXIS_COLORS = { revolute: 0xff5050, continuous: 0xffa050,
                       prismatic: 0x4090ff, mimic: 0xb38cff };
+// rotation-arc accent: same hue family as the axis but brighter, so the joint
+// type stays readable from the axis colour while the + turn direction pops
+const ARC_COLORS  = { revolute: 0xffae1a, continuous: 0xffe000,
+                      prismatic: 0x4090ff, mimic: 0xff5ecb };
 const axisMarkers = new Map();   // joint name -> {mesh, baseColor}
+const axisGlyphs = new Map();    // joint name -> Group (arrow + rotation arc),
+                                 // shown for every MOVABLE joint, toggled with
+                                 // the rod; tracks its rod's visibility
 
 // bounding box of ONE link's own meshes (stop at nested joints, so a serial
 // chain doesn't inflate the box) -- used to size each axis to its own link
@@ -1946,15 +1975,113 @@ function makeAxisMesh(j, axis, { ghost = false } = {}) {
   return { mesh, baseColor: color, ghost };
 }
 
+// span of the CHILD link's meshes along the axis line + a girth estimate, in
+// joint space (shared by the rod and the rich glyph so they size alike).
+function axisSpan(j, axis) {
+  const childLink = j.children.find(c => c.isURDFLink
+                                         || c.type === 'URDFLink');
+  const box = ownLinkBox(childLink, new THREE.Box3());
+  let tMin = -0.025, tMax = 0.025, girth = 0.05;
+  if (!box.isEmpty()) {
+    const inv = j.matrixWorld.clone().invert();
+    tMin = Infinity; tMax = -Infinity;
+    for (const xi of ['min', 'max']) {
+      for (const yi of ['min', 'max']) {
+        for (const zi of ['min', 'max']) {
+          const t = new THREE.Vector3(box[xi].x, box[yi].y, box[zi].z)
+            .applyMatrix4(inv).dot(axis);
+          tMin = Math.min(tMin, t); tMax = Math.max(tMax, t);
+        }
+      }
+    }
+    girth = box.getSize(new THREE.Vector3()).length();
+  }
+  return { tMin, tMax, girth };
+}
+
+// Rich directional glyph for the SELECTED joint: a cone arrowhead on the +axis
+// end (= +translation for prismatic, the +rotation axis for rotary) and, for
+// rotary joints, a curved arc + arrowhead sweeping the right-hand-rule positive
+// turn (so it reads as "joint > 0 spins this way").  A child of the joint
+// Object3D, so it follows FK like the rod.  Returns the Group (caller disposes).
+function makeAxisGlyph(j, axis) {
+  const { tMin, tMax, girth } = axisSpan(j, axis);
+  const margin = Math.max((tMax - tMin) * 0.18, 0.008);
+  const tipT = tMax + margin;                 // +axis end of the rod
+  const span = (tMax - tMin) + 2 * margin;
+  const key = j.mimicJoint ? 'mimic' : j.jointType;
+  const axisColor = AXIS_COLORS[key] ?? 0xcccccc;   // = the rod's type colour
+  const arcColor = ARC_COLORS[key] ?? axisColor;    // brighter same-hue accent
+  // lit (Phong) so the cone + tube pick up shading and a glossy highlight and
+  // read as solid 3D instead of a flat sticker; a touch of emissive keeps the
+  // colour vivid under the bright ambient, depthTest off keeps them on top
+  const glyphMat = c => new THREE.MeshPhongMaterial({
+    color: c, emissive: c, emissiveIntensity: 0.18,
+    specular: 0x555555, shininess: 80, depthTest: false });
+  const axisMat = glyphMat(axisColor);
+  const arcMat = glyphMat(arcColor);
+  // sized to read clearly against the link mesh: a fat arrowhead and arc that
+  // are noticeably bolder than the thin overview rod
+  const coneLen = Math.min(Math.max(span * 0.18, 0.01), 0.05);
+  const coneR = Math.min(Math.max(girth * 0.045, 0.003), 0.014);
+  const g = new THREE.Group();
+
+  // arrowhead on the +axis end -- shows which way the rod's + direction points
+  const cone = new THREE.Mesh(new THREE.ConeGeometry(coneR, coneLen, 16), axisMat);
+  cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), axis);
+  cone.position.copy(axis.clone().multiplyScalar(tipT + coneLen / 2));
+  g.add(cone);
+
+  // rotary joints: an arc curling in the positive (right-hand-rule) direction
+  if (j.jointType === 'revolute' || j.jointType === 'continuous') {
+    const radius = Math.min(Math.max(girth * 0.32, 0.018), 0.075);
+    // (u, v) is a right-handed basis about `axis`: rotating u by +90deg = v, so
+    // sweeping angle 0 -> + goes u -> v = the joint's positive rotation.
+    const ref = Math.abs(axis.x) < 0.9 ? new THREE.Vector3(1, 0, 0)
+                                       : new THREE.Vector3(0, 0, 1);
+    const u = new THREE.Vector3().crossVectors(axis, ref).normalize();
+    const v = new THREE.Vector3().crossVectors(axis, u).normalize();
+    const a0 = -Math.PI * 0.5, a1 = Math.PI;     // ~270deg sweep, CCW about axis
+    const N = 56;
+    const pts = [];
+    for (let i = 0; i <= N; i++) {
+      const a = a0 + (a1 - a0) * i / N;
+      pts.push(u.clone().multiplyScalar(Math.cos(a) * radius)
+        .add(v.clone().multiplyScalar(Math.sin(a) * radius)));
+    }
+    const tubeR = Math.min(Math.max(girth * 0.015, 0.0014), 0.006);
+    g.add(new THREE.Mesh(new THREE.TubeGeometry(
+      new THREE.CatmullRomCurve3(pts), N, tubeR, 10, false), arcMat));
+    // arrowhead at the leading (a1) end, pointing along +d/da (the + turn)
+    const tip = u.clone().multiplyScalar(Math.cos(a1) * radius)
+      .add(v.clone().multiplyScalar(Math.sin(a1) * radius));
+    const tan = u.clone().multiplyScalar(-Math.sin(a1))
+      .add(v.clone().multiplyScalar(Math.cos(a1))).normalize();
+    const head = new THREE.Mesh(
+      new THREE.ConeGeometry(coneR * 0.95, coneLen * 0.95, 14), arcMat);
+    head.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), tan);
+    head.position.copy(tip);
+    g.add(head);
+  }
+  markHelper(g);
+  g.traverse(o => { o.renderOrder = 1000; });   // after the rod, always on top
+  j.add(g);
+  return g;
+}
+
 function addAxisMarkers(robot) {
   axisMarkers.forEach(m => m.mesh.removeFromParent());
+  axisGlyphs.forEach(g => g.removeFromParent());
   axisMarkers.clear();
+  axisGlyphs.clear();
   robot.updateMatrixWorld(true);
   let ghosts = 0;
   for (const j of Object.values(robot.joints)) {
     if (j.jointType !== 'fixed' && j.axis) {
+      const ax = j.axis.clone().normalize();
       axisMemory.set(j.name, j.axis.toArray());
-      axisMarkers.set(j.name, makeAxisMesh(j, j.axis.clone().normalize()));
+      axisMarkers.set(j.name, makeAxisMesh(j, ax));
+      axisGlyphs.set(j.name, makeAxisGlyph(j, ax));   // arrow + arc, always-on
       continue;
     }
     // fixed: ghost axis from this session's memory, or from an <axis> tag
@@ -1979,17 +2106,31 @@ function addAxisMarkers(robot) {
 }
 
 const axesBtn = document.getElementById('axes');
+const dirsBtn = document.getElementById('dirs');
 const originBtn = document.getElementById('origin');
 const axesOn = () => axesBtn.classList.contains('active');
+const dirsOn = () => dirsBtn.classList.contains('active');
 const originOn = () => originBtn.classList.contains('active');
 
 function setAxesVisible(on) {
   // keep the selected link's joint axis shown even with the global toggle off
   axisMarkers.forEach((m, name) => {
     m.mesh.visible = (on && !m.ghost) || name === selAxisJoint;
+    // the rich glyph (arrow + arc): on every joint when the 'dir' toggle is on,
+    // else only on the hovered / selected joint (cluttered shown everywhere)
+    const gl = axisGlyphs.get(name);
+    if (gl) { gl.visible = dirsOn() || name === selAxisJoint; }
   });
   viewer.redraw();
 }
+// the 'dir' toggle flips between always-on-everywhere and hover/selection-only
+dirsBtn.addEventListener('click', () => {
+  dirsBtn.classList.toggle('active');
+  axisGlyphs.forEach((gl, name) => {
+    gl.visible = dirsOn() || name === selAxisJoint;
+  });
+  viewer.redraw();
+});
 axesBtn.addEventListener('click', () => {
   setAxesVisible(axesBtn.classList.toggle('active'));
 });
@@ -2592,18 +2733,25 @@ function _markerRestVisible(name, m) {
   if (name === selAxisJoint) { return true; }
   return m.ghost ? false : axesOn();
 }
-// reveal the selected link's joint axis (and restore the previously shown one)
+// reveal the selected link's joint axis (and restore the previously shown one).
+// The rod + its always-on glyph track visibility together.
 function revealSelectedJointAxis(linkName) {
   const prev = selAxisJoint;
   selAxisJoint = null;
   if (prev) {
     const pm = axisMarkers.get(prev);
     if (pm) { pm.mesh.visible = _markerRestVisible(prev, pm); }
+    const pg = axisGlyphs.get(prev);
+    if (pg) { pg.visible = false; }   // glyph rides hover/selection only
   }
   if (linkName) {
     const rec = [...rows.values()].find(r => r.child === linkName);
     const m = rec && axisMarkers.get(rec.joint.name);
-    if (m) { m.mesh.visible = true; selAxisJoint = rec.joint.name; }
+    if (m) {
+      m.mesh.visible = true; selAxisJoint = rec.joint.name;
+      const gl = axisGlyphs.get(rec.joint.name);
+      if (gl) { gl.visible = true; }
+    }
   }
   viewer.redraw();
 }
@@ -2723,7 +2871,11 @@ function jointPanelHtml(j, parentLink, childLink) {
       `</div>` +
       `<div class="jp-snaps">` +
         snaps.map(s => `<button data-v="${s}">${s}${um.unit}</button>`).join('') +
-      `</div>` + limRow;
+      `</div>` + limRow +
+      `<div class="jp-row jp-fliprow">` +
+        `<button class="jp-flip" title="${t('jp.flipTitle')}">` +
+        `${t('jp.flip')}</button>` +
+      `</div>`;
   } else if (mimic) {
     // read the live coupling from the URDF <mimic> element (the loader exposes
     // only the master link, not multiplier/offset)
@@ -2803,6 +2955,10 @@ function wireJointPanel(el, j) {
   }
   panel.querySelector('.jp-mim-unlink')?.addEventListener('click',
     () => clearMimic(childLink));
+
+  // ⇄ reverse this joint's + direction (axis negated, limits swapped)
+  panel.querySelector('.jp-flip')?.addEventListener('click', () =>
+    applyAxisFlip(j.name, childLink));
 
   const slider = panel.querySelector('.jp-slider');
   if (!slider) { return; }            // fixed / mimic: no angle control
@@ -3120,6 +3276,13 @@ function deleteSelectedSubtree() {
   setExclude({ names: comps, on: true }, t('del.deleting', { l, n }));
 }
 
+// the arrow + rotation arc clutters the view if shown on every joint at once,
+// so it rides hover (and selection): only the joint under the cursor gets it.
+function showJointGlyph(name, on) {
+  const gl = axisGlyphs.get(name);
+  if (gl) { gl.visible = on || name === selAxisJoint || dirsOn(); }
+}
+
 function highlightJoint(name, on) {
   const m = axisMarkers.get(name);
   if (m && m.ghost) {
@@ -3129,12 +3292,16 @@ function highlightJoint(name, on) {
     m.mesh.material.color.set(on ? 0xffe93d : m.baseColor);
     m.mesh.scale.set(on ? 2.0 : 1, 1, on ? 2.0 : 1);
   } else if (m) {
-    // show the axis while hovering even when the global toggle is off
+    // show the axis while hovering even when the global toggle is off.
+    // keep the rod its joint-type COLOUR (no yellow recolour): the +direction
+    // glyph that appears on hover is the signal, and a yellow rod just competes
+    // with it -- only thicken + solidify the rod a touch to locate it
     m.mesh.visible = on ? true : _markerRestVisible(name, m);
-    m.mesh.material.color.set(on ? 0xffe93d : m.baseColor);
+    m.mesh.material.color.set(m.baseColor);
     m.mesh.material.opacity = on ? 1.0 : 0.85;
-    m.mesh.scale.set(on ? 2.4 : 1, 1, on ? 2.4 : 1);
+    m.mesh.scale.set(on ? 1.8 : 1, 1, on ? 1.8 : 1);
   }
+  showJointGlyph(name, on);          // reveal the +direction glyph while hovering
   const rec = rows.get(name);
   if (rec) {
     rec.row.style.outline = on ? '1px solid #ffe93d' : '';
@@ -3145,10 +3312,15 @@ function highlightJoint(name, on) {
 // hovering the MODEL emphasises the joint axis -- only in pose mode, where it
 // signals "drag this to move the joint"; in orbit mode it would be a misleading
 // affordance.  (Sidebar-row hover still calls highlightJoint directly.)
+// pose mode: the full emphasis (rod brightens/fattens) signals "drag to move".
+// orbit mode: skip that affordance, but still reveal the informational
+// +direction glyph (arrow + arc) so hovering a joint reads its positive sense.
 viewer.addEventListener('joint-mouseover',
-  e => { if (poseDrag) { highlightJoint(e.detail, true); } });
+  e => { if (poseDrag) { highlightJoint(e.detail, true); }
+         else { showJointGlyph(e.detail, true); viewer.redraw(); } });
 viewer.addEventListener('joint-mouseout',
-  e => highlightJoint(e.detail, false));
+  e => { if (poseDrag) { highlightJoint(e.detail, false); }
+         else { showJointGlyph(e.detail, false); viewer.redraw(); } });
 
 // bulk select / set
 document.getElementById('selall').addEventListener('change', e => {
@@ -3260,6 +3432,41 @@ function toggleJointFixed() {
   log(t('jtype.toggle', { joint: rec.joint.name, from: cur, to: next }));
   applyTypeChanges([{ name: rec.joint.name, parent: rec.parent,
                       child: rec.child, type: next }]);
+}
+
+// reverse a joint's + direction: negate its axis AND swap/negate its limits,
+// patched straight into the served URDF (frame untouched; self-inverse -- press
+// again to revert).  No yaml rebuild, so it works on any loaded URDF and the
+// export reads it as-is.  Target = the selected link's joint, else the hovered
+// axis (mirrors `t`).
+async function applyAxisFlip(jointName, child) {
+  if (!currentInfo) { return; }
+  log(t('flip.applying', { joint: jointName }));
+  try {
+    const resp = await fetch('/api/set_axis', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ joints: [jointName] }) });
+    const r = await resp.json();
+    if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
+    if (!r.applied?.length) { log(t('flip.noneMatched'), 'err'); return; }
+    log(t('flip.done', { joint: jointName }), 'ok');
+    reselectAfterLoad = child;            // keep selection/panel after reload
+    loadRobot(currentInfo, { keepPose: true });
+  } catch (e) {
+    log(t('flip.fail', { e: e.message ?? e }), 'err');
+  }
+}
+
+function flipTargetJointAxis() {
+  let rec = null;
+  if (selectedLink) {
+    rec = [...rows.values()].find(r => r.child === selectedLink);
+  } else if (hoveredAxis) {
+    rec = rows.get(hoveredAxis);
+  }
+  if (!rec) { log(t('flip.noTarget'), 'wrn'); return; }
+  if (rec.joint.jointType === 'fixed') { log(t('flip.notMovable'), 'wrn'); return; }
+  applyAxisFlip(rec.joint.name, rec.child);
 }
 
 // ---- 🛠 auto joint limits via the self-collision sweep -------------------
@@ -4399,6 +4606,8 @@ window.addEventListener('keydown', ev => {
     deleteSelectedSubtree();            // remove the link + its whole subtree
   } else if ((ev.key === 't' || ev.key === 'T')) {
     toggleJointFixed();                 // fixed <-> revolute on selected/hovered
+  } else if ((ev.key === 'f' || ev.key === 'F')) {
+    flipTargetJointAxis();              // reverse + direction on selected/hovered
   } else if ((ev.key === 'm' || ev.key === 'M')) {
     enterMimicMode();                   // start mimic linking from the selection
   } else if (ev.key === '0' || ev.key === 'Home') {
@@ -4648,6 +4857,7 @@ function clearViewer() {
   tfBtn.classList.remove('active');
   tfNodes = [];                                  // gone with the robot tree
   axisMarkers.clear();                           // gone with the robot tree
+  axisGlyphs.clear();                            // gone with the robot tree
   clearTimeout(colPoll); colPoll = 0;            // stop self-collision polling
   colReady = false; colBusy = false; colQueued = false;
   removeLoadCover();
@@ -5273,6 +5483,9 @@ window.sw2robot = {
   boxSelected: () => [...boxSelected],
   bulkType: t => bulkSetType(t),
   select: n => selectLink(n),
+  axisGlyphs: () => [...axisGlyphs.entries()].map(([name, g]) => ({
+    name, visible: g.visible, children: g.children.length,
+    inScene: !!g.parent })),
   reRoot: l => reRoot(l),
   undo: () => doHistory('undo'),
   redo: () => doHistory('redo'),
