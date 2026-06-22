@@ -166,6 +166,46 @@ def test_unknown_link_raises(state):
         c.set_inertial(state, "nope", mass=1.0)
 
 
+def test_build_urdf_sanitize_false_preserves_unsafe_names(tmp_path):
+    """URDF-input mode keeps the user's own names verbatim (sanitize=False); the
+    CAD default (sanitize=True) would rewrite hyphen/dot names."""
+    urdf = ('<robot name="r"><link name="a-b"/><link name="c.d"/>'
+            '<joint name="j-1" type="fixed"><parent link="a-b"/>'
+            '<child link="c.d"/></joint></robot>')
+    p = tmp_path / "urdf" / "r.urdf"
+    p.parent.mkdir(parents=True)
+    p.write_text(urdf, encoding="utf-8")
+    st = c.load_module(str(p))
+
+    kept = [l.get("name") for l in ET.fromstring(c.build_urdf(st, sanitize=False))
+            .findall("link")]
+    assert "a-b" in kept and "c.d" in kept
+    cleaned = [l.get("name") for l in ET.fromstring(c.build_urdf(st, sanitize=True))
+               .findall("link")]
+    assert "a-b" not in cleaned and "c.d" not in cleaned
+
+
+def test_type_change_to_movable_adds_axis_and_limit(tmp_path):
+    """Changing a fixed joint to revolute must yield a VALID URDF: build_urdf
+    backfills the URDF-required <axis> and <limit> the edit didn't supply."""
+    urdf = ('<robot name="r"><link name="a"/><link name="b"/>'
+            '<joint name="j" type="fixed"><parent link="a"/>'
+            '<child link="b"/></joint></robot>')
+    p = tmp_path / "urdf" / "r.urdf"
+    p.parent.mkdir(parents=True)
+    p.write_text(urdf, encoding="utf-8")
+    st = c.load_module(str(p))
+    c.set_joint_type(st, "j", "revolute")
+    j = next(x for x in ET.fromstring(c.build_urdf(st, sanitize=False))
+             .findall("joint") if x.get("name") == "j")
+    assert j.get("type") == "revolute"
+    assert j.find("axis") is not None
+    lim = j.find("limit")
+    assert lim is not None
+    assert lim.get("effort") and lim.get("velocity")
+    assert lim.get("lower") and lim.get("upper")
+
+
 def test_no_link_edits_leaves_urdf_structurally_unchanged(state):
     """build_urdf with an empty link overlay must not invent <material> or change
     inertials -- the existing joint-only behaviour is preserved."""

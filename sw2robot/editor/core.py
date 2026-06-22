@@ -670,13 +670,16 @@ def _sanitize_urdf_names(root) -> None:
             mim.set("joint", jmap[mim.get("joint")])
 
 
-def build_urdf(state: RobotCompilerState) -> str:
+def build_urdf(state: RobotCompilerState, sanitize: bool = True) -> str:
     """The CAD URDF with the interactive overlay baked in -- per-joint (rename,
     limits, mimic, axis flip, joint type) AND per-link (colour, inertial) -- so
     the exported package and configs stay consistent.
 
-    Link/joint names are passed through :func:`_sanitize_urdf_names` last, so the
-    final URDF is guaranteed free of hyphens and other unsafe characters."""
+    With ``sanitize`` (default), link/joint names are passed through
+    :func:`_sanitize_urdf_names` last, so a CAD-derived URDF is guaranteed free
+    of hyphens and other unsafe characters.  Pass ``sanitize=False`` when editing
+    a URDF the user opened directly: its names are already its own contract (the
+    viewer shows them, edits reference them), so they must be preserved verbatim."""
     root = ET.fromstring(Path(state.urdf_path).read_text(encoding="utf-8"))
     renames = {j: e.rename for j, e in state.edits.items() if e.rename}
 
@@ -723,6 +726,20 @@ def build_urdf(state: RobotCompilerState) -> str:
             mim.set("joint", e.mimic_joint)
             mim.set("multiplier", f"{e.mimic_multiplier:g}")
             mim.set("offset", f"{e.mimic_offset:g}")
+        # a joint made movable (e.g. fixed -> revolute) must satisfy URDF's
+        # requirements: an <axis> and, for revolute/prismatic, a <limit>.  Add
+        # placeholders when the type edit didn't supply them, so the type change
+        # alone never yields an invalid URDF (the user refines limits afterwards).
+        ftype = je.get("type")
+        if ftype in ("revolute", "prismatic", "continuous") \
+                and je.find("axis") is None:
+            ET.SubElement(je, "axis").set("xyz", "0 0 1")
+        if ftype in ("revolute", "prismatic") and je.find("limit") is None:
+            lim = ET.SubElement(je, "limit")
+            lim.set("lower", "-3.14159" if ftype == "revolute" else "0")
+            lim.set("upper", "3.14159" if ftype == "revolute" else "0.1")
+            lim.set("effort", "10")
+            lim.set("velocity", "3.14")
 
     # repoint any mimic that referenced a now-renamed joint
     for je in root.findall("joint"):
@@ -742,7 +759,8 @@ def build_urdf(state: RobotCompilerState) -> str:
             _apply_inertial(le, led.mass, led.com, led.inertia)
 
     # final guarantee: no hyphens/spaces/etc. in any emitted link or joint name
-    _sanitize_urdf_names(root)
+    if sanitize:
+        _sanitize_urdf_names(root)
     return ET.tostring(root, encoding="unicode")
 
 

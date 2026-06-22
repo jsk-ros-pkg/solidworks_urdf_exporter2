@@ -80,6 +80,13 @@ class RobotCompilerState(BaseModel):
         e = self.edits.get(joint_name)
         return e.rename if (e and e.rename) else joint_name
 
+    def effective_type(self, joint: dict) -> str | None:
+        """The joint's type with the overlay's ``jtype`` override applied -- so a
+        joint made movable (or fixed) via :func:`core.set_joint_type` is treated
+        consistently by mimic validation and ``movable_joints``."""
+        e = self.edits.get(joint["name"])
+        return e.jtype if (e and e.jtype) else joint.get("type")
+
     def movable_joints(self) -> list[dict]:
         return [j for j in self.joints
-                if j.get("type") in ("revolute", "continuous", "prismatic")]
+                if self.effective_type(j) in ("revolute", "continuous", "prismatic")]
