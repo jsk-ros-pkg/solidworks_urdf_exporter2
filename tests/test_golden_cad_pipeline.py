@@ -22,10 +22,23 @@ To intentionally re-baseline after a deliberate output change, run with
 """
 
 import os
+import re
 import shutil
 from pathlib import Path
 
 import pytest
+
+# mass / CoM / inertia are recomputed by build() from the mesh (trimesh) -- they
+# are NOT what the edit-overlay refactor touches, and their exact values vary
+# with platform / optional-dep availability (scipy, the 3dxml loader).  Collapse
+# the <inertial> block so the golden stays stable and focuses on the edit-driven
+# structure (names / types / limits / axis / mimic).  The inertia maths has its
+# own tests (test_autoinit, test_sw_inertia).
+_INERTIAL = re.compile(r"<inertial>.*?</inertial>", re.DOTALL)
+
+
+def _normalize(urdf_text):
+    return _INERTIAL.sub("<inertial/>", urdf_text)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 GOLDEN = REPO_ROOT / "tests" / "golden"
@@ -55,8 +68,10 @@ def _fresh_pkg(tmp_path):
 
 
 def _assert_golden(name, actual):
-    """Compare ``actual`` text to ``tests/golden/<name>`` byte for byte (line
-    list, for a readable assert), or re-baseline it under SW2ROBOT_UPDATE_GOLDEN."""
+    """Compare ``actual`` (with its <inertial> blocks normalized away) to
+    ``tests/golden/<name>`` line for line, or re-baseline under
+    SW2ROBOT_UPDATE_GOLDEN."""
+    actual = _normalize(actual)
     golden = GOLDEN / name
     if os.environ.get("SW2ROBOT_UPDATE_GOLDEN"):
         golden.write_text(actual, encoding="utf-8")

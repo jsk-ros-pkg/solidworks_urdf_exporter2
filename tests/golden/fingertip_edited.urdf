@@ -13,11 +13,7 @@
         <mesh filename="../meshes/fingertip_back_1.3dxml"/>
       </geometry>
     </collision>
-    <inertial>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <mass value="0.1"/>
-      <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
-    </inertial>
+    <inertial/>
   </link>
   <link name="base_link">
     <visual>
@@ -32,11 +28,7 @@
         <mesh filename="../meshes/fingertip_front_2.3dxml"/>
       </geometry>
     </collision>
-    <inertial>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <mass value="0.1"/>
-      <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
-    </inertial>
+    <inertial/>
   </link>
   <link name="screwlock_male_hard_jointbase_v4_1">
     <visual>
@@ -51,11 +43,7 @@
         <mesh filename="../meshes/screwlock_male_hard_jointbase_v4_1.3dxml"/>
       </geometry>
     </collision>
-    <inertial>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <mass value="0.1"/>
-      <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
-    </inertial>
+    <inertial/>
   </link>
   <joint name="fingertip_front_2__screwlock_male_hard_jointbase_v4_1" type="revolute">
     <origin xyz="4.2862638e-18 0.0015 0.035" rpy="3.1415927 8.2450846e-17 8.2450846e-17"/>
