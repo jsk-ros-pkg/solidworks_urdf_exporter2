@@ -10,6 +10,7 @@ The CAD path is untouched and is guarded separately by the golden + e2e suites.
 """
 
 import json
+import re
 import shutil
 import threading
 import urllib.request
@@ -306,9 +307,17 @@ def test_package_uris_rewritten_for_viewer(tmp_path):
         info = _get_json(base, f"/api/open?path={pkg}")
         assert info["mode"] == "urdf"
         served = _get(base, info["urdf"])
-        assert 'filename="/pkg/meshes/part.stl"' in served
         assert "package://" not in served
-        code, _ = _get_status(base, "/pkg/meshes/part.stl")   # actually fetchable
+        # the rewritten mesh path is RELATIVE to the URDF url (that is how
+        # urdf-loaders resolves it), and resolving + normalizing it the way the
+        # browser does must land on the package-served path
+        fn = re.search(r'filename="([^"]+\.stl)"', served).group(1)
+        assert not fn.startswith("/")                  # relative, not absolute
+        import posixpath as _pp
+        urdf_url = info["urdf"]                         # e.g. /pkg/urdf/robot.urdf
+        resolved = _pp.normpath(_pp.join(_pp.dirname(urdf_url), fn))
+        assert resolved == "/pkg/meshes/part.stl", resolved
+        code, _ = _get_status(base, resolved)           # actually fetchable
         assert code == 200
     finally:
         httpd.shutdown()

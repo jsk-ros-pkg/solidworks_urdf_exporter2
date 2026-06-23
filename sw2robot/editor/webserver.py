@@ -270,13 +270,19 @@ def _um_joint_by_child(state, child):
     return next((j["name"] for j in state.joints if j["childLink"] == child), None)
 
 
-def _rewrite_package_urls(urdf_text):
-    """Rewrite mesh ``package://<pkg>/<rest>`` URIs to the server's ``/pkg/``
-    root (where the opened package is served) so the viewer can fetch them:
-    ``package://<pkg>/<rest>`` -> ``/pkg/<rest>``.  Applied ONLY to the URDF
-    served to the viewer in URDF-input mode -- the on-disk file (and therefore
-    the ROS export) keep their original ``package://`` references."""
-    return re.sub(r'(filename=")package://[^/"]+/', r'\1/pkg/', urdf_text)
+def _rewrite_package_urls(urdf_text, urdf_rel):
+    """Rewrite mesh ``package://<pkg>/<rest>`` URIs so the viewer can fetch them
+    from the package root (served at ``/pkg/``).  urdf-loaders resolves a mesh
+    path RELATIVE to the URDF's own URL, so emit ``<../ per dir>rest`` -- e.g. a
+    URDF served at ``/pkg/urdf/x.urdf`` gets ``../<rest>`` so the browser
+    normalizes ``/pkg/urdf/../<rest>`` -> ``/pkg/<rest>`` (the package root).
+    Layout-independent (depth derived from ``urdf_rel``).  Applied ONLY to the
+    URDF served to the viewer; the on-disk file (and the ROS export) keep their
+    original ``package://`` references."""
+    depth = len([s for s in posixpath.dirname(urdf_rel).split("/") if s])
+    prefix = "../" * depth
+    return re.sub(r'filename="package://[^/"]+/',
+                  lambda _m: f'filename="{prefix}', urdf_text)
 
 
 def _um_colors(state):
@@ -1823,7 +1829,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                         and not _cad_mode(cls.pkg_dir)):
                     from . import core
                     served = _rewrite_package_urls(
-                        core.build_urdf(_um["state"], sanitize=False))
+                        core.build_urdf(_um["state"], sanitize=False),
+                        cls.urdf_rel)
                     return self._send_bytes(served.encode("utf-8"),
                                             "application/xml")
                 full = self._resolve(cls.pkg_dir, rel)
