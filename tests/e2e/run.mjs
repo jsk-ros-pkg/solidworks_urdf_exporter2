@@ -86,11 +86,18 @@ const sel = await page.evaluate(() => {
   return { bar: document.getElementById('selbar').style.display === 'flex',
            shown: r.width > 50 && r.height > 30,
            x: Math.round(r.x), y: Math.round(r.y),
-           text: li.textContent.length };
+           text: li.textContent.length,
+           // the card must be interactive so it can SCROLL to controls below the
+           // fold (a tall per-link panel) -- pointer-events:none let scroll pass
+           // through to the 3D view, stranding the colour/inertial editors
+           pe: getComputedStyle(li).pointerEvents,
+           overflow: getComputedStyle(li).overflowY };
 });
 check('select: selbar visible', sel.bar);
 check('select: info card rendered top-left', sel.shown && sel.x < 50 && sel.y < 200,
       `rect=(${sel.x},${sel.y}) chars=${sel.text}`);
+check('select: info card is scrollable (interactive)',
+      sel.pe === 'auto' && sel.overflow === 'auto', `pe=${sel.pe} of=${sel.overflow}`);
 
 // ---- 3. selbar eye toggles the link's meshes -------------------------------
 const meshState = () => page.evaluate(t => {

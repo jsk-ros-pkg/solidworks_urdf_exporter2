@@ -65,12 +65,12 @@
   #linkinfo { border: 1px solid #456; border-radius: 4px; padding: 6px 8px;
               background: #1c2228cc; font-size: 11.5px; display: none;
               position: absolute; top: 76px; left: 8px; z-index: 5;
-              width: 280px; max-height: 45%; overflow-y: auto;
-              /* let orbit/drag pass THROUGH the card; only its controls
-                 are interactive (a big opaque card was a dead zone) */
-              pointer-events: none; }
-  #linkinfo select, #linkinfo button, #linkinfo input,
-  #linkinfo .jp-rename { pointer-events: auto; }
+              width: 280px; max-height: calc(100vh - 92px); overflow-y: auto;
+              /* interactive so the card scrolls (a tall per-link panel -- joint
+                 editor + colour + inertial -- can exceed the viewport) and all
+                 its controls are clickable; orbit/drag still work everywhere
+                 outside this small top-left card */
+              pointer-events: auto; }
   #linkinfo h2 { font-size: 12px; margin: 0 0 4px; color: #7fd0ff; }
   #linkinfo table { border-collapse: collapse; width: 100%; }
   #linkinfo td { padding: 1px 4px 1px 0; vertical-align: top; }
