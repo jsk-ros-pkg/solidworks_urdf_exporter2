@@ -284,6 +284,330 @@ def test_live_urdf_reflects_edits_and_is_cache_stable(server):
     assert not os.path.basename(picked).startswith(".")
 
 
+_TRI_STL = ("solid t\n facet normal 0 0 1\n  outer loop\n"
+            "   vertex 0 0 0\n   vertex 0.1 0 0\n   vertex 0 0.1 0\n"
+            "  endloop\n endfacet\nendsolid t\n")
+
+
+def test_reexport_of_imported_package_urdf(tmp_path):
+    """Import a URDF that uses package:// mesh refs, then re-export it: the ROS
+    ZIP must actually CONTAIN the converted meshes and point at the NEW package
+    (regression: package:// refs were dropped -> no meshes, stale refs)."""
+    import io
+    import zipfile
+
+    import trimesh
+
+    from sw2robot.editor import webserver
+
+    pkg = tmp_path / "oldpkg"      # dir name == the self-ref package name
+    (pkg / "urdf").mkdir(parents=True)
+    (pkg / "meshes").mkdir()
+    # feetech-style meshes: a .dae visual + a .stl collision, plus a .stl-only
+    # link to exercise BOTH passthrough (same format) and conversion (.stl->.dae)
+    (pkg / "meshes" / "part.stl").write_text(_TRI_STL, encoding="utf-8")
+    (pkg / "meshes" / "part.dae").write_bytes(
+        trimesh.creation.box((0.1, 0.1, 0.1)).export(file_type="dae"))
+    # refs use a DIFFERENT package name ('oldpkg') so the rewrite is observable
+    (pkg / "urdf" / "robot.urdf").write_text(
+        '<?xml version="1.0"?><robot name="robot">'
+        '<link name="base_link">'
+        '<visual><geometry>'
+        '<mesh filename="package://oldpkg/meshes/part.dae"/></geometry></visual>'
+        '<collision><geometry>'
+        '<mesh filename="package://oldpkg/meshes/part.stl"/></geometry></collision>'
+        '</link>'
+        '<link name="tip">'
+        '<visual><geometry>'
+        '<mesh filename="package://oldpkg/meshes/part.stl"/></geometry></visual>'
+        '</link>'
+        '<joint name="j" type="fixed"><parent link="base_link"/>'
+        '<child link="tip"/></joint>'
+        '</robot>', encoding="utf-8")
+
+    httpd, port = webserver._bind_free_port(webserver._Handler, _free_port())
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{port}"
+    try:
+        assert _get_json(base, f"/api/open?path={pkg}")["mode"] == "urdf"
+        code, data = _get_status(base, "/api/export/zip?ros=1&meshes=dae")
+        assert code == 200, data[:300]
+        zf = zipfile.ZipFile(io.BytesIO(data))
+        names = zf.namelist()
+        # the meshes are actually shipped: .dae visual (passthrough + the
+        # .stl->.dae conversion) and the .stl collision (passthrough)
+        assert "robot_description/meshes/part.dae" in names, names
+        assert "robot_description/meshes/part.stl" in names, names
+        # the exported URDF points at the NEW package, not the stale 'oldpkg'
+        urdf = zf.read(next(n for n in names if n.endswith(".urdf"))).decode()
+        assert "package://oldpkg/" not in urdf
+        assert "package://robot_description/meshes/part.dae" in urdf
+        assert "package://robot_description/meshes/part.stl" in urdf
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        webserver._um["state"] = None
+
+
+def _start(pkg):
+    """Start a server on `pkg`, open it, return (base, httpd)."""
+    from sw2robot.editor import webserver
+    httpd, port = webserver._bind_free_port(webserver._Handler, _free_port())
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{port}"
+    _get_json(base, f"/api/open?path={pkg}")
+    return base, httpd
+
+
+def test_reexport_nested_mesh_path(tmp_path):
+    """A package:// ref into a SUBDIRECTORY (meshes/collision/part.stl) still
+    resolves to its source -- not flattened to meshes/part.stl and lost."""
+    import io
+    import zipfile
+
+    from sw2robot.editor import webserver
+
+    pkg = tmp_path / "oldpkg"      # dir name == the self-ref package name
+    (pkg / "urdf").mkdir(parents=True)
+    (pkg / "meshes" / "collision").mkdir(parents=True)
+    (pkg / "meshes" / "collision" / "part.stl").write_text(_TRI_STL, encoding="utf-8")
+    (pkg / "urdf" / "robot.urdf").write_text(
+        '<?xml version="1.0"?><robot name="robot"><link name="base_link">'
+        '<collision><geometry>'
+        '<mesh filename="package://oldpkg/meshes/collision/part.stl"/>'
+        '</geometry></collision></link></robot>', encoding="utf-8")
+    base, httpd = _start(pkg)
+    try:
+        code, data = _get_status(base, "/api/export/zip?ros=1&meshes=dae")
+        assert code == 200, data[:300]
+        names = zipfile.ZipFile(io.BytesIO(data)).namelist()
+        assert any(n.endswith("/meshes/part.stl") for n in names), names
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        webserver._um["state"] = None
+
+
+def test_reexport_glb_distinct_meshes_same_basename(tmp_path):
+    """visual part.dae + collision part.stl exported to glb must NOT collapse to
+    one part.glb -- distinct sources get distinct output names."""
+    import io
+    import zipfile
+
+    import trimesh
+
+    from sw2robot.editor import webserver
+
+    pkg = tmp_path / "oldpkg"      # dir name == the self-ref package name
+    (pkg / "urdf").mkdir(parents=True)
+    (pkg / "meshes").mkdir()
+    (pkg / "meshes" / "part.stl").write_text(_TRI_STL, encoding="utf-8")
+    (pkg / "meshes" / "part.dae").write_bytes(
+        trimesh.creation.box((0.1, 0.1, 0.1)).export(file_type="dae"))
+    (pkg / "urdf" / "robot.urdf").write_text(
+        '<?xml version="1.0"?><robot name="robot"><link name="base_link">'
+        '<visual><geometry>'
+        '<mesh filename="package://oldpkg/meshes/part.dae"/></geometry></visual>'
+        '<collision><geometry>'
+        '<mesh filename="package://oldpkg/meshes/part.stl"/></geometry></collision>'
+        '</link></robot>', encoding="utf-8")
+    base, httpd = _start(pkg)
+    try:
+        code, data = _get_status(base, "/api/export/zip?ros=1&meshes=glb")
+        assert code == 200, data[:300]
+        zf = zipfile.ZipFile(io.BytesIO(data))
+        glbs = [n for n in zf.namelist() if n.endswith(".glb")]
+        assert len(glbs) == 2, glbs            # both meshes shipped, not collapsed
+        urdf = zf.read(next(n for n in zf.namelist() if n.endswith(".urdf"))).decode()
+        # visual and collision reference DIFFERENT glb files
+        refs = re.findall(r'filename="([^"]+\.glb)"', urdf)
+        assert len(set(refs)) == 2, refs
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        webserver._um["state"] = None
+
+
+def test_reexport_keeps_external_package_refs(tmp_path):
+    """A mesh from ANOTHER ROS package (not vendored here) must be left untouched
+    -- export should not abort with 'no source mesh' on an external dependency."""
+    import io
+    import zipfile
+
+    from sw2robot.editor import webserver
+
+    pkg = tmp_path / "oldpkg"      # dir name == the self-ref package name
+    (pkg / "urdf").mkdir(parents=True)
+    (pkg / "meshes").mkdir()
+    (pkg / "meshes" / "own.stl").write_text(_TRI_STL, encoding="utf-8")
+    (pkg / "urdf" / "robot.urdf").write_text(
+        '<?xml version="1.0"?><robot name="robot"><link name="base_link">'
+        '<visual><geometry>'           # own mesh -> converted
+        '<mesh filename="package://oldpkg/meshes/own.stl"/></geometry></visual>'
+        '<collision><geometry>'        # external dep -> left as-is
+        '<mesh filename="package://common_meshes/meshes/shared.stl"/>'
+        '</geometry></collision></link></robot>', encoding="utf-8")
+    base, httpd = _start(pkg)
+    try:
+        code, data = _get_status(base, "/api/export/zip?ros=1&meshes=dae")
+        assert code == 200, data[:300]      # did NOT abort on the external ref
+        zf = zipfile.ZipFile(io.BytesIO(data))
+        urdf = zf.read(next(n for n in zf.namelist()
+                            if n.endswith(".urdf"))).decode()
+        # own mesh repackaged; external dep untouched
+        assert "package://robot_description/meshes/own.dae" in urdf
+        assert "package://common_meshes/meshes/shared.stl" in urdf
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        webserver._um["state"] = None
+
+
+def test_reexport_dae_sidecar_textures(tmp_path):
+    """A passthrough .dae that references a sidecar texture ships the texture in
+    the exported package too (otherwise the visual breaks)."""
+    import io
+    import zipfile
+
+    from sw2robot.editor import webserver
+
+    pkg = tmp_path / "oldpkg"
+    (pkg / "urdf").mkdir(parents=True)
+    (pkg / "meshes").mkdir()
+    (pkg / "meshes" / "tex.png").write_bytes(b"\x89PNG\r\n fake-image")
+    (pkg / "meshes" / "part.dae").write_text(
+        '<?xml version="1.0"?>'
+        '<COLLADA xmlns="http://www.collada.org/2005/11/COLLADASchema" '
+        'version="1.4.1"><library_images><image id="t">'
+        '<init_from>tex.png</init_from></image></library_images></COLLADA>',
+        encoding="utf-8")
+    (pkg / "urdf" / "robot.urdf").write_text(
+        '<?xml version="1.0"?><robot name="robot"><link name="base_link">'
+        '<visual><geometry>'
+        '<mesh filename="package://oldpkg/meshes/part.dae"/></geometry></visual>'
+        '</link></robot>', encoding="utf-8")
+    base, httpd = _start(pkg)
+    try:
+        code, data = _get_status(base, "/api/export/zip?ros=1&meshes=dae")
+        assert code == 200, data[:200]
+        names = zipfile.ZipFile(io.BytesIO(data)).namelist()
+        assert "robot_description/meshes/part.dae" in names, names
+        assert "robot_description/meshes/tex.png" in names, names   # sidecar shipped
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        webserver._um["state"] = None
+
+
+def test_export_recolors_mesh_by_link_name(tmp_path):
+    """A colour edit keyed by LINK name reaches the mesh converter even when the
+    link name differs from the mesh basename (the URDF-input keying)."""
+    import io
+    import zipfile
+
+    from sw2robot.editor import webserver
+
+    pkg = tmp_path / "oldpkg"
+    (pkg / "urdf").mkdir(parents=True)
+    (pkg / "meshes").mkdir()
+    (pkg / "meshes" / "chassis.stl").write_text(_TRI_STL, encoding="utf-8")
+    (pkg / "urdf" / "robot.urdf").write_text(             # link != mesh basename
+        '<?xml version="1.0"?><robot name="robot"><link name="base_link">'
+        '<visual><geometry>'
+        '<mesh filename="package://oldpkg/meshes/chassis.stl"/></geometry></visual>'
+        '</link></robot>', encoding="utf-8")
+
+    def _dae(base):
+        code, data = _get_status(base, "/api/export/zip?ros=1&meshes=dae")
+        assert code == 200, data[:200]
+        zf = zipfile.ZipFile(io.BytesIO(data))
+        return zf.read(next(n for n in zf.namelist()
+                            if n.endswith("chassis.dae")))
+
+    base, httpd = _start(pkg)
+    try:
+        plain = _dae(base)
+        _post(base, "/api/set_color", {"link": "base_link", "color": "#ff0000"})
+        coloured = _dae(base)
+        # the colour (keyed by the link name) changed the converted mesh
+        assert coloured != plain
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        webserver._um["state"] = None
+
+
+def test_export_shared_mesh_distinct_per_link_colors(tmp_path):
+    """Two links sharing ONE source mesh but with different colour edits export
+    as two distinct coloured meshes (the cache keys on colour)."""
+    import io
+    import zipfile
+
+    from sw2robot.editor import webserver
+
+    pkg = tmp_path / "oldpkg"
+    (pkg / "urdf").mkdir(parents=True)
+    (pkg / "meshes").mkdir()
+    (pkg / "meshes" / "shared.stl").write_text(_TRI_STL, encoding="utf-8")
+    mesh = '<mesh filename="package://oldpkg/meshes/shared.stl"/>'
+    (pkg / "urdf" / "robot.urdf").write_text(
+        f'<?xml version="1.0"?><robot name="robot">'
+        f'<link name="a"><visual><geometry>{mesh}</geometry></visual></link>'
+        f'<link name="b"><visual><geometry>{mesh}</geometry></visual></link>'
+        f'<joint name="j" type="fixed"><parent link="a"/><child link="b"/></joint>'
+        f'</robot>', encoding="utf-8")
+    base, httpd = _start(pkg)
+    try:
+        _post(base, "/api/set_color", {"link": "a", "color": "#ff0000"})
+        _post(base, "/api/set_color", {"link": "b", "color": "#0000ff"})
+        code, data = _get_status(base, "/api/export/zip?ros=1&meshes=dae")
+        assert code == 200, data[:200]
+        zf = zipfile.ZipFile(io.BytesIO(data))
+        daes = [n for n in zf.namelist() if n.endswith(".dae")]
+        assert len(daes) == 2, daes                 # two distinct coloured meshes
+        assert zf.read(daes[0]) != zf.read(daes[1])
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        webserver._um["state"] = None
+
+
+def test_reexport_owner_from_manifest_name(tmp_path):
+    """Own meshes are vendored when package.xml <name> matches the ref, even if
+    the containing FOLDER is named differently."""
+    import io
+    import zipfile
+
+    from sw2robot.editor import webserver
+
+    pkg = tmp_path / "weird_folder_name"          # folder != package name
+    (pkg / "urdf").mkdir(parents=True)
+    (pkg / "meshes").mkdir()
+    (pkg / "meshes" / "part.stl").write_text(_TRI_STL, encoding="utf-8")
+    (pkg / "package.xml").write_text(
+        '<?xml version="1.0"?><package format="2"><name>oldpkg</name></package>',
+        encoding="utf-8")
+    (pkg / "urdf" / "robot.urdf").write_text(
+        '<?xml version="1.0"?><robot name="robot"><link name="base_link">'
+        '<visual><geometry>'
+        '<mesh filename="package://oldpkg/meshes/part.stl"/></geometry></visual>'
+        '</link></robot>', encoding="utf-8")
+    base, httpd = _start(pkg)
+    try:
+        code, data = _get_status(base, "/api/export/zip?ros=1&meshes=dae")
+        assert code == 200, data[:300]
+        zf = zipfile.ZipFile(io.BytesIO(data))
+        assert "robot_description/meshes/part.dae" in zf.namelist()
+        urdf = zf.read(next(n for n in zf.namelist()
+                            if n.endswith(".urdf"))).decode()
+        assert "package://oldpkg/" not in urdf
+        assert "package://robot_description/meshes/part.dae" in urdf
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        webserver._um["state"] = None
+
+
 def test_package_uris_rewritten_for_viewer(tmp_path):
     """A URDF that references meshes via package:// is served to the viewer with
     /pkg/ paths (so the browser fetches them from the package server instead of

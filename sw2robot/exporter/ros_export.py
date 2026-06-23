@@ -35,12 +35,15 @@ from .urdf_writer import (
 )
 
 # extensions we convert; anything else (already .dae/.stl, abs URLs) is left alone
-_CONVERTIBLE = (".3dxml", ".glb")
+# source mesh formats we can load + reconvert: CAD output (.3dxml mm, .glb m)
+# plus the common URDF mesh formats (.stl/.dae/.obj, already in metres), so a
+# URDF opened for re-export ships as a normal <name>_description package too.
+_CONVERTIBLE = (".3dxml", ".glb", ".stl", ".dae", ".obj")
 
 
 def _load_mesh_metres(src):
-    """Load a ``.3dxml`` (mm) or ``.glb`` (m) mesh, flatten any scene to a single
-    geometry, and return it pinned to metres."""
+    """Load a mesh (``.3dxml`` is mm, everything else is already metres), flatten
+    any scene to a single geometry, and return it pinned to metres."""
     import trimesh
 
     loaded = trimesh.load(src)
@@ -165,26 +168,103 @@ def _collada_meshes(mesh):
     return out
 
 
-def _resolve_mesh(pkg_dir, ref):
+def _dae_sidecar_images(dae_path):
+    """Relative sidecar image paths a COLLADA ``.dae`` references via
+    ``<init_from>`` (textures), so a verbatim copy can ship them too.  Best
+    effort: ``[]`` on any parse trouble."""
+    try:
+        root = ET.parse(dae_path).getroot()
+    except Exception:
+        return []
+    out = []
+    for el in root.iter():
+        if not el.tag.endswith("init_from"):
+            continue
+        ref = (el.text or "").strip()
+        if not ref:                              # COLLADA 1.5 nests <ref>
+            child = next((c for c in el if c.tag.endswith("ref")), None)
+            ref = (child.text or "").strip() if child is not None else ""
+        ref = ref.replace("\\", "/")
+        if ref.startswith("file://"):
+            ref = ref[len("file://"):]
+        # only relative sidecars next to the mesh; skip absolute (incl. Windows
+        # drive), URL and parent-escaping refs
+        if (ref and "://" not in ref and not ref.startswith("/")
+                and not re.match(r"^[A-Za-z]:", ref) and ".." not in ref):
+            out.append(ref)
+    return out
+
+
+def _own_pkg_names(pkg_dir):
+    """The names by which the opened package may refer to its OWN meshes: the
+    ROS manifest ``<name>`` (authoritative) plus the directory basename (a
+    fallback / second accepted alias).  A ``package://<name>/...`` ref counts as
+    ours only when ``<name>`` is one of these."""
+    names = {os.path.basename(os.path.normpath(pkg_dir))}
+    mani = os.path.join(pkg_dir, "package.xml")
+    if os.path.exists(mani):
+        try:
+            n = ET.parse(mani).getroot().findtext("name")
+            if n and n.strip():
+                names.add(n.strip())
+        except Exception:
+            pass
+    return names
+
+
+def _resolve_mesh(pkg_dir, ref, own_pkgs=None):
     """``(base, source_path, ext)`` for a URDF mesh ref, or ``(None, ...)`` when it
     is not one of our convertible meshes; ``source_path`` is None if the file is
-    missing."""
-    if not ref or "://" in ref:
+    missing.
+
+    Resolve the ref to a path-within-the-package, preserving subdirectories:
+      - package://<pkg>/<rest>      -> <rest>  (a URDF opened for re-export)
+      - relative '../meshes/x.dae'  -> 'meshes/x.dae'  (the CAD working URDF)
+    Other schemes (http://, file://) are external -- left untouched.  A
+    ``package://<pkg>`` ref is only treated as ours when ``<pkg>`` is in
+    ``own_pkgs`` (the opened package's names); a ref to ANOTHER ROS package is an
+    external dependency and is left as-is even if a same-named file happens to
+    exist here.
+    """
+    if not ref:
         return None, None, None
-    base, ext = os.path.splitext(os.path.basename(ref))
+    ref = ref.replace("\\", "/")           # tolerate Windows-style separators
+    is_pkg = "://" in ref
+    root = os.path.normpath(pkg_dir)
+    if is_pkg:
+        if not ref.startswith("package://"):
+            return None, None, None
+        ref_pkg, _, rel = ref.split("://", 1)[1].partition("/")
+        if own_pkgs is not None and ref_pkg not in own_pkgs:
+            return None, None, None        # another package's mesh -- leave it
+        base_dir = root                    # package:// is relative to the pkg root
+    else:
+        if ref.startswith("/") or re.match(r"^[A-Za-z]:", ref):
+            return None, None, None        # absolute path -> external, leave it
+        rel = ref                          # keep '../' so the escape check is real
+        base_dir = os.path.join(root, "urdf")   # the CAD/working URDF lives here
+    base, ext = os.path.splitext(os.path.basename(rel))
     if ext.lower() not in _CONVERTIBLE:
         return None, None, None
-    meshes = os.path.join(pkg_dir, "meshes")
-    src = os.path.join(meshes, base + ext)
+    src = os.path.normpath(os.path.join(base_dir, *rel.split("/")))
+    try:
+        escapes = os.path.commonpath([root, src]) != root
+    except ValueError:                     # different drive (Windows) -> external
+        escapes = True
+    if escapes:
+        return None, None, None            # a '..' escaping the package -> external
     if not os.path.exists(src):
         # the URDF may name one extension while only the other was produced
         # (a sub-assembly composed to .glb, say); accept whichever exists
+        stem = os.path.splitext(src)[0]
         for alt_ext in _CONVERTIBLE:
-            alt = os.path.join(meshes, base + alt_ext)
-            if os.path.exists(alt):
-                src = alt
+            if os.path.exists(stem + alt_ext):
+                src = stem + alt_ext
                 break
         else:
+            # external refs were already returned above; reaching here means an
+            # OWN mesh (relative, or package:// matching own_pkg) is missing -- a
+            # real error the caller surfaces as 'no source mesh'
             return base, None, ext
     return base, src, ext
 
@@ -261,39 +341,75 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
         raise ValueError(f"unsupported ros_version: {ros_version}")
     pkg = ros_pkg_name(robot_name, pkg_name)
     urdf_stem = ros_urdf_stem(pkg, urdf_name)
+    # the opened package's own name(s) -- only package:// refs to one of these
+    # are vendored/repointed; refs to other ROS packages are left untouched
+    own_pkgs = _own_pkg_names(pkg_dir)
     urdf_path = os.path.join(pkg_dir, "urdf", robot_name + ".urdf")
     root = ET.parse(urdf_path).getroot()
     colors = colors or {}
 
     files = []
-    done = {}          # (base, fmt) -> arcname  (instances + visual/collision share)
+    # keyed by the SOURCE mesh (+fmt), so one source converted once is reused,
+    # but two DISTINCT sources that happen to share a basename get distinct output
+    # names instead of silently overwriting each other (e.g. a visual part.dae and
+    # a collision part.stl both targeting part.glb).
+    done = {}          # (abs_src, fmt, color) -> output mesh name ('part.glb')
+    used_names = set()
     errors = []
 
-    def _emit(base, src, fmt):
-        if (base, fmt) in done:
-            return
+    def _emit(base, src, fmt, color):
+        # key on colour too: the same source reused by two links with DIFFERENT
+        # colour overrides must emit two distinct (differently-coloured) meshes
+        key = (os.path.abspath(src), fmt, color)
+        if key in done:
+            return done[key]
+        name, i = f"{base}.{fmt}", 1
+        while name in used_names:              # distinct source, same basename
+            i += 1
+            name = f"{base}_{i}.{fmt}"
         try:
-            data = _CONVERT[fmt](src, color=colors.get(base))
+            if src.lower().endswith(f".{fmt}") and not color:
+                # already the target format and no colour override: copy the mesh
+                # verbatim (a URDF re-export shipping its own .dae/.stl) -- avoids
+                # a lossy + sometimes-failing trimesh round-trip
+                with open(src, "rb") as f:
+                    data = f.read()
+                if fmt == "dae":             # ship the .dae's sidecar textures too
+                    dae_dir = os.path.dirname(src)
+                    for rel in _dae_sidecar_images(src):
+                        img = os.path.normpath(os.path.join(dae_dir, rel))
+                        arc = f"{pkg}/meshes/{rel}"
+                        if os.path.exists(img) and arc not in used_names:
+                            with open(img, "rb") as f:
+                                files.append((arc, f.read()))
+                            used_names.add(arc)
+            else:
+                data = _CONVERT[fmt](src, color=color)
         except Exception as e:
             errors.append(f"{base}: {fmt} convert failed ({e!r})")
-            return
-        arc = f"{pkg}/meshes/{base}.{fmt}"
-        files.append((arc, data))
-        done[(base, fmt)] = arc
+            return None
+        used_names.add(name)
+        files.append((f"{pkg}/meshes/{name}", data))
+        done[key] = name
+        return name
 
     for link in root.findall("link"):
+        # colour overrides are keyed by LINK name in URDF-input mode and by the
+        # component/mesh basename in the CAD path -- accept either
+        link_color = colors.get(link.get("name"))
         for ctx, fmt in ctx_fmt:
             for block in link.findall(ctx):
                 for mesh in block.iter("mesh"):
-                    base, src, _ext = _resolve_mesh(pkg_dir, mesh.get("filename"))
+                    base, src, _ext = _resolve_mesh(pkg_dir, mesh.get("filename"),
+                                                    own_pkgs=own_pkgs)
                     if base is None:
                         continue           # not a convertible ref -- leave as-is
                     if src is None:
                         errors.append(f"no source mesh for '{base}'")
                         continue
-                    _emit(base, src, fmt)
-                    mesh.set("filename",
-                             f"package://{pkg}/meshes/{base}.{fmt}")
+                    name = _emit(base, src, fmt, link_color or colors.get(base))
+                    if name is not None:
+                        mesh.set("filename", f"package://{pkg}/meshes/{name}")
 
     if errors:
         raise RuntimeError("ROS description export failed: " + "; ".join(errors))
