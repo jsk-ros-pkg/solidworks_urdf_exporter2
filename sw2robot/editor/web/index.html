@@ -307,6 +307,23 @@
   <button id="backendReload" data-i18n="backend.reload"
           style="margin-left:12px">⟳ reload</button>
 </div>
+<!-- Self-update banner: shown when a newer GitHub Release exists.  Sits above
+     the backend-down banner so its "restarting…" message stays visible while
+     the server is briefly down mid-swap. -->
+<div id="updateBar" style="position:fixed;top:0;left:0;right:0;z-index:1001;
+     display:none;background:#1f4d2b;color:#fff;padding:8px 14px;font-size:13px;
+     text-align:center;box-shadow:0 2px 10px #0009">
+  <span id="updateMsg"></span>
+  <button id="updateNow" style="margin-left:12px"></button>
+  <a id="updateView" href="#" target="_blank" rel="noopener"
+     style="margin-left:8px;color:#bfe;text-decoration:underline"></a>
+  <button id="updateLater" style="margin-left:8px"></button>
+</div>
+<!-- Always-on version chip (bottom-right; bottom-left is the keycast overlay).
+     Click to re-check for updates. -->
+<div id="verChip" style="position:fixed;right:8px;bottom:6px;z-index:1000;
+     font-size:11px;color:#8aa;background:#0008;padding:2px 7px;border-radius:9px;
+     cursor:pointer;user-select:none;pointer-events:auto"></div>
 <div id="app">
   <div id="viewwrap">
     <urdf-manipulator id="viewer" up="Z" highlight-color="#ffb86b">
@@ -611,6 +628,23 @@ skrobot / native-mesh consumers (not RViz-loadable)">⬇ glb</button></a>
     'backend.down': { en: '⚠ Lost connection to the sw2robot server — it may have stopped. Restart it in the terminal, then reload.',
                       ja: '⚠ sw2robot サーバーに接続できません — 停止した可能性があります。ターミナルで再起動してから再読み込みしてください。' },
     'backend.reload': { en: '⟳ reload', ja: '⟳ 再読み込み' },
+    // self-update
+    'update.available': { en: a => `🔄 sw2robot ${a.v} is available (you have ${a.cur})`,
+                          ja: a => `🔄 sw2robot ${a.v} が利用可能です（現在 ${a.cur}）` },
+    'update.now': { en: 'Update now', ja: '今すぐ更新' },
+    'update.manual': { en: 'Open download page', ja: 'ダウンロードページを開く' },
+    'update.view': { en: 'Release notes', ja: 'リリースノート' },
+    'update.later': { en: 'Later', ja: 'あとで' },
+    'update.downloading': { en: a => `⬇ Downloading ${a.v} … ${a.pct}%`,
+                            ja: a => `⬇ ${a.v} をダウンロード中 … ${a.pct}%` },
+    'update.installing': { en: 'Installing & restarting …', ja: 'インストールして再起動中 …' },
+    'update.restarting': { en: '✓ Updated — the app is restarting; a new tab will open.',
+                           ja: '✓ 更新しました — アプリを再起動中です。新しいタブが開きます。' },
+    'update.failed': { en: a => `Update failed: ${a.e}`, ja: a => `更新に失敗: ${a.e}` },
+    'ver.current': { en: a => `v${a.v}`, ja: a => `v${a.v}` },
+    'ver.checking': { en: 'checking for updates…', ja: '更新を確認中…' },
+    'ver.latest': { en: 'up to date — click to re-check', ja: '最新です — クリックで再確認' },
+    'ver.update': { en: a => `update available: ${a.v}`, ja: a => `更新あり: ${a.v}` },
     'load.ok': { en: 'three.js + urdf-loader loaded ✓', ja: 'three.js + urdf-loader を読み込みました ✓' },
     'load.fail': { en: a => `CDN import failed: ${a.e}`, ja: a => `CDN の読み込みに失敗: ${a.e}` },
     'load.failHint': { en: '→ check internet access / proxy for unpkg.com, then reload',
@@ -1202,6 +1236,112 @@ skrobot / native-mesh consumers (not RViz-loadable)">⬇ glb</button></a>
   };
   const reloadBtn = document.getElementById('backendReload');
   if (reloadBtn) { reloadBtn.addEventListener('click', () => location.reload()); }
+
+  // --- self-update -----------------------------------------------------
+  // The editor ships as a single binary attached to a GitHub Release.  Ask the
+  // backend (which talks to the GitHub API) whether a newer one exists; if so,
+  // show a banner that downloads + swaps the running binary and relaunches.
+  // From a source checkout the backend reports frozen:false and "Update now"
+  // just opens the release page (there is nothing to swap).
+  (function setupUpdate() {
+    const bar = document.getElementById('updateBar');
+    const chip = document.getElementById('verChip');
+    const msg = document.getElementById('updateMsg');
+    const nowBtn = document.getElementById('updateNow');
+    const viewLink = document.getElementById('updateView');
+    const laterBtn = document.getElementById('updateLater');
+    let lastInfo = null;
+    let pollTimer = null;
+
+    function showBar(info) {
+      msg.textContent = t('update.available', { v: info.latest, cur: info.current });
+      nowBtn.textContent = info.frozen ? t('update.now') : t('update.manual');
+      nowBtn.style.display = ''; nowBtn.disabled = false;
+      viewLink.textContent = t('update.view');
+      viewLink.href = info.html_url; viewLink.style.display = '';
+      laterBtn.textContent = t('update.later'); laterBtn.style.display = '';
+      bar.style.display = 'block';
+    }
+
+    function setChip(info) {
+      if (!chip) { return; }
+      const v = (info && info.current) || '?';
+      chip.textContent = t('ver.current', { v });
+      if (info && info.update_available) {
+        chip.style.color = '#7fe6a0';
+        chip.title = t('ver.update', { v: info.latest });
+      } else {
+        chip.style.color = '#8aa';
+        chip.title = (info && info.error) ? info.error : t('ver.latest');
+      }
+    }
+
+    async function check(force) {
+      try {
+        const info = await (await fetch('/api/version' + (force ? '?force=1' : '')))
+          .json();
+        lastInfo = info;
+        setChip(info);
+        if (info.update_available) { showBar(info); }
+        return info;
+      } catch (e) { return null; }   // offline / server down: stay quiet
+    }
+
+    async function apply() {
+      const info = lastInfo;
+      if (!info) { return; }
+      if (!info.frozen) {            // source checkout -> just open the page
+        window.open(info.html_url, '_blank', 'noopener'); return;
+      }
+      nowBtn.disabled = true;
+      try {
+        const r = await (await fetch('/api/update/apply', { method: 'POST' })).json();
+        if (!r.ok) {
+          msg.textContent = t('update.failed', { e: r.error || '?' });
+          nowBtn.disabled = false; return;
+        }
+      } catch (e) {
+        msg.textContent = t('update.failed', { e: String(e) });
+        nowBtn.disabled = false; return;
+      }
+      poll();
+    }
+
+    function poll() {
+      clearTimeout(pollTimer);
+      pollTimer = setTimeout(async () => {
+        let s;
+        try { s = await (await fetch('/api/update/status')).json(); }
+        catch (e) { poll(); return; }   // server may be mid-restart -- keep trying
+        nowBtn.style.display = 'none';
+        viewLink.style.display = 'none';
+        laterBtn.style.display = 'none';
+        if (s.state === 'downloading') {
+          msg.textContent = t('update.downloading',
+            { v: s.version || '', pct: s.pct || 0 });
+          poll();
+        } else if (s.state === 'installing') {
+          msg.textContent = t('update.installing'); poll();
+        } else if (s.state === 'restarting') {
+          msg.textContent = t('update.restarting');
+          // the old server is exiting; the relaunched instance rebinds the port
+          // (and opens its own tab).  Reload to reconnect to the new version.
+          setTimeout(() => location.reload(), 4000);
+        } else if (s.state === 'error') {
+          msg.textContent = t('update.failed', { e: s.error || '?' });
+          nowBtn.style.display = ''; nowBtn.disabled = false;
+          laterBtn.style.display = '';
+        } else { poll(); }
+      }, 600);
+    }
+
+    nowBtn.addEventListener('click', apply);
+    laterBtn.addEventListener('click', () => { bar.style.display = 'none'; });
+    if (chip) {
+      chip.addEventListener('click', () => { chip.title = t('ver.checking'); check(true); });
+    }
+    check(false);
+  })();
 
   window.addEventListener('error', e =>
     log(t('boot.jsError', { msg: e.message,

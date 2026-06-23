@@ -1586,6 +1586,15 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 return self._send_json(self._info())
             if path == "/api/list":
                 return self._send_json(_list_packages(cls.root_dir))
+            if path == "/api/version":
+                # current build vs the latest GitHub Release (cached; ?force=1
+                # re-checks).  Drives the in-browser update banner / version chip.
+                from . import update
+                return self._send_json(
+                    update.check_for_update(force="force" in query))
+            if path == "/api/update/status":
+                from . import update
+                return self._send_json(update.update_status())
             if path == "/api/recent":
                 from . import core
                 return self._send_json(core.sw_recent_assemblies())
@@ -2697,6 +2706,15 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 return self._send_json(
                     {"done": src, "label": label,
                      "undo": len(h["undo"]), "redo": len(h["redo"])})
+            if parsed.path == "/api/update/apply":
+                # download the latest Release asset, swap the running binary and
+                # relaunch (frozen build only).  Returns immediately; the UI
+                # polls /api/update/status for progress.
+                from . import update
+                n = int(self.headers.get("Content-Length", 0))
+                if n:
+                    self.rfile.read(n)          # drain body so keep-alive survives
+                return self._send_json(update.start_update())
             return self.send_error(404)
         except BrokenPipeError:
             pass
@@ -2733,6 +2751,10 @@ def serve(package_dir=None, root_dir=None, port=8090, open_browser=True):
     # reap any private SolidWorks instance a PREVIOUS run spawned and leaked
     # (hard-killed before atexit could run) -- by recorded PID, never the user's
     _reap_spawned_sw()
+    # and reap the <exe>.old image a previous self-update left behind (it could
+    # not delete itself while it was the running process)
+    from . import update
+    update.reap_leftovers()
     atexit.register(_shutdown_sw)     # close the warm session on exit
     # also catch Ctrl+C / termination so the spawned instance is torn down
     # rather than orphaned (atexit does not run on a signal default-kill)

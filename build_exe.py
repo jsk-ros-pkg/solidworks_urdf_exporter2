@@ -180,6 +180,10 @@ def main() -> int:
         "--add-data", f"{web}{os.pathsep}sw2robot/editor/web",
         # grab lazily / dynamically imported package code (incl. _vendor.rc_config)
         "--collect-submodules", "sw2robot",
+        # bundle sw2robot's dist-info so importlib.metadata.version("sw2robot")
+        # works in the frozen exe -- that is how sw2robot.__version__ (the
+        # self-update check's "current version") is resolved at runtime
+        "--copy-metadata", "sw2robot",
         # data + compiled bits these libraries load at runtime
         "--collect-all", "trimesh",
         "--collect-all", "pydantic",
