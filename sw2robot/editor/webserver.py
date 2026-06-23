@@ -171,6 +171,14 @@ def _resolve_package(path):
 _um = {"state": None, "rev": 0, "live_rev": -1, "undo": [], "redo": []}
 
 
+def _um_close():
+    """Drop the in-memory overlay (state + undo/redo + caches) when switching or
+    closing a package.  The hidden .live.urdf copy is intentionally NOT deleted:
+    a background collision / auto-limit worker may still be reading it, and the
+    file is hidden + gitignored and overwritten on the package's next use."""
+    _um.update(state=None, rev=0, live_rev=-1, undo=[], redo=[])
+
+
 def _cad_mode(pkg_dir):
     """True when the package has a CAD graph (the joints.yaml + build() path);
     False for a plain URDF opened directly (the overlay path)."""
@@ -383,6 +391,11 @@ def _um_set_mimic(state, changes):
         j = _um_joint_by_child(state, child)
         if not j:
             missed.append(child)
+            continue
+        jd = next((x for x in state.joints if x["name"] == j), None)
+        if not ch.get("clear") and (jd is None or state.effective_type(jd)
+                                    not in ("revolute", "continuous", "prismatic")):
+            missed.append(child)           # a fixed joint can't follow a mimic
             continue
         try:
             if ch.get("clear"):
@@ -1804,11 +1817,11 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                     return self._send_json({"error": str(e)}, 400)
                 cls.pkg_dir, cls.urdf_rel = pkg, rel
                 cls.robot_name = os.path.splitext(os.path.basename(rel))[0]
-                # plain URDF (no CAD graph) -> load the in-memory edit overlay;
-                # a CAD package uses the joints.yaml + build() path (no overlay)
-                if _cad_mode(pkg):
-                    _um["state"] = None
-                else:
+                # drop the previous package's overlay + its hidden live URDF, then
+                # load the new one (plain URDF -> in-memory overlay; a CAD package
+                # uses the joints.yaml + build() path, no overlay)
+                _um_close()
+                if not _cad_mode(pkg):
                     _um_load(pkg, rel)
                 print(f"[sw2robot.web] open: {cls.robot_name} ({pkg})"
                       f"{'' if _cad_mode(pkg) else ' [urdf-input mode]'}")

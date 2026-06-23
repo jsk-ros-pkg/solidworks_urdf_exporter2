@@ -653,6 +653,64 @@ def test_package_uris_rewritten_for_viewer(tmp_path):
         webserver._um["state"] = None
 
 
+def _mini_urdf_pkg(parent, name, body):
+    p = parent / name
+    (p / "urdf").mkdir(parents=True)
+    (p / "urdf" / "r.urdf").write_text(
+        f'<?xml version="1.0"?><robot name="r">{body}</robot>', encoding="utf-8")
+    return p
+
+
+def test_um_reset_on_cad_open(tmp_path):
+    """Opening a CAD package clears the URDF-mode overlay + undo history."""
+    from sw2robot.editor import webserver
+
+    urdfpkg = _mini_urdf_pkg(
+        tmp_path, "u",
+        '<link name="a"/><link name="b"/>'
+        '<joint name="j" type="revolute"><parent link="a"/><child link="b"/>'
+        '<axis xyz="0 0 1"/><limit lower="-1" upper="1" effort="1" velocity="1"/>'
+        '</joint>')
+    cadpkg = _mini_urdf_pkg(tmp_path, "c", '<link name="a"/>')
+    (cadpkg / "graph.json").write_text("{}", encoding="utf-8")   # marks CAD mode
+    base, httpd = _start(urdfpkg)
+    try:
+        _post(base, "/api/set_limits",
+              {"limits": [{"child": "b", "lower": -0.5, "upper": 0.5}]})
+        assert webserver._um["undo"]
+        info = _get_json(base, f"/api/open?path={cadpkg}")
+        assert info["mode"] == "cad"
+        assert webserver._um["state"] is None and not webserver._um["undo"]
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        webserver._um["state"] = None
+
+
+def test_mimic_on_fixed_joint_is_missed(tmp_path):
+    """A fixed joint can't follow a mimic -- the request is reported missed,
+    not falsely applied."""
+    from sw2robot.editor import webserver
+
+    pkg = _mini_urdf_pkg(
+        tmp_path, "p",
+        '<link name="a"/><link name="b"/><link name="c"/>'
+        '<joint name="jr" type="revolute"><parent link="a"/><child link="b"/>'
+        '<axis xyz="0 0 1"/><limit lower="-1" upper="1" effort="1" velocity="1"/>'
+        '</joint>'
+        '<joint name="jf" type="fixed"><parent link="a"/><child link="c"/></joint>')
+    base, httpd = _start(pkg)
+    try:
+        code, r = _post(base, "/api/set_mimic",
+                        {"changes": [{"child": "c", "master": "jr",
+                                      "multiplier": 1.0, "offset": 0.0}]})
+        assert code == 200 and r["applied"] == [] and r["missed"] == ["c"]
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        webserver._um["state"] = None
+
+
 def test_urdf_mode_undo_redo(tmp_path):
     """URDF-mode edits are undoable/redoable via the in-memory overlay stack."""
     from sw2robot.editor import webserver

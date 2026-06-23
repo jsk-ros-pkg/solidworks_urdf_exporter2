@@ -450,10 +450,13 @@ def reverse_direction(state: RobotCompilerState, joint: str) -> None:
     _require_joint(state, joint)
     e = state.edit_for(joint)
     parsed = next((j for j in state.joints if j["name"] == joint), {})
-    lo = e.lower if e.lower is not None else parsed.get("lowerLimit", 0.0)
-    hi = e.upper if e.upper is not None else parsed.get("upperLimit", 0.0)
     e.flip_axis = not e.flip_axis
-    e.lower, e.upper = -hi, -lo
+    # only revolute/prismatic joints carry a travel range -- don't fabricate a
+    # degenerate [0, 0] limit on a continuous/fixed joint that has none
+    if state.effective_type(parsed) in ("revolute", "prismatic"):
+        lo = e.lower if e.lower is not None else parsed.get("lowerLimit", 0.0)
+        hi = e.upper if e.upper is not None else parsed.get("upperLimit", 0.0)
+        e.lower, e.upper = -hi, -lo
 
 
 # --------------------------------------------------------------- link edits

@@ -206,6 +206,22 @@ def test_type_change_to_movable_adds_axis_and_limit(tmp_path):
     assert lim.get("lower") and lim.get("upper")
 
 
+def test_reverse_direction_no_degenerate_limit_on_continuous(tmp_path):
+    """Reversing a continuous (limit-less) joint flips the axis but must NOT
+    write a degenerate [0, 0] limit into the overlay."""
+    urdf = ('<robot name="r"><link name="a"/><link name="b"/>'
+            '<joint name="j" type="continuous"><parent link="a"/>'
+            '<child link="b"/><axis xyz="0 0 1"/></joint></robot>')
+    p = tmp_path / "urdf" / "r.urdf"
+    p.parent.mkdir(parents=True)
+    p.write_text(urdf, encoding="utf-8")
+    st = c.load_module(str(p))
+    c.reverse_direction(st, "j")
+    e = st.edits["j"]
+    assert e.flip_axis is True
+    assert e.lower is None and e.upper is None     # no fabricated [0,0] range
+
+
 def test_flip_axis_on_just_converted_joint(tmp_path):
     """Flipping a joint in the same edit that first makes it movable must take:
     build_urdf backfills the <axis> before applying the flip."""
