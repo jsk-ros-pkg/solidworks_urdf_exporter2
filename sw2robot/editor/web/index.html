@@ -1224,13 +1224,17 @@ skrobot / native-mesh consumers (not RViz-loadable)">⬇ glb</button></a>
 </script>
 
 <script type="module">
-let THREE, GLTFLoader, STLLoader, ColladaLoader, TransformControls;
+let THREE, GLTFLoader, STLLoader, ColladaLoader, OBJLoader, mergeGeometries,
+    TransformControls;
 try {
   THREE = await import('three');
   ({ GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js'));
   ({ STLLoader } = await import('three/examples/jsm/loaders/STLLoader.js'));
   ({ ColladaLoader } =
       await import('three/examples/jsm/loaders/ColladaLoader.js'));
+  ({ OBJLoader } = await import('three/examples/jsm/loaders/OBJLoader.js'));
+  ({ mergeGeometries } =
+      await import('three/examples/jsm/utils/BufferGeometryUtils.js'));
   ({ TransformControls } =
       await import('three/examples/jsm/controls/TransformControls.js'));
   const { default: URDFManipulator } = await import(
@@ -1419,6 +1423,36 @@ viewer.loadMeshFunc = (path, manager, done) => {
       new THREE.MeshPhongMaterial({ color: 0x999999 }))), null, fail);
   } else if (lower.endsWith('.dae')) {
     new ColladaLoader(manager).load(path, dae => ok(dae.scene), null, fail);
+  } else if (lower.endsWith('.obj')) {
+    // urdf-loader applies the URDF <material> colour only when the loaded mesh
+    // is a THREE.Mesh (URDFLoader: `obj instanceof THREE.Mesh`).  OBJLoader
+    // returns a Group, so its sub-meshes would never receive the <material>
+    // colour (e.g. PR2 <material name="White"/>, Fetch name="Grey") and the
+    // robot renders flat gray.  Merge the OBJ into ONE THREE.Mesh -- now it is
+    // coloured exactly like .stl / primitive visuals.  We don't read the .mtl;
+    // the URDF material is the authoritative colour here (matches RViz).
+    new OBJLoader(manager).load(path, grp => {
+      grp.updateMatrixWorld(true);
+      const geoms = [];
+      grp.traverse(o => {
+        if (!o.isMesh || !o.geometry) return;
+        const g = o.geometry.clone();
+        g.applyMatrix4(o.matrixWorld);          // bake any sub-mesh transform
+        // mergeGeometries needs a uniform attribute set; we colour flat, so
+        // keep position(+normal) only and drop uv/colour/etc.
+        for (const k of Object.keys(g.attributes)) {
+          if (k !== 'position' && k !== 'normal') g.deleteAttribute(k);
+        }
+        if (!g.attributes.normal) g.computeVertexNormals();
+        geoms.push(g);
+      });
+      if (!geoms.length) { fail(new Error(t('mesh.unsupported'))); return; }
+      const merged = geoms.length === 1 ? geoms[0]
+                                        : mergeGeometries(geoms, false);
+      if (!merged) { fail(new Error('OBJ merge failed')); return; }
+      ok(new THREE.Mesh(merged,
+        new THREE.MeshPhongMaterial({ color: 0x999999 })));
+    }, null, fail);
   } else {
     fail(new Error(t('mesh.unsupported')));
   }
