@@ -116,6 +116,9 @@ def main() -> int:
                          "server URL / logs are visible)")
     ap.add_argument("--name", default=None,
                     help="override the output .exe name")
+    ap.add_argument("--icon", default=None,
+                    help="path to a .ico for the exe "
+                         "(default: assets/icon.ico if present)")
     ap.add_argument("--clean", action="store_true",
                     help="wipe the PyInstaller cache before building")
     args = ap.parse_args()
@@ -171,6 +174,15 @@ def main() -> int:
         "--workpath", os.path.join(build_dir, "work"),
         "--specpath", build_dir,
     ]
+    # Embed the app icon.  Default to the committed assets/icon.ico so every
+    # build is branded without extra flags.
+    icon = args.icon or os.path.join(ROOT, "assets", "icon.ico")
+    if os.path.isfile(icon):
+        pyi_args += ["--icon", icon]
+    elif args.icon:
+        print(f"WARNING: --icon {icon} not found; building without an icon.",
+              file=sys.stderr)
+
     for h in WIN32_HIDDEN:
         pyi_args += ["--hidden-import", h]
 
