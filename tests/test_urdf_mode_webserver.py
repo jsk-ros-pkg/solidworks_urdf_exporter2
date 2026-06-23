@@ -612,17 +612,22 @@ def test_package_uris_rewritten_for_viewer(tmp_path):
     """A URDF that references meshes via package:// is served to the viewer with
     /pkg/ paths (so the browser fetches them from the package server instead of
     404-ing on http://host/<pkgname>/meshes/...)."""
+    import posixpath as _pp
+
     from sw2robot.editor import webserver
 
-    pkg = tmp_path / "pkgpkg"
+    pkg = tmp_path / "weird_folder"    # folder name need NOT match the URI package
     (pkg / "urdf").mkdir(parents=True)
     (pkg / "meshes").mkdir()
     (pkg / "meshes" / "part.stl").write_text("solid x\nendsolid x\n", encoding="utf-8")
     (pkg / "urdf" / "robot.urdf").write_text(
-        '<?xml version="1.0"?><robot name="robot">'
-        '<link name="base_link"><visual><geometry>'
+        '<?xml version="1.0"?><robot name="robot"><link name="base_link">'
+        '<visual><geometry>'                # own mesh exists here -> rewritten
         '<mesh filename="package://robot_description/meshes/part.stl"/>'
-        '</geometry></visual></link></robot>', encoding="utf-8")
+        '</geometry></visual>'
+        '<collision><geometry>'             # not in this package -> left as-is
+        '<mesh filename="package://other_pkg/meshes/absent.stl"/>'
+        '</geometry></collision></link></robot>', encoding="utf-8")
 
     httpd, port = webserver._bind_free_port(webserver._Handler, _free_port())
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
@@ -631,18 +636,54 @@ def test_package_uris_rewritten_for_viewer(tmp_path):
         info = _get_json(base, f"/api/open?path={pkg}")
         assert info["mode"] == "urdf"
         served = _get(base, info["urdf"])
-        assert "package://" not in served
-        # the rewritten mesh path is RELATIVE to the URDF url (that is how
-        # urdf-loaders resolves it), and resolving + normalizing it the way the
-        # browser does must land on the package-served path
-        fn = re.search(r'filename="([^"]+\.stl)"', served).group(1)
-        assert not fn.startswith("/")                  # relative, not absolute
-        import posixpath as _pp
-        urdf_url = info["urdf"]                         # e.g. /pkg/urdf/robot.urdf
-        resolved = _pp.normpath(_pp.join(_pp.dirname(urdf_url), fn))
+        # own mesh (exists here) rewritten to a relative path that resolves
+        # (browser-style) to the package-served mesh; the absent external ref is
+        # left as package:// (not mis-pointed to a local same-named file)
+        assert "package://other_pkg/meshes/absent.stl" in served
+        fns = re.findall(r'filename="([^"]+)"', served)
+        own = next(f for f in fns if not f.startswith("package://"))
+        assert not own.startswith("/")
+        resolved = _pp.normpath(_pp.join(_pp.dirname(info["urdf"]), own))
         assert resolved == "/pkg/meshes/part.stl", resolved
-        code, _ = _get_status(base, resolved)           # actually fetchable
+        code, _ = _get_status(base, resolved)
         assert code == 200
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        webserver._um["state"] = None
+
+
+def test_urdf_mode_undo_redo(tmp_path):
+    """URDF-mode edits are undoable/redoable via the in-memory overlay stack."""
+    from sw2robot.editor import webserver
+
+    pkg = tmp_path / "robotpkg"
+    (pkg / "urdf").mkdir(parents=True)
+    (pkg / "urdf" / "robot.urdf").write_text(
+        '<?xml version="1.0"?><robot name="robot">'
+        '<link name="a"/><link name="b"/>'
+        '<joint name="j" type="revolute"><parent link="a"/><child link="b"/>'
+        '<axis xyz="0 0 1"/><limit lower="-1" upper="1" effort="1" velocity="1"/>'
+        '</joint></robot>', encoding="utf-8")
+    httpd, port = webserver._bind_free_port(webserver._Handler, _free_port())
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{port}"
+
+    def _limit():
+        return _joint(_served_urdf(base), "j").find("limit").get("lower")
+
+    try:
+        _get_json(base, f"/api/open?path={pkg}")
+        assert _limit() == "-1"
+        _post(base, "/api/set_limits",
+              {"limits": [{"child": "b", "lower": -0.5, "upper": 0.5}]})
+        assert float(_limit()) == -0.5
+        assert _get_json(base, "/api/history")["undo"]          # has an entry
+        code, r = _post(base, "/api/undo", {})
+        assert code == 200 and r["done"] == "undo"
+        assert _limit() == "-1"                                 # reverted
+        code, r = _post(base, "/api/redo", {})
+        assert code == 200 and float(_limit()) == -0.5          # reapplied
     finally:
         httpd.shutdown()
         httpd.server_close()

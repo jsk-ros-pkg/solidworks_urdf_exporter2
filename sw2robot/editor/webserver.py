@@ -166,7 +166,9 @@ def _resolve_package(path):
 # ``rev`` bumps on every edit so on-disk readers (collision / auto-limits) can
 # cache against a stable (path, mtime) -- the live URDF is only rewritten when
 # ``rev`` actually changed (see _um_live_urdf).
-_um = {"state": None, "rev": 0, "live_rev": -1}
+# undo/redo in URDF mode snapshot the overlay (edits + link_edits) as JSON, since
+# there is no joints.yaml to snapshot (the CAD path's history mechanism).
+_um = {"state": None, "rev": 0, "live_rev": -1, "undo": [], "redo": []}
 
 
 def _cad_mode(pkg_dir):
@@ -183,7 +185,24 @@ def _um_load(pkg_dir, urdf_rel):
     core.load_edits(state)            # restore a prior session's edits, if any
     _um["state"] = state
     _um["rev"], _um["live_rev"] = 0, -1
+    _um["undo"], _um["redo"] = [], []
     return state
+
+
+def _um_overlay_json(state):
+    """A compact snapshot of just the editable overlay (for undo/redo)."""
+    return state.model_dump_json(include={"edits", "link_edits"})
+
+
+def _um_restore(snap):
+    """Replace the live overlay with a snapshot's edits/link_edits."""
+    from .state import JointEdit, LinkEdit
+    data = json.loads(snap)
+    st = _um["state"]
+    st.edits = {k: JointEdit(**v) for k, v in (data.get("edits") or {}).items()}
+    st.link_edits = {k: LinkEdit(**v)
+                     for k, v in (data.get("link_edits") or {}).items()}
+    _um_save(st)
 
 
 def _um_save(state):
@@ -270,7 +289,7 @@ def _um_joint_by_child(state, child):
     return next((j["name"] for j in state.joints if j["childLink"] == child), None)
 
 
-def _rewrite_package_urls(urdf_text, urdf_rel):
+def _rewrite_package_urls(urdf_text, urdf_rel, pkg_dir):
     """Rewrite mesh ``package://<pkg>/<rest>`` URIs so the viewer can fetch them
     from the package root (served at ``/pkg/``).  urdf-loaders resolves a mesh
     path RELATIVE to the URDF's own URL, so emit ``<../ per dir>rest`` -- e.g. a
@@ -278,11 +297,27 @@ def _rewrite_package_urls(urdf_text, urdf_rel):
     normalizes ``/pkg/urdf/../<rest>`` -> ``/pkg/<rest>`` (the package root).
     Layout-independent (depth derived from ``urdf_rel``).  Applied ONLY to the
     URDF served to the viewer; the on-disk file (and the ROS export) keep their
-    original ``package://`` references."""
+    original ``package://`` references.
+
+    A ref is rewritten only when its mesh actually EXISTS in this package -- so
+    own meshes load regardless of the URI's package name (folder need not match),
+    while a ref to another ROS package whose file is not here is left as
+    ``package://`` (unresolvable in-browser either way, but not mis-pointed)."""
     depth = len([s for s in posixpath.dirname(urdf_rel).split("/") if s])
     prefix = "../" * depth
-    return re.sub(r'filename="package://[^/"]+/',
-                  lambda _m: f'filename="{prefix}', urdf_text)
+    root = os.path.normpath(pkg_dir)
+
+    def repl(m):
+        rest = m.group(1)
+        local = os.path.normpath(os.path.join(root, *rest.split("/")))
+        try:
+            inside = os.path.commonpath([root, local]) == root
+        except ValueError:
+            inside = False
+        if inside and os.path.exists(local):
+            return f'filename="{prefix}{rest}"'
+        return m.group(0)                  # not in this package -- leave as-is
+    return re.sub(r'filename="package://[^/"]+/([^"]+)"', repl, urdf_text)
 
 
 def _um_colors(state):
@@ -1512,11 +1547,19 @@ class _Handler(http.server.BaseHTTPRequestHandler):
     def _um_reply(self, fn, *args):
         """Run a URDF-mode edit and JSON-reply, turning a bad-input error into a
         400 the editor surfaces (rather than the generic 500) -- TypeError covers
-        a malformed body, e.g. a null in the com/inertia arrays."""
+        a malformed body, e.g. a null in the com/inertia arrays.  Snapshots the
+        pre-edit overlay for undo, but only once the edit actually succeeds."""
+        snap = (_um_overlay_json(_um["state"])
+                if _um["state"] is not None else None)
         try:
-            return self._send_json(fn(_um["state"], *args))
+            result = fn(_um["state"], *args)
         except (ValueError, TypeError) as e:
             return self._send_json({"error": str(e)}, 400)
+        if snap is not None:
+            _um["undo"].append(snap)
+            del _um["undo"][:-50]
+            _um["redo"].clear()
+        return self._send_json(result)
 
     # -- routes -----------------------------------------------------------
     def do_GET(self):
@@ -1634,6 +1677,10 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                      "dirs": dirs[:400], "files": files[:400]})
             if path == "/api/history":
                 cls = type(self)
+                if cls.pkg_dir and not _cad_mode(cls.pkg_dir):   # URDF-mode stack
+                    return self._send_json(
+                        {"undo": ["edit"] * len(_um["undo"]),
+                         "redo": ["edit"] * len(_um["redo"])})
                 h = _hist(cls.pkg_dir) if cls.pkg_dir else {"undo": [],
                                                             "redo": []}
                 return self._send_json(
@@ -1830,7 +1877,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                     from . import core
                     served = _rewrite_package_urls(
                         core.build_urdf(_um["state"], sanitize=False),
-                        cls.urdf_rel)
+                        cls.urdf_rel, cls.pkg_dir)
                     return self._send_bytes(served.encode("utf-8"),
                                             "application/xml")
                 full = self._resolve(cls.pkg_dir, rel)
@@ -2603,11 +2650,19 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 cls = type(self)
                 if not cls.pkg_dir:
                     return self._send_json({"error": "no package open"}, 400)
+                src = "undo" if parsed.path.endswith("undo") else "redo"
+                dst = "redo" if src == "undo" else "undo"
+                if not _cad_mode(cls.pkg_dir):       # URDF-input mode: overlay stack
+                    if not _um[src]:
+                        return self._send_json({"error": f"nothing to {src}"}, 400)
+                    _um[dst].append(_um_overlay_json(_um["state"]))
+                    _um_restore(_um[src].pop())
+                    return self._send_json(
+                        {"done": src, "undo": len(_um["undo"]),
+                         "redo": len(_um["redo"])})
                 name = os.path.splitext(os.path.basename(cls.urdf_rel))[0]
                 yml = os.path.join(cls.pkg_dir, name + ".joints.yaml")
                 h = _hist(cls.pkg_dir)
-                src = "undo" if parsed.path.endswith("undo") else "redo"
-                dst = "redo" if src == "undo" else "undo"
                 if not h[src]:
                     return self._send_json({"error": f"nothing to {src}"},
                                            400)
