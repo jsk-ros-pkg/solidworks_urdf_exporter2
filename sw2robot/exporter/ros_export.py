@@ -345,7 +345,13 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
     # are vendored/repointed; refs to other ROS packages are left untouched
     own_pkgs = _own_pkg_names(pkg_dir)
     urdf_path = os.path.join(pkg_dir, "urdf", robot_name + ".urdf")
-    root = ET.parse(urdf_path).getroot()
+    # Keep XML comments: the default parser drops them, which both loses the
+    # per-link ``<!-- sw2robot ... -->`` provenance and leaves a blank,
+    # whitespace-only line where each comment was (its surrounding indentation
+    # merges into the link's text).  Comment nodes have a non-string tag, so the
+    # findall()/iter() traversals below ignore them.
+    _parser = ET.XMLParser(target=ET.TreeBuilder(insert_comments=True))
+    root = ET.parse(urdf_path, parser=_parser).getroot()
     colors = colors or {}
 
     files = []

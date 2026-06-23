@@ -825,9 +825,11 @@ def test_export_zip_bakes_colour_and_restores_pristine(server):
     assert 'rgba="1 0 0 1"' in exported          # colour baked into the URDF
     assert any(n.endswith(".dae") for n in zf.namelist())   # visual meshes exported
 
-    # the on-disk URDF stays pristine (no <material>); edits live in the overlay
+    # the on-disk URDF stays pristine (no <material> colour element); edits live
+    # in the overlay.  (The provenance "<!-- sw2robot material=... -->" comment
+    # legitimately contains the word "material", so match the element, not it.)
     disk = Path(webserver._um["state"].urdf_path).read_text(encoding="utf-8")
-    assert "material" not in disk
+    assert "<material" not in disk
 
 
 def test_export_materializes_overlay_then_restores(server):
@@ -842,7 +844,9 @@ def test_export_materializes_overlay_then_restores(server):
     disk = Path(state.urdf_path)
     rel = os.path.relpath(state.urdf_path, state.package_dir).replace("\\", "/")
 
-    assert "material" not in disk.read_text(encoding="utf-8")   # pristine on disk
+    # match "<material" (the baked colour element), not the word "material":
+    # the provenance "<!-- sw2robot material=... -->" comment carries it too.
+    assert "<material" not in disk.read_text(encoding="utf-8")  # pristine on disk
     with webserver._um_materialized(state.package_dir, rel):
         assert "<material" in disk.read_text(encoding="utf-8")  # edits visible
-    assert "material" not in disk.read_text(encoding="utf-8")   # restored
+    assert "<material" not in disk.read_text(encoding="utf-8")  # restored

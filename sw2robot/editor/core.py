@@ -683,7 +683,15 @@ def build_urdf(state: RobotCompilerState, sanitize: bool = True) -> str:
     of hyphens and other unsafe characters.  Pass ``sanitize=False`` when editing
     a URDF the user opened directly: its names are already its own contract (the
     viewer shows them, edits reference them), so they must be preserved verbatim."""
-    root = ET.fromstring(Path(state.urdf_path).read_text(encoding="utf-8"))
+    # Preserve XML comments on the round trip: a CAD-exported URDF carries
+    # per-link ``<!-- sw2robot material=... density=... inertia=... -->``
+    # provenance, and the user may open / edit / re-export it here.  The default
+    # parser silently drops comments, so use a comment-keeping TreeBuilder; the
+    # comment nodes have a non-string tag, so findall("link")/("joint") below
+    # still ignore them.
+    parser = ET.XMLParser(target=ET.TreeBuilder(insert_comments=True))
+    root = ET.fromstring(Path(state.urdf_path).read_text(encoding="utf-8"),
+                         parser=parser)
     renames = {j: e.rename for j, e in state.edits.items() if e.rename}
 
     for je in root.findall("joint"):

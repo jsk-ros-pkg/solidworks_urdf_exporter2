@@ -32,6 +32,38 @@ def _fmt(v):
     return " ".join(f"{x:.8g}" for x in v)
 
 
+def _comment_safe(text):
+    """Make ``text`` safe to embed inside an XML comment.
+
+    XML comments may not contain ``--`` and may not end with ``-``; collapse any
+    such run so the comment stays well-formed regardless of the material name.
+    """
+    cleaned = str(text).replace("--", "-").strip()
+    return cleaned.rstrip("-")
+
+
+def _provenance_comment(comp, method):
+    """Build the ``<!-- sw2robot ... -->`` provenance line for a link.
+
+    Records the SolidWorks material, its density (kg/m^3) and how the inertial
+    was obtained (``solidworks`` / ``mesh`` / ``hull`` / ``bbox`` /
+    ``placeholder``), so the exported URDF is self-documenting. Returns ``None``
+    when there is nothing worth recording.
+    """
+    fields = []
+    material = getattr(comp, "material", None)
+    density = getattr(comp, "density", None)
+    if material:
+        fields.append(f'material="{_comment_safe(material)}"')
+    if density is not None:
+        fields.append(f'density="{float(density):g}"')  # kg/m^3
+    if method:
+        fields.append(f'inertia="{method}"')
+    if not fields:
+        return None
+    return f'    <!-- sw2robot {" ".join(fields)} -->'
+
+
 def _inertial_xml(comp, mesh_dir, density):
     """Compute and format a link's ``<inertial>``.
 
@@ -131,6 +163,9 @@ def _link_xml(comp, ros_pkg=None, rn=lambda n: n, mesh_dir=None, density=None):
             lines.append("      </geometry>")
             lines.append(f"    </{tag}>")
     inertial_lines, method, problems = _inertial_xml(comp, mesh_dir, density)
+    comment = _provenance_comment(comp, method)
+    if comment is not None:
+        lines.insert(1, comment)  # right after the <link name=...> line
     lines.extend(inertial_lines)
     lines.append("  </link>")
     return "\n".join(lines), method, problems

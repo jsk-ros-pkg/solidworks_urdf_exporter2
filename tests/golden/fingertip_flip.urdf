@@ -1,6 +1,7 @@
 <?xml version="1.0"?>
 <robot name="fingertip">
   <link name="fingertip_back_1">
+    <!-- sw2robot inertia="hull" -->
     <visual>
       <origin xyz="-0.021039487 0.0155 0.031" rpy="3.1415927 -5.5511151e-17 3.1415927"/>
       <geometry>
@@ -16,6 +17,7 @@
     <inertial/>
   </link>
   <link name="base_link">
+    <!-- sw2robot inertia="hull" -->
     <visual>
       <origin xyz="3.8518599e-34 0 0" rpy="0 -0 -4.4572704e-33"/>
       <geometry>
@@ -31,6 +33,7 @@
     <inertial/>
   </link>
   <link name="screwlock_male_hard_jointbase_v4_1">
+    <!-- sw2robot material="ABS" density="1020" inertia="hull" -->
     <visual>
       <origin xyz="0 0 -1.540744e-33" rpy="5.0814364e-33 2.4652673e-34 -6.3441378e-33"/>
       <geometry>
