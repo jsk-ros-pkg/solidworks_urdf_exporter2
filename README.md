@@ -1,5 +1,18 @@
 # sw2robot
 
+[![CI](https://github.com/jsk-ros-pkg/solidworks_urdf_exporter2/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/jsk-ros-pkg/solidworks_urdf_exporter2/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/jsk-ros-pkg/solidworks_urdf_exporter2)](https://github.com/jsk-ros-pkg/solidworks_urdf_exporter2/releases/latest)
+![Python](https://img.shields.io/badge/python-3.12+-blue.svg)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+
+[![Windows](https://img.shields.io/badge/Windows-download-0078D6?logo=windows&logoColor=white)](https://github.com/jsk-ros-pkg/solidworks_urdf_exporter2/releases/latest)
+[![macOS](https://img.shields.io/badge/macOS_(Apple_Silicon)-download-000000?logo=apple&logoColor=white)](https://github.com/jsk-ros-pkg/solidworks_urdf_exporter2/releases/latest)
+[![Linux](https://img.shields.io/badge/Linux_(x64)-download-FCC624?logo=linux&logoColor=black)](https://github.com/jsk-ros-pkg/solidworks_urdf_exporter2/releases/latest)
+
+> Click an OS badge to grab the latest prebuilt editor from the release page.
+> Cross-platform for **edit / build / export**; the **extract** step (driving
+> SolidWorks over COM) is **Windows + SolidWorks only**.
+
 **SolidWorks → robot (URDF) converter.** Turn a SolidWorks assembly into a
 URDF, then clean it up in the browser.
 
