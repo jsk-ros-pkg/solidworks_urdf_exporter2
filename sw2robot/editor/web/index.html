@@ -598,6 +598,11 @@
       </select>
       <button id="bulkset" data-i18n="ui.set">Set</button>
       <button id="exclchip" style="display:none;font-size:11px"></button>
+      <div id="exclpop" style="display:none;position:fixed;z-index:30;
+           min-width:200px;max-width:320px;max-height:50vh;overflow:auto;
+           background:#22252bf2;border:1px solid #567;border-radius:6px;
+           padding:6px;font-size:11px;color:#dde;box-shadow:0 4px 16px #0007;
+           pointer-events:auto"></div>
     </div>
     <div id="joints"></div>
     <div id="playpanel">
@@ -770,7 +775,12 @@ skrobot / native-mesh consumers (not RViz-loadable)">⬇ glb</button></a>
     'mesh.allLoaded': { en: 'all meshes loaded ✓', ja: 'メッシュをすべて読み込みました ✓' },
     // exclude chip
     'excl.chip': { en: a => `🗑 excluded: ${a.n} ↩`, ja: a => `🗑 除外: ${a.n} ↩` },
-    'excl.restoreAll': { en: '(click to restore all)', ja: '(クリックで全部復元)' },
+    'excl.restoreAll': { en: '(click to restore)', ja: '(クリックで復元)' },
+    'excl.popTitle': { en: a => `${a.n} deleted link(s) — ↩ to restore`,
+                       ja: a => `削除済み ${a.n} 件 — ↩ で復元` },
+    'excl.restoreAllBtn': { en: '↩ restore all', ja: '↩ 全部復元' },
+    'excl.restoringOne': { en: a => `restoring ${a.n}`,
+                           ja: a => `${a.n} を復元中` },
     'excl.excluding': { en: a => `excluding ${a.l} from the URDF`, ja: a => `${a.l} を URDF から除外` },
     'excl.restoring': { en: 'restoring all excluded components', ja: '除外したコンポーネントをすべて復元' },
     'excl.now': { en: a => `URDF exclude list now: ${a.n} item(s) ✓ (Ctrl+Z to restore)`,
@@ -3653,8 +3663,55 @@ document.getElementById('selexclude').addEventListener('click', () => {
   selectLink(null);
   setExclude({ name: comp, on: true }, t('excl.excluding', { l }));
 });
-document.getElementById('exclchip').addEventListener('click', () =>
-  setExclude({ clear: true }, t('excl.restoring')));
+// the 🗑 chip opens a popover listing each excluded (deleted) link with an
+// individual ↩ restore, plus a "restore all" -- so a single deletion can be
+// undone without restoring everything (the list is loaded from joints.yaml, so
+// persisted deletions show up even after reopening a cached package)
+const _exclChip = document.getElementById('exclchip');
+const _exclPop = document.getElementById('exclpop');
+function showExclPopover() {
+  if (!excludedList.length) { _exclPop.style.display = 'none'; return; }
+  const esc = s => String(s).replace(/[&<>"]/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const rows = excludedList.map(n =>
+    '<div style="display:flex;gap:6px;align-items:center;'
+    + 'justify-content:space-between;padding:2px 0">'
+    + `<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"`
+    + ` title="${esc(n)}">${esc(n)}</span>`
+    + `<button data-restore="${esc(n)}" style="flex:none">↩</button></div>`
+  ).join('');
+  _exclPop.innerHTML =
+    `<div style="color:#8a93a3;margin-bottom:4px">`
+    + `${t('excl.popTitle', { n: excludedList.length })}</div>${rows}`
+    + '<div style="border-top:1px solid #456;margin-top:4px;padding-top:4px">'
+    + `<button id="exclrestoreall" style="width:100%">`
+    + `${t('excl.restoreAllBtn')}</button></div>`;
+  const r = _exclChip.getBoundingClientRect();
+  _exclPop.style.left = Math.round(r.left) + 'px';
+  _exclPop.style.top = Math.round(r.bottom + 4) + 'px';
+  _exclPop.style.display = 'block';
+  _exclPop.querySelectorAll('button[data-restore]').forEach(b =>
+    b.addEventListener('click', () => {
+      _exclPop.style.display = 'none';
+      setExclude({ names: [b.dataset.restore], on: false },
+                 t('excl.restoringOne', { n: b.dataset.restore }));
+    }));
+  document.getElementById('exclrestoreall').addEventListener('click', () => {
+    _exclPop.style.display = 'none';
+    setExclude({ clear: true }, t('excl.restoring'));
+  });
+}
+_exclChip.addEventListener('click', e => {
+  e.stopPropagation();
+  if (_exclPop.style.display === 'block') { _exclPop.style.display = 'none'; }
+  else { showExclPopover(); }
+});
+document.addEventListener('click', e => {
+  if (_exclPop.style.display === 'block'
+      && !_exclPop.contains(e.target) && e.target !== _exclChip) {
+    _exclPop.style.display = 'none';
+  }
+});
 
 // a link + every descendant link under it (the subtree to delete together)
 function linkSubtree(linkName) {
