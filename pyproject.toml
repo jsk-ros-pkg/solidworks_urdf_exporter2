@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sw2robot"
-version = "0.2.2"
+version = "0.2.3"
 description = "SolidWorks assembly -> URDF exporter with a browser-based editor"
 readme = "README.md"
 requires-python = ">=3.12"
