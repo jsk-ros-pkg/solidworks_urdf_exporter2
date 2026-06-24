@@ -133,6 +133,28 @@ def test_sweep_limits_finds_limits_and_restores_pose(built_pkg):
             assert abs(float(j.joint_angle())) < 1e-6
 
 
+def test_sweep_margin_tightens_limit(built_pkg):
+    """A bigger backoff margin must never WIDEN a hit-bounded limit (it backs
+    further off the colliding edge).  Guards the configurable margin_deg."""
+    if not _skrobot_ready():
+        pytest.skip("skrobot / python-fcl not available")
+    from sw2robot.editor import autoinit
+
+    robot, meshes = _load_robot_and_meshes(built_pkg)
+    small = autoinit.sweep_limits(robot, meshes, step_deg=6, max_deg=120,
+                                  margin_deg=2.0)
+    hit = next((jn for jn, v in small.items()
+                if v.get("hit_upper") or v.get("hit_lower")), None)
+    if hit is None:
+        pytest.skip("no joint hit a collision in this fixture")
+    big = autoinit.sweep_limits(robot, meshes, step_deg=6, max_deg=120,
+                                margin_deg=20.0, only={hit})
+    if small[hit]["hit_upper"] is not None:
+        assert big[hit]["upper"] <= small[hit]["upper"] + 1e-9
+    if small[hit]["hit_lower"] is not None:
+        assert big[hit]["lower"] >= small[hit]["lower"] - 1e-9
+
+
 def test_self_collision_min_distance(built_pkg):
     if not _skrobot_ready():
         pytest.skip("skrobot / python-fcl not available")

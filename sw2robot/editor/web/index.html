@@ -554,6 +554,26 @@
               data-i18n-title="t.autolimits"
               title="各回転関節を ±2π(±360°)の範囲で自己干渉が起きる角度まで掃引(粗スキャン+二分探索)して lower/upper を自動設定。±2π まで自由に回る関節は continuous に。Ctrl+Zで戻せます">
         🛠 自動関節リミット (自己干渉, ±2π)</button>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:4px;
+                  font-size:11px;color:#8a93a3">
+        <span data-i18n="ui.marginLabel">余裕:</span>
+        <label style="display:flex;gap:3px;align-items:center"
+               data-i18n-title="t.marginDeg"
+               title="back off this many degrees from the colliding edge (revolute joints)">
+          <input id="marginDeg" type="number" value="2" min="0" step="0.5"
+                 style="width:46px;background:#15171a;color:#cfe3ff;
+                        border:1px solid #2d4a35;border-radius:3px;padding:1px 3px">
+          <span>° <span data-i18n="ui.marginRev">回転</span></span>
+        </label>
+        <label style="display:flex;gap:3px;align-items:center"
+               data-i18n-title="t.marginMm"
+               title="back off this many mm from the colliding edge (prismatic joints)">
+          <input id="marginMm" type="number" value="2" min="0" step="0.5"
+                 style="width:46px;background:#15171a;color:#cfe3ff;
+                        border:1px solid #2d4a35;border-radius:3px;padding:1px 3px">
+          <span>mm <span data-i18n="ui.marginPris">直動</span></span>
+        </label>
+      </div>
     </div>
     <div id="rootbox" style="border:1px solid #333;border-radius:4px;
          padding:6px 8px;margin:6px 0;background:#1e2126;font-size:12px">
@@ -1231,6 +1251,13 @@ skrobot / native-mesh consumers (not RViz-loadable)">⬇ glb</button></a>
     't.autolimits': { en: 'sweep each rotary joint over ±2π(±360°) to the self-collision angle (coarse scan + binary search) and auto-set lower/upper. Joints free over the full ±2π become continuous. Ctrl+Z to undo.',
                       ja: '各回転関節を ±2π(±360°)の範囲で自己干渉が起きる角度まで掃引(粗スキャン+二分探索)して lower/upper を自動設定。±2π まで自由に回る関節は continuous に。Ctrl+Zで戻せます' },
     'ui.autolimits': { en: '🛠 auto joint limits (self-collision, ±2π)', ja: '🛠 自動関節リミット (自己干渉, ±2π)' },
+    'ui.marginLabel': { en: 'margin:', ja: '余裕:' },
+    'ui.marginRev': { en: 'rev', ja: '回転' },
+    'ui.marginPris': { en: 'pris', ja: '直動' },
+    't.marginDeg': { en: 'back off this many degrees from the colliding edge (revolute joints)',
+                     ja: '衝突する端からこの角度(度)だけ手前で止める（回転関節）' },
+    't.marginMm': { en: 'back off this many mm from the colliding edge (prismatic joints)',
+                    ja: '衝突する端からこのmmだけ手前で止める（直動関節）' },
     'ui.rootframe': { en: 'root frame (rotate about current axes / set numbers)',
                       ja: 'root frame (rotate about current axes / set numbers)' },
     'ui.enterApply': { en: '(Enter applies)', ja: '(Enter で即適用)' },
@@ -3891,7 +3918,11 @@ autolimitsBtn.addEventListener('click', async () => {
   // its GIL the way the old in-process sweep did.)
   showLoadbar(t('auto.sweepBar'), { indet: true });
   try {
-    const resp0 = await fetch('/api/auto_limits');
+    const md = document.getElementById('marginDeg')?.value || '2';
+    const mm = document.getElementById('marginMm')?.value || '2';
+    const resp0 = await fetch(
+      `/api/auto_limits?margin_deg=${encodeURIComponent(md)}`
+      + `&margin_mm=${encodeURIComponent(mm)}`);
     const data = await resp0.json();
     if (!resp0.ok || data.error) { throw new Error(data.error ?? resp0.status); }
     let st = {};

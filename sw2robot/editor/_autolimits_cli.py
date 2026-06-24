@@ -7,7 +7,8 @@ keep-alive connection threads -- the classic CPython convoy, which inflated an
 8 s sweep to ~90 s just by having a page open.  A fresh process has its own GIL
 and no server threads, so it stays at the true ~8 s (+~3 s to load the model).
 
-    python -m sw2robot.editor._autolimits_cli <urdf> <step_deg> <max_deg>
+    python -m sw2robot.editor._autolimits_cli <urdf> <step_deg> <max_deg> \
+        [margin_deg] [margin_mm]
     -> stdout: {"results": [{"child","lower","upper","continuous"}, ...]}
 """
 
@@ -59,6 +60,9 @@ def _emit(**ev):
 
 def main():
     urdf, step_deg, max_deg = sys.argv[1], float(sys.argv[2]), float(sys.argv[3])
+    # optional backoff margins: degrees (revolute), mm (prismatic)
+    margin_deg = float(sys.argv[4]) if len(sys.argv) > 4 else 2.0
+    margin_mm = float(sys.argv[5]) if len(sys.argv) > 5 else 2.0
     from skrobot.models.urdf import RobotModelFromURDF
 
     from sw2robot.editor import autoinit
@@ -76,7 +80,7 @@ def main():
     meshes = autoinit.link_meshes(robot)
 
     total = sum(1 for j in robot.joint_list
-                if type(j).__name__ == "RotationalJoint")
+                if type(j).__name__ in ("RotationalJoint", "LinearJoint"))
     _emit(event="start", total=total)
     done = [0]
 
@@ -85,7 +89,8 @@ def main():
         _emit(event="joint", i=done[0], total=total, joint=name)
 
     results = autoinit.sweep_limits(
-        robot, meshes, step_deg=step_deg, max_deg=max_deg, margin_deg=2.0,
+        robot, meshes, step_deg=step_deg, max_deg=max_deg,
+        margin_deg=margin_deg, margin_mm=margin_mm,
         refine=True, progress=progress)
     out = [{"child": v["child"], "lower": v["lower"], "upper": v["upper"],
             "continuous": v["continuous"]}
