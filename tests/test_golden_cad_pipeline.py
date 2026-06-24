@@ -24,9 +24,22 @@ To intentionally re-baseline after a deliberate output change, run with
 import os
 import re
 import shutil
+import sys
 from pathlib import Path
 
 import pytest
+
+# These are byte-for-byte snapshots baselined on Linux.  After the <inertial>
+# block (normalised below), the remaining URDF still carries mesh-derived
+# coordinates whose full-precision float formatting differs slightly across
+# platforms (numpy/BLAS), so the snapshots only match on Linux.  Their job is
+# drift detection against that baseline -- not cross-platform correctness, which
+# the inertia/geometry maths covers in test_autoinit / test_sw_inertia -- so run
+# them on Linux only.
+pytestmark = pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="golden URDF snapshots are baselined on Linux "
+           "(mesh-coordinate float formatting differs across platforms)")
 
 # mass / CoM / inertia are recomputed by build() from the mesh (trimesh) -- they
 # are NOT what the edit-overlay refactor touches, and their exact values vary
