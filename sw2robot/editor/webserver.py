@@ -1458,7 +1458,8 @@ _limjob = {"running": False, "log": [], "error": None, "results": None,
 _limjob_lock = threading.Lock()
 
 
-def _run_auto_limits(pkg_dir, urdf_rel, step_deg, max_deg):
+def _run_auto_limits(pkg_dir, urdf_rel, step_deg, max_deg,
+                     margin_deg=2.0, margin_mm=2.0):
     """Run the self-collision limit sweep in a SUBPROCESS and return
     ``(results_list, error)``.  A subprocess on purpose: the sweep is CPU-bound
     and releases the GIL (numpy / fcl), so running it inside the threaded HTTP
@@ -1488,7 +1489,7 @@ def _run_auto_limits(pkg_dir, urdf_rel, step_deg, max_deg):
     else:
         cmd = [sys.executable, "-m", "sw2robot.editor._autolimits_cli"]
         cwd = PROJECT_ROOT
-    cmd += [urdf, str(step_deg), str(max_deg)]
+    cmd += [urdf, str(step_deg), str(max_deg), str(margin_deg), str(margin_mm)]
     _t0 = time.time()
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, text=True, cwd=cwd)
@@ -1836,8 +1837,11 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 try:
                     step = float((query.get("step") or ["10"])[0])
                     mx = float((query.get("max") or ["360"])[0])  # ±2π
+                    # backoff margins from the colliding edge: deg / mm
+                    margin_deg = float((query.get("margin_deg") or ["2"])[0])
+                    margin_mm = float((query.get("margin_mm") or ["2"])[0])
                 except ValueError:
-                    return self._send_json({"error": "bad step/max"}, 400)
+                    return self._send_json({"error": "bad step/max/margin"}, 400)
                 # URDF-input mode: sweep the live overlay (type edits included)
                 try:
                     pkg = cls.pkg_dir
@@ -1858,7 +1862,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 # the /api/extract* handlers with an UnboundLocalError.
                 def _sweep_job():
                     try:
-                        results, err = _run_auto_limits(pkg, rel, step, mx)
+                        results, err = _run_auto_limits(
+                            pkg, rel, step, mx, margin_deg, margin_mm)
                     except Exception as e:           # never leave it "running"
                         results, err = None, f"{type(e).__name__}: {e}"
                     with _limjob_lock:

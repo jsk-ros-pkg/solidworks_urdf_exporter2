@@ -324,44 +324,51 @@ class SelfCollision:
         return float(d), tuple(sorted((la, lb)))
 
 
+def _prismatic_joints(robot):
+    return [j for j in robot.joint_list
+            if type(j).__name__ == "LinearJoint"]
+
+
 def sweep_limits(robot, meshes, step_deg=6.0, max_deg=180.0, margin_deg=2.0,
+                 step_mm=5.0, max_mm=300.0, margin_mm=2.0,
                  margin_m=REST_MARGIN, only=None, progress=None, refine=True,
-                 refine_tol_deg=0.4, sc=None, hull=False):
-    """Per-joint self-collision limit sweep, from the HOME pose (all angles 0).
+                 refine_tol_deg=0.4, refine_tol_mm=0.2, sc=None, hull=False):
+    """Per-joint self-collision limit sweep, from the HOME pose (all at 0).
 
-    Returns ``{joint_name: {lower, upper, continuous, hit_lower, hit_upper,
-    child}}`` with angles in radians.  ``hit_*`` is the colliding link pair
-    that stopped that direction (or ``None`` if the sweep reached ``max_deg``
-    freely).  A joint free in both directions is flagged ``continuous`` (and
-    given the full +-max range as a nominal limit).
+    Sweeps REVOLUTE joints in radians (``step_deg`` / ``max_deg``) and PRISMATIC
+    joints in metres (``step_mm`` / ``max_mm``).  Returns
+    ``{joint_name: {lower, upper, continuous, hit_lower, hit_upper, child}}`` --
+    revolute limits in radians, prismatic limits in metres.  ``hit_*`` is the
+    colliding link pair that stopped that direction (or ``None`` if it reached
+    the max freely).  A revolute joint free both ways is flagged ``continuous``.
 
-    The sweep is a COARSE linear scan (``step_deg``) to bracket the first new
-    self-collision, then -- when ``refine`` -- a BISECTION between the last
-    clear step and the first colliding step to pin the boundary to
-    ``refine_tol_deg`` (the user's idea: a binary search beats fine stepping,
-    so the coarse step can be large and the result is still precise).  The
-    reported limit is the last clear angle minus a small ``margin_deg``.
+    The sweep is a COARSE linear scan to bracket the first new self-collision,
+    then -- when ``refine`` -- a BISECTION to pin the boundary.  The reported
+    limit is the last clear position **backed off** by ``margin_deg`` (revolute)
+    or ``margin_mm`` (prismatic) -- the user-facing safety margin from the
+    colliding edge.
 
-    ``only`` (a set/list of joint names) restricts the sweep to those joints --
-    used by the UI's per-joint "auto-fit" button.  Contacts and adjacency form
-    the baseline at the home pose, and every other joint stays at 0 while one
-    joint sweeps (so each limit is measured against the rest of the robot at
-    rest).  Pass an already-built ``sc`` (SelfCollision) to skip rebuilding it.
-    The robot's pre-call joint angles are restored before returning.
+    ``only`` (joint names) restricts the sweep.  Contacts + adjacency form the
+    HOME baseline; every other joint stays at 0 while one sweeps.  Pass a built
+    ``sc`` to skip rebuilding it.  Pre-call joint angles are restored on return.
     """
     rjoints = _rotational_joints(robot)
+    pjoints = _prismatic_joints(robot)
     if only is not None:
         only = set(only)
         rjoints = [j for j in rjoints if j.name in only]
+        pjoints = [j for j in pjoints if j.name in only]
+    joints = rjoints + pjoints
 
     # snapshot to restore at the end; widen limits so the sweep is not clamped
     snapshot = {j.name: float(j.joint_angle()) for j in robot.joint_list}
     saved_lims = {}
-    for j in _rotational_joints(robot):
+    for j in rjoints + pjoints:
         saved_lims[j.name] = (j.min_angle, j.max_angle)
-        j.min_angle, j.max_angle = -4 * np.pi, 4 * np.pi
+        wide = 10.0 if j in pjoints else 4 * np.pi   # metres vs radians
+        j.min_angle, j.max_angle = -wide, wide
     # baseline (rest contacts + adjacency) is defined at the HOME pose
-    for j in _rotational_joints(robot):
+    for j in joints:
         j.joint_angle(0.0)
     if sc is None:
         # hull=False by default here: the limit sweep needs the EXACT meshes
@@ -369,7 +376,7 @@ def sweep_limits(robot, meshes, step_deg=6.0, max_deg=180.0, margin_deg=2.0,
         # wide).  Callers that already built a hull `sc` (the live UI) pass it.
         sc = SelfCollision(robot, meshes, margin=margin_m, hull=hull)
     # Hull PRE-FILTER world.  A convex hull CONTAINS its mesh, so if two hulls
-    # do not collide the meshes inside them cannot either: a hull-clear angle is
+    # do not collide the meshes inside them cannot either: a hull-clear pose is
     # provably mesh-clear.  The coarse scan runs on these cheap hulls and only
     # escalates to the exact mesh where a hull flags a possible collision, so a
     # free joint (the common, expensive case -- it scans the whole range finding
@@ -378,11 +385,6 @@ def sweep_limits(robot, meshes, step_deg=6.0, max_deg=180.0, margin_deg=2.0,
     # it rather than build a redundant second hull world.)
     sc_hull = sc if hull else SelfCollision(robot, meshes, margin=margin_m,
                                             hull=True)
-
-    step = np.radians(step_deg)
-    nmax = max(1, int(np.radians(max_deg) / step))
-    margin = np.radians(margin_deg)
-    tol = np.radians(refine_tol_deg)
 
     import fcl
 
@@ -406,14 +408,15 @@ def sweep_limits(robot, meshes, step_deg=6.0, max_deg=180.0, margin_deg=2.0,
     raw_objs, raw_g2n, raw_set_T = _world(sc)
     hull_objs, hull_g2n, hull_set_T = _world(sc_hull)
 
-    def _moving_set(J):
-        # Which links ACTUALLY move when only J rotates?  Determined by probing
+    def _moving_set(J, probe):
+        # Which links ACTUALLY move when only J moves?  Determined by probing
         # (the skrobot parent/child tree-walk under-reports the subtree for
         # this model -- it returned just the immediate child while 18 links
         # really move).  The subtree is rigid, so one probe reveals all of it;
-        # the full transform comparison catches on-axis rotation too.
+        # the full transform comparison catches on-axis rotation too.  ``probe``
+        # is in the joint's native unit (radians / metres).
         home = {n: sc._link[n].worldcoords().T() for n in sc.names}
-        J.joint_angle(np.radians(7.0))
+        J.joint_angle(probe)
         moved = {n for n in sc.names
                  if not np.allclose(sc._link[n].worldcoords().T(),
                                     home[n], atol=1e-7)}
@@ -422,15 +425,30 @@ def sweep_limits(robot, meshes, step_deg=6.0, max_deg=180.0, margin_deg=2.0,
 
     out = {}
     try:
-        for J in rjoints:
-            moving = _moving_set(J)
+        for J in joints:
+            pris = J in pjoints
+            # per-joint sweep parameters in the joint's native unit
+            if pris:
+                u_step = step_mm / 1000.0
+                u_max = max_mm / 1000.0
+                u_margin = margin_mm / 1000.0
+                u_tol = refine_tol_mm / 1000.0
+                u_probe = max(u_step, 0.005)
+            else:
+                u_step = np.radians(step_deg)
+                u_max = np.radians(max_deg)
+                u_margin = np.radians(margin_deg)
+                u_tol = np.radians(refine_tol_deg)
+                u_probe = np.radians(7.0)
+            nmax = max(1, int(u_max / u_step))
+            moving = _moving_set(J, u_probe)
             static = [n for n in sc.names if n not in moving]
             if not moving or not static:
                 # nothing can collide; treat as free
                 out[J.name] = {
-                    "lower": round(-np.radians(max_deg), 5),
-                    "upper": round(np.radians(max_deg), 5),
-                    "continuous": max_deg >= 180.0,
+                    "lower": round(-u_max, 5),
+                    "upper": round(u_max, 5),
+                    "continuous": (not pris) and max_deg >= 180.0,
                     "hit_lower": None, "hit_upper": None,
                     "child": J.child_link.name if J.child_link else None}
                 if progress:
@@ -502,7 +520,7 @@ def sweep_limits(robot, meshes, step_deg=6.0, max_deg=180.0, margin_deg=2.0,
                 # rest of this direction and scan the mesh directly.
                 use_hull = True
                 for k in range(1, nmax + 1):
-                    mag = k * step
+                    mag = k * u_step
                     if use_hull and _hull_clear(mag, direction):
                         clear_mag = mag          # hull clear => mesh clear
                         continue
@@ -515,7 +533,7 @@ def sweep_limits(robot, meshes, step_deg=6.0, max_deg=180.0, margin_deg=2.0,
                 # bisect [clear_mag, hit_mag] to the precise boundary
                 if refine and hit_mag is not None:
                     a, b = clear_mag, hit_mag
-                    while b - a > tol:
+                    while b - a > u_tol:
                         m = 0.5 * (a + b)
                         if _collides(m, direction):
                             b = m
@@ -524,12 +542,13 @@ def sweep_limits(robot, meshes, step_deg=6.0, max_deg=180.0, margin_deg=2.0,
                     clear_mag = a
                 J.joint_angle(0.0)   # back to home before the other direction
                 if hit_mag is None:
-                    lim[direction] = direction * np.radians(max_deg)
+                    lim[direction] = direction * u_max
                 else:
-                    lim[direction] = direction * max(0.0, clear_mag - margin)
+                    lim[direction] = direction * max(0.0, clear_mag - u_margin)
                 hit[direction] = hit_pair
             lo, up = sorted([lim[-1], lim[+1]])
-            continuous = hit[+1] is None and hit[-1] is None and max_deg >= 180.0
+            continuous = (not pris) and hit[+1] is None and hit[-1] is None \
+                and max_deg >= 180.0
             out[J.name] = {
                 "lower": round(float(lo), 5),
                 "upper": round(float(up), 5),
@@ -541,7 +560,7 @@ def sweep_limits(robot, meshes, step_deg=6.0, max_deg=180.0, margin_deg=2.0,
             if progress:
                 progress(J.name, out[J.name])
     finally:
-        for j in rjoints:
+        for j in rjoints + pjoints:
             j.min_angle, j.max_angle = saved_lims[j.name]
         for j in robot.joint_list:
             try:
