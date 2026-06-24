@@ -366,6 +366,10 @@
               title="CAD全体を動かして base_link を世界原点(0,0,0)に合わせる">⌖ origin</button>
       <button id="grid" class="toggle active" data-i18n-title="t.grid"
               title="ground grid at root Z=0">grid</button>
+      <button id="boxselect" class="toggle" data-i18n="ui.boxselect"
+              data-i18n-title="t.boxselect"
+              title="box-select mode: drag a rectangle to select multiple links (Shift+drag works any time too). Then batch-set colour / material / reset from the bar at the bottom.">
+        ⬚ select</button>
       <button id="posedrag" class="toggle" data-i18n-title="t.posedrag"
               title="OFF: ドラッグで視点回転 / ON: リンクをドラッグして関節を動かす">
         🖐 pose</button>
@@ -485,6 +489,18 @@
       <button data-bt="revolute" data-i18n="ui.btRevolute">回転</button>
       <button data-bt="continuous" data-i18n="ui.btContinuous">連続回転</button>
       <button data-bt="prismatic" data-i18n="ui.btPrismatic">直動</button>
+      <span style="color:#8a93a3;border-left:1px solid #567;padding-left:8px"
+            data-i18n="ui.bulkLook">· 見た目:</span>
+      <input id="bulk_color" type="color" value="#3b82f6"
+             data-i18n-title="t.bulkColor" title="set colour on all selected links"
+             style="width:30px;height:22px;padding:0;border:1px solid #444;
+                    background:#15171a;cursor:pointer">
+      <button id="bulk_resetcolor" data-i18n="ui.bulkResetColor"
+              data-i18n-title="t.bulkResetColor">↺ 色</button>
+      <select id="bulk_mat" data-i18n-title="t.bulkMat"
+              title="set material (density) on all selected links"
+              style="background:#15171a;color:#ddd;border:1px solid #444;
+                     border-radius:3px;font-size:11px;max-width:130px"></select>
       <button id="bulkclose" style="margin-left:4px">✕</button>
     </div>
     <div id="linkinfo"></div>
@@ -925,6 +941,30 @@ skrobot / native-mesh consumers (not RViz-loadable)">⬇ glb</button></a>
     'bulk.appliedMissed': { en: a => ` (${a.m} skipped)`, ja: a => ` (${a.m} 件は対象外)` },
     'bulk.reloadUndo': { en: ' — reloading (Ctrl+Z to undo)', ja: ' — reloading (Ctrl+Z で戻せます)' },
     'bulk.fail': { en: a => `bulk set failed: ${a.e}`, ja: a => `一括設定 failed: ${a.e}` },
+    'bulk.colorOk': { en: a => `coloured ${a.n} links ${a.hex} ✓`,
+                      ja: a => `${a.n} 個のリンクを ${a.hex} に変更 ✓` },
+    'bulk.colorReset': { en: a => `reset colour on ${a.n} links ✓`,
+                         ja: a => `${a.n} 個のリンクの色をリセット ✓` },
+    'bulk.densitySet': { en: a => `bulk material: ${a.n} links → ${a.d} + rebuilding …`,
+                         ja: a => `一括素材: ${a.n} links → ${a.d} + 再ビルド中 …` },
+    'bulk.densityOk': { en: a => `bulk material ✓ — ${a.n} links (mass/inertia rebuilt)`,
+                        ja: a => `一括素材 ✓ — ${a.n} links（質量・慣性を再計算）` },
+    'bulk.densityFail': { en: a => `bulk material failed: ${a.e}`,
+                          ja: a => `一括素材 failed: ${a.e}` },
+    'ui.bulkLook': { en: '· look:', ja: '· 見た目:' },
+    't.bulkColor': { en: 'set this colour on every selected link',
+                     ja: '選択中の全リンクをこの色に変更' },
+    'ui.bulkResetColor': { en: '↺ colour', ja: '↺ 色' },
+    't.bulkResetColor': { en: 'clear the colour override on every selected link',
+                          ja: '選択中の全リンクの色上書きを解除' },
+    't.bulkMat': { en: 'set material (density) on every selected link',
+                   ja: '選択中の全リンクに素材（密度）を設定' },
+    'ui.bulkMatPlaceholder': { en: '— set material —', ja: '— 素材を設定 —' },
+    'ui.bulkMatReset': { en: 'back to SW value (clear override)',
+                         ja: 'SW値に戻す (上書き解除)' },
+    'ui.boxselect': { en: '⬚ select', ja: '⬚ 範囲選択' },
+    't.boxselect': { en: 'box-select mode: drag a rectangle to select multiple links (Shift+drag works any time too), then batch-set colour / material / reset from the bottom bar',
+                     ja: '範囲選択モード: ドラッグした矩形内のリンクを複数選択（Shift+ドラッグはいつでも可）。下部バーで色・素材・リセットを一括適用' },
     // type changes
     'types.applying': { en: a => `applying ${a.n} type change(s) + rebuilding URDF …`,
                         ja: a => `${a.n} 件の種類変更を適用して URDF を再ビルド中 …` },
@@ -2734,7 +2774,7 @@ function baseTint(name) {
     if (mimicFollowers.has(name)) { return 'mim'; }
   }
   return collisionLinks.has(name) ? 'col'
-       : (name === selectedLink ? 'sel' : null);
+       : (name === selectedLink || boxSelected.has(name) ? 'sel' : null);
 }
 
 function _tintLink(linkName, kind) {   // kind: 'hov' | 'sel' | null
@@ -4849,8 +4889,8 @@ viewer.addEventListener('pointerup', ev => {
   // can select an occluded joint by clicking its (always-on-top) axis line
   const ax = pickAxis(ev);
   const link = ax ? ax.child : pickLink(ev);
-  if (link) { selectLink(link); }
-  else { selectLink(null); }       // empty space: always clear selection
+  if (link) { clearBoxSelection(); selectLink(link); }
+  else { clearBoxSelection(); selectLink(null); }   // empty space: clear all
 });
 
 let lastPick = 0;
@@ -4938,6 +4978,12 @@ const boxselEl = document.getElementById('boxsel');
 const bulkbarEl = document.getElementById('bulkbar');
 let boxing = null;                 // {x0, y0} while dragging the rectangle
 let boxSelected = new Set();       // link names picked by the box
+let boxSelectMode = false;         // toolbar toggle: plain left-drag box-selects
+const boxSelectBtn = document.getElementById('boxselect');
+boxSelectBtn?.addEventListener('click', () => {
+  boxSelectMode = boxSelectBtn.classList.toggle('active');
+  viewer.style.cursor = boxSelectMode ? 'crosshair' : '';
+});
 
 function drawBox(x, y) {
   const r = viewer.getBoundingClientRect();
@@ -4948,7 +4994,9 @@ function drawBox(x, y) {
 }
 // capture phase: intercept BEFORE OrbitControls / the joint manipulator
 viewer.addEventListener('pointerdown', ev => {
-  if (!ev.shiftKey || ev.button !== 0 || !viewer.robot) { return; }
+  if (!(ev.shiftKey || boxSelectMode) || ev.button !== 0 || !viewer.robot) {
+    return;
+  }
   ev.preventDefault();
   ev.stopImmediatePropagation();
   viewer.controls.enabled = false;
@@ -5004,10 +5052,13 @@ function selectLinksInBox(rect) {
 }
 
 function clearBoxSelection() {
-  for (const n of boxSelected) {
+  // clear the set FIRST: baseTint() now reports box-selected links as 'sel', so
+  // restoring their tint must happen once they are no longer in the set
+  const prev = boxSelected;
+  boxSelected = new Set();
+  for (const n of prev) {
     if (n !== selectedLink) { _tintLink(n, baseTint(n)); }
   }
-  boxSelected = new Set();
   bulkbarEl.style.display = 'none';
 }
 document.getElementById('bulkclose').addEventListener('click', clearBoxSelection);
@@ -5159,6 +5210,102 @@ async function bulkSetType(type) {
 }
 bulkbarEl.querySelectorAll('button[data-bt]').forEach(b =>
   b.addEventListener('click', () => bulkSetType(b.dataset.bt)));
+
+// ---- batch look (colour / material / reset) over the box selection ----------
+// density presets shared with the per-link material picker
+const BULK_MAT = [['PLA', '1240'], ['ABS', '1040'], ['PETG', '1270'],
+  ['Nylon', '1140'], ['POM', '1410'], ['FR4', '1850'],
+  ['Aluminum', '2700'], ['Iron/Steel', '7850'], ['Titanium', '4500'],
+  ['custom', 'custom']];
+const bulkMatSel = document.getElementById('bulk_mat');
+if (bulkMatSel) {
+  bulkMatSel.innerHTML =
+    `<option value="">${t('ui.bulkMatPlaceholder')}</option>`
+    + `<option value="__reset__">${t('ui.bulkMatReset')}</option>`
+    + BULK_MAT.map(([label, val]) =>
+      `<option value="${val}">${val === 'custom' ? label : label + ' ' + val}` +
+      `</option>`).join('');
+}
+
+async function bulkSetColor(hex) {       // colour every selected link (no rebuild)
+  const links = [...boxSelected];
+  if (!links.length) { return; }
+  for (const n of links) {
+    applyLinkColor(n, hex);              // live
+    try {
+      const resp = await fetch('/api/set_color', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ link: n, color: hex }) });
+      const r = await resp.json();
+      if (resp.ok && !r.error) {
+        linkColors[n] = r.color; if (compMeta[n]) { compMeta[n].color = r.color; }
+      }
+    } catch (_e) { /* per-link failure is non-fatal */ }
+  }
+  pushRecentColor(hex);
+  for (const n of boxSelected) { _tintLink(n, 'sel'); }   // keep the box tint
+  log(t('bulk.colorOk', { n: links.length, hex }), 'ok');
+}
+
+async function bulkResetColor() {        // clear the colour override on selection
+  const links = [...boxSelected];
+  if (!links.length) { return; }
+  for (const n of links) {
+    resetLinkColor(n);
+    try {
+      await fetch('/api/set_color', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ link: n, color: null }) });
+    } catch (_e) { /* non-fatal */ }
+    delete linkColors[n]; if (compMeta[n]) { compMeta[n].color = null; }
+  }
+  for (const n of boxSelected) { _tintLink(n, 'sel'); }
+  log(t('bulk.colorReset', { n: links.length }), 'ok');
+}
+
+async function bulkSetDensity(d) {       // set material density on all (rebuilds)
+  const links = [...boxSelected];
+  if (!links.length || !currentInfo) { return; }
+  const ctrls = bulkbarEl.querySelectorAll('button, select, input');
+  ctrls.forEach(e => { e.disabled = true; });
+  log(t('bulk.densitySet', { n: links.length,
+                             d: d == null ? t('li.swValue') : d }));
+  statusEl.textContent = t('status.rebuilding');
+  try {
+    for (const n of links) {
+      const resp = await fetch('/api/set_material', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ link: n, density: d }) });
+      const r = await resp.json();
+      if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
+    }
+    log(t('bulk.densityOk', { n: links.length }), 'ok');
+    clearBoxSelection();
+    loadRobot(currentInfo, { keepPose: true });
+    refreshHistory();
+  } catch (e) {
+    log(t('bulk.densityFail', { e: e.message ?? e }), 'err');
+  } finally {
+    ctrls.forEach(e => { e.disabled = false; });
+  }
+}
+
+document.getElementById('bulk_color')?.addEventListener('change',
+  e => bulkSetColor(e.target.value));
+document.getElementById('bulk_resetcolor')?.addEventListener('click',
+  bulkResetColor);
+bulkMatSel?.addEventListener('change', () => {
+  const v = bulkMatSel.value;
+  bulkMatSel.selectedIndex = 0;          // reset the picker back to placeholder
+  if (v === '') { return; }
+  if (v === '__reset__') { bulkSetDensity(null); return; }
+  if (v === 'custom') {
+    const d = prompt(t('li.densityPrompt'));
+    if (d) { bulkSetDensity(Number(d)); }
+    return;
+  }
+  bulkSetDensity(Number(v));
+});
 window.addEventListener('keydown', ev => {
   const ae = document.activeElement;
   const inField = /INPUT|SELECT|TEXTAREA/.test(ae?.tagName)
