@@ -578,7 +578,7 @@ def ros_urdf_stem(pkg, urdf_name=None):
 def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
                           ctx_fmt=_CTX_FMT, ros_version=1, pkg_name=None,
                           urdf_name=None, colors=None, collision="copy",
-                          collision_quality="balanced"):
+                          collision_quality="balanced", merge_fixed=False):
     """``pkg_dir`` (a built package) -> ``[(arcname, bytes), ...]`` for a portable
     ROS package, all behind ``package://`` URLs.  The package is named
     ``pkg_name`` if given (validated, see :func:`ros_pkg_name`), else
@@ -639,6 +639,11 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
     # findall()/iter() traversals below ignore them.
     _parser = ET.XMLParser(target=ET.TreeBuilder(insert_comments=True))
     root = ET.parse(urdf_path, parser=_parser).getroot()
+    if merge_fixed:
+        # lump fixed-joint children with geometry into their parents BEFORE the
+        # mesh conversion / collision loop runs over the (now fewer) links
+        from .merge import merge_fixed_links
+        merge_fixed_links(root)
     colors = colors or {}
 
     files = []
@@ -797,19 +802,22 @@ def write_ros_description_package(pkg_dir, robot_name, dest_dir,
                                   email="auto@example.com", ros_version=1,
                                   pkg_name=None, urdf_name=None, colors=None,
                                   collision="copy",
-                                  collision_quality="balanced"):
+                                  collision_quality="balanced",
+                                  merge_fixed=False):
     """Write the ROS package under ``dest_dir`` and return its directory path.
     The package is named ``pkg_name`` if given, else ``<robot_name>_description``;
     the URDF inside is named ``urdf_name`` if given, else the package name.
     ``ros_version`` (1 = catkin, 2 = ament_cmake), ``colors`` (per-link colour
-    overrides) and ``collision`` / ``collision_quality`` (CoACD collision-mesh
-    decomposition) are passed through to :func:`build_ros_description`."""
+    overrides), ``collision`` / ``collision_quality`` (CoACD collision-mesh
+    decomposition) and ``merge_fixed`` (lump fixed-joint children into parents)
+    are passed through to :func:`build_ros_description`."""
     pkg = ros_pkg_name(robot_name, pkg_name)
     files = build_ros_description(pkg_dir, robot_name, email=email,
                                   ros_version=ros_version, pkg_name=pkg,
                                   urdf_name=urdf_name, colors=colors,
                                   collision=collision,
-                                  collision_quality=collision_quality)
+                                  collision_quality=collision_quality,
+                                  merge_fixed=merge_fixed)
     root = os.path.abspath(dest_dir)
     for arc, data in files:
         dst = os.path.join(root, *arc.split("/"))

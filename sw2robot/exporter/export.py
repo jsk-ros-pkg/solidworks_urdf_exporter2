@@ -159,7 +159,8 @@ def extract(assembly_path, out_dir=None, robot_name=None, visible=False,
 # ---------------------------------------------------------------- build
 def build(pkg_dir, config_path=None, base_hint=None, exclude=None,
           ros_pkg=False, density=None, ros_version=1, ros_pkg_name=None,
-          ros_urdf_name=None, collision="copy", collision_quality="balanced"):
+          ros_urdf_name=None, collision="copy", collision_quality="balanced",
+          merge_fixed=False):
     _tolerant_console()
     graph = GraphState.load(os.path.join(pkg_dir, GRAPH_FILE))
     robot_name = graph.robot_name
@@ -201,7 +202,8 @@ def build(pkg_dir, config_path=None, base_hint=None, exclude=None,
             pkg_dir, robot_name, os.path.dirname(os.path.abspath(pkg_dir)),
             ros_version=ros_version, pkg_name=ros_pkg_name,
             urdf_name=ros_urdf_name, colors=colors,
-            collision=collision, collision_quality=collision_quality)
+            collision=collision, collision_quality=collision_quality,
+            merge_fixed=merge_fixed)
 
     print(f"\nDONE. Package: {pkg_dir}")
     print(f"  URDF:   {urdf_path}")
@@ -218,12 +220,13 @@ def build(pkg_dir, config_path=None, base_hint=None, exclude=None,
 def export(assembly_path, out_dir=None, robot_name=None, visible=False,
            config_path=None, base_hint=None, exclude=None, ros_pkg=False,
            ros_version=1, ros_pkg_name=None, ros_urdf_name=None,
-           collision="copy", collision_quality="balanced"):
+           collision="copy", collision_quality="balanced", merge_fixed=False):
     pkg_dir = extract(assembly_path, out_dir, robot_name, visible)
     return build(pkg_dir, config_path=config_path, base_hint=base_hint,
                  exclude=exclude, ros_pkg=ros_pkg, ros_version=ros_version,
                  ros_pkg_name=ros_pkg_name, ros_urdf_name=ros_urdf_name,
-                 collision=collision, collision_quality=collision_quality)
+                 collision=collision, collision_quality=collision_quality,
+                 merge_fixed=merge_fixed)
 
 
 def _exclude_list(s):
@@ -264,6 +267,10 @@ def main():
                     help="CoACD preset for --collision coacd: 'balanced' "
                          "(default, ~5-6 parts/link, ~8-60s) or 'fine' "
                          "(~8 parts, tighter fit, ~2-3x slower)")
+    ap.add_argument("--merge-fixed", action="store_true",
+                    help="lump fixed-joint child links (with geometry) into "
+                         "their parents in the --ros-pkg URDF -- one rigid link "
+                         "per moving body; mesh-less coordinate frames are kept")
     args = ap.parse_args()
     export(args.assembly, args.out, args.name, args.visible,
            config_path=args.config, base_hint=args.base,
@@ -271,7 +278,8 @@ def main():
            ros_pkg=args.ros_pkg or args.ros2,
            ros_version=2 if args.ros2 else 1,
            ros_pkg_name=args.ros_pkg_name, ros_urdf_name=args.ros_urdf_name,
-           collision=args.collision, collision_quality=args.collision_quality)
+           collision=args.collision, collision_quality=args.collision_quality,
+           merge_fixed=args.merge_fixed)
 
 
 if __name__ == "__main__":

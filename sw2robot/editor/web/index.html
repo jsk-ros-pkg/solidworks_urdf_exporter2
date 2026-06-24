@@ -355,6 +355,9 @@
       <button id="collview" class="toggle" data-i18n="ui.collview"
               data-i18n-title="t.collview"
               title="show/hide the CoACD collision meshes (generate them first with the export panel's ⚙ Generate collision)">▦ coll</button>
+      <button id="mergeview" class="toggle" data-i18n="ui.mergeview"
+              data-i18n-title="t.mergeview"
+              title="display the robot with fixed-joint child links lumped into their parents (one rigid link per moving body); mesh-less coordinate frames are kept">🔗 merge fixed</button>
       <button id="alignmode" class="toggle" data-i18n-title="t.align"
               title="click a face: root origin moves there, +Z = face normal">⊕ align</button>
       <button id="portmode" class="toggle" data-i18n-title="t.port"
@@ -649,6 +652,14 @@ colour-coded) on top of the visual meshes.">
           <span data-i18n="ui.coacdshow">show collision</span>
         </label>
         <span id="coacdprog" style="color:#8a93a3;font-size:11px"></span>
+      </div>
+      <div style="display:flex;gap:6px;align-items:center;margin-bottom:4px;flex-wrap:wrap">
+        <label style="display:flex;gap:4px;align-items:center;color:#8a93a3;cursor:pointer"
+               data-i18n-title="t.mergefixed"
+               title="Lump fixed-joint child links (with geometry) into their parents in the exported URDF -- one rigid link per moving body. Mesh-less coordinate frames are kept. Applies to the ROS1/ROS2 packages.">
+          <input id="mergefixed" type="checkbox">
+          <span data-i18n="ui.mergefixed">merge fixed links</span>
+        </label>
       </div>
       <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">
         <a id="expdae" href="/api/export/zip?meshes=dae&ros=1" download>
@@ -1218,6 +1229,16 @@ skrobot / native-mesh consumers (not RViz-loadable)">⬇ glb</button></a>
     'ui.collview': { en: '▦ coll', ja: '▦ 衝突' },
     't.collview': { en: 'show/hide the CoACD collision meshes (generate them first with the export panel’s ⚙ Generate collision)',
                     ja: 'CoACD 衝突メッシュの表示/非表示（先にエクスポート欄の ⚙ 衝突形状を生成 で作成）' },
+    'ui.mergeview': { en: '🔗 merge fixed', ja: '🔗 固定リンク統合' },
+    't.mergeview': { en: 'display the robot with fixed-joint child links lumped into their parents (one rigid link per moving body); mesh-less coordinate frames are kept',
+                     ja: 'fixedジョイントの子リンクを親に統合して表示（可動部ごとに1リンク）。メッシュ無しの座標フレームは保持' },
+    'merge.on': { en: '🔗 merge-fixed view ON (fixed-joint children lumped into parents)',
+                  ja: '🔗 固定リンク統合表示 ON（fixed子リンクを親に統合）' },
+    'merge.off': { en: 'merge-fixed view OFF (showing the full link tree)',
+                   ja: '固定リンク統合表示 OFF（全リンク表示）' },
+    'ui.mergefixed': { en: 'merge fixed links', ja: 'fixedリンクを統合' },
+    't.mergefixed': { en: 'Lump fixed-joint child links (with geometry) into their parents in the exported URDF — one rigid link per moving body. Mesh-less coordinate frames are kept. Applies to the ROS1/ROS2 packages.',
+                      ja: 'エクスポートURDFで、fixedジョイントの子リンク（ジオメトリ有り）を親に統合します（可動部ごとに1リンク）。メッシュ無しの座標フレームは保持。ROS1/ROS2パッケージに適用。' },
     't.coacdshow': { en: 'Overlay the generated convex collision parts (semi-transparent, colour-coded) on top of the visual meshes.',
                      ja: '生成した凸collisionパーツ（半透明・色分け）を visual メッシュの上に重ねて表示します。' },
     'coacd.start': { en: 'starting …', ja: '開始中 …' },
@@ -1546,6 +1567,7 @@ viewer.addEventListener('joint-mouseover', e => {
 });
 let dropMode = false;          // meshes come from dropped blobs, not /pkg/
 let currentInfo = null;        // {name, urdf} of the open server package
+let mergedView = false;        // viewer shows the fixed-joint-lumped URDF
 let compMeta = {};             // link -> {material, density, name, override}
 let linkColors = {};           // URDF/viewer link name -> '#rrggbb' override
 let excludedList = [];         // component names excluded from the URDF
@@ -3923,6 +3945,7 @@ expurdf?.addEventListener('input', () => {
 // (the glb export keeps its uniform-mesh layout).
 const coacdBox = document.getElementById('coacd');
 const cqualitySel = document.getElementById('cquality');
+const mergeFixedBox = document.getElementById('mergefixed');
 
 // ---- CoACD collision preview: generate per-link convex parts in the
 // background, popping each link's mesh into the viewer as it lands, and a toggle
@@ -4120,17 +4143,29 @@ function setCollisionShown(on) {
 coacdShow?.addEventListener('change', () => setCollisionShown(coacdShow.checked));
 collViewBtn?.addEventListener('click',
   () => setCollisionShown(!collViewBtn.classList.contains('active')));
+
+// "merge fixed" view: reload the robot from the fixed-joint-lumped URDF
+// (?merged=1).  Reuses the normal load path, keeping the current pose.
+const mergeViewBtn = document.getElementById('mergeview');
+mergeViewBtn?.addEventListener('click', () => {
+  if (!currentInfo) { return; }
+  mergedView = mergeViewBtn.classList.toggle('active');
+  log(t(mergedView ? 'merge.on' : 'merge.off'));
+  loadRobot(currentInfo, { keepPose: true });
+});
 expLinks.forEach(a => a.addEventListener('click', async ev => {
   ev.preventDefault();
   const base = a.getAttribute('href').split('&name=')[0].split('&urdf=')[0];
   const name = (exppkg?.value || '').trim();
   const urdf = (expurdf?.value || '').trim();
-  // coacd applies to the ROS (.dae) packages, not the uniform glb export
+  // coacd + merge-fixed apply to the ROS (.dae) packages, not the uniform glb
   const coacd = a.id !== 'expglb' && !!coacdBox?.checked;
+  const mergeFixed = a.id !== 'expglb' && !!mergeFixedBox?.checked;
   const url = base
     + (name ? `&name=${encodeURIComponent(name)}` : '')
     + (urdf ? `&urdf=${encodeURIComponent(urdf)}` : '')
-    + (coacd ? `&collision=coacd&cquality=${cqualitySel?.value || 'balanced'}` : '');
+    + (coacd ? `&collision=coacd&cquality=${cqualitySel?.value || 'balanced'}` : '')
+    + (mergeFixed ? '&mergefixed=1' : '');
   const what = a.id === 'expglb' ? 'glb'
     : a.id === 'expros2' ? 'ROS 2' : 'ROS 1';
   showLoadbar(t('export.bar', { what }), { indet: true });
@@ -5491,7 +5526,8 @@ function loadRobot(info, { drop = false, keepPose = false,
   // cached edit-reloads finish before it ever appears)
   showLoadbar(t('urdf.loadingBar', { name: info.name }), { indet: true, delay: 300 });
   // cache-bust so a rebuilt URDF is never served stale by the browser
-  viewer.urdf = drop ? info.urdf : info.urdf + '?v=' + Date.now();
+  viewer.urdf = drop ? info.urdf
+    : info.urdf + '?v=' + Date.now() + (mergedView ? '&merged=1' : '');
 }
 
 // ---- root frame box: +-90 deg buttons + numeric rpy(deg)/xyz(mm) --------

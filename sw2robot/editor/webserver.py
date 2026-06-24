@@ -511,7 +511,8 @@ def _read_root_pose(txt):
 
 def _export_zip(pkg_dir, robot_name, mesh_fmt="dae", ros_version=1,
                 pkg_name=None, urdf_name=None, colors=None,
-                collision="copy", collision_quality="balanced"):
+                collision="copy", collision_quality="balanced",
+                merge_fixed=False):
     """ZIP a portable ROS package (package:// URLs), named ``pkg_name`` if given
     else ``<robot_name>_description``; the URDF inside is named ``urdf_name`` if
     given, else the package name.
@@ -546,6 +547,7 @@ def _export_zip(pkg_dir, robot_name, mesh_fmt="dae", ros_version=1,
                                                colors=colors,
                                                collision=collision,
                                                collision_quality=collision_quality,
+                                               merge_fixed=merge_fixed,
                                                **kwargs):
             z.writestr(arc, data)
     return pkg, buf.getvalue()
@@ -1938,6 +1940,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                     return self._send_json(
                         {"error": f"unsupported collision quality: {cquality}"},
                         400)
+                merge_fixed = (query.get("mergefixed") or ["0"])[0] == "1"
                 pkg_name = (query.get("name") or [""])[0].strip() or None
                 urdf_name = (query.get("urdf") or [""])[0].strip() or None
                 # the ROS exporter hardcodes the urdf/<robot_name>.urdf + meshes/
@@ -1964,7 +1967,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                                                 urdf_name=urdf_name,
                                                 colors=colors,
                                                 collision=collision,
-                                                collision_quality=cquality)
+                                                collision_quality=cquality,
+                                                merge_fixed=merge_fixed)
                 except ValueError as e:
                     return self._send_json({"error": str(e)}, 400)
                 fname = (f"{cls.robot_name}_glb.zip" if fmt == "glb"
@@ -2020,21 +2024,36 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 if not cls.pkg_dir:
                     return self.send_error(404, "no package open")
                 rel = path[len("/pkg/"):]
+                is_urdf = urllib.parse.unquote(rel) == cls.urdf_rel
+                # ?merged=1 -> serve the fixed-joint-lumped URDF (the viewer's
+                # "merge fixed" toggle uses this; mesh refs are unchanged so the
+                # same meshes still resolve)
+                merged = query.get("merged") == ["1"]
+
+                def _maybe_merge(txt):
+                    if not merged:
+                        return txt
+                    from sw2robot.exporter.merge import merge_fixed_links_text
+                    return merge_fixed_links_text(txt)
                 # URDF-input mode: the URDF URL is the overlay-applied URDF,
                 # computed on the fly so the on-disk file stays the pristine base
                 # (decode first -- urdf_rel is decoded, but the URL may carry %20)
-                if (urllib.parse.unquote(rel) == cls.urdf_rel
-                        and _um["state"] is not None
+                if (is_urdf and _um["state"] is not None
                         and not _cad_mode(cls.pkg_dir)):
                     from . import core
                     served = _rewrite_package_urls(
                         core.build_urdf(_um["state"], sanitize=False),
                         cls.urdf_rel, cls.pkg_dir)
-                    return self._send_bytes(served.encode("utf-8"),
+                    return self._send_bytes(_maybe_merge(served).encode("utf-8"),
                                             "application/xml")
                 full = self._resolve(cls.pkg_dir, rel)
                 if full is None or not os.path.isfile(full):
                     return self.send_error(404)
+                if is_urdf and merged:
+                    with open(full, encoding="utf-8") as f:
+                        return self._send_bytes(
+                            _maybe_merge(f.read()).encode("utf-8"),
+                            "application/xml")
                 if full.lower().endswith(".3dxml") \
                         and query.get("glb") == ["1"]:
                     return self._send_file(_convert_3dxml_to_glb(full))

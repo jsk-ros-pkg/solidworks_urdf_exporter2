@@ -31,6 +31,97 @@ def _make_pkg(tmp_path, robot="robot"):
     return str(tmp_path)
 
 
+def _make_fixed_pkg(tmp_path, robot="rb"):
+    """A two-link package: parent 'a' + a fixed-joint child 'b', both meshed."""
+    if not os.path.exists(_SAMPLE_MESH):
+        pytest.skip("sample .3dxml mesh not present")
+    (tmp_path / "meshes").mkdir()
+    (tmp_path / "urdf").mkdir()
+    shutil.copy(_SAMPLE_MESH, tmp_path / "meshes" / "part.3dxml")
+    urdf = (
+        f'<?xml version="1.0"?>\n<robot name="{robot}">\n'
+        '  <link name="a"><visual><geometry>'
+        '<mesh filename="../meshes/part.3dxml"/></geometry></visual></link>\n'
+        '  <joint name="a__b" type="fixed">\n'
+        '    <origin xyz="0.1 0 0" rpy="0 0 0"/>\n'
+        '    <parent link="a"/><child link="b"/>\n  </joint>\n'
+        '  <link name="b"><visual><geometry>'
+        '<mesh filename="../meshes/part.3dxml"/></geometry></visual></link>\n'
+        '</robot>\n')
+    (tmp_path / "urdf" / f"{robot}.urdf").write_text(urdf, encoding="utf-8")
+    return str(tmp_path)
+
+
+def test_export_merge_fixed_lumps_child_into_parent(tmp_path):
+    import xml.etree.ElementTree as ET
+
+    from sw2robot.exporter.ros_export import build_ros_description
+
+    pkg_dir = _make_fixed_pkg(tmp_path, robot="rb")
+    files = dict(build_ros_description(pkg_dir, "rb", merge_fixed=True))
+    urdf = files["rb_description/urdf/rb_description.urdf"].decode()
+    root = ET.fromstring(urdf)
+
+    links = {ln.get("name") for ln in root.findall("link")}
+    assert links == {"a"}                       # 'b' lumped into 'a'
+    assert not root.findall("joint")            # the fixed joint is gone
+    # 'a' now carries both meshes (its own + the moved child's)
+    assert len(root.find("link").findall("visual")) == 2
+    # without merge_fixed the two links + fixed joint are preserved
+    plain = dict(build_ros_description(pkg_dir, "rb"))
+    proot = ET.fromstring(plain["rb_description/urdf/rb_description.urdf"].decode())
+    assert {ln.get("name") for ln in proot.findall("link")} == {"a", "b"}
+
+
+def _make_fixed_pkg_with_collision(tmp_path, robot="rc"):
+    """parent 'a' + fixed child 'b', both with visual AND collision meshes."""
+    if not os.path.exists(_SAMPLE_MESH):
+        pytest.skip("sample .3dxml mesh not present")
+    (tmp_path / "meshes").mkdir()
+    (tmp_path / "urdf").mkdir()
+    shutil.copy(_SAMPLE_MESH, tmp_path / "meshes" / "part.3dxml")
+
+    def _link(name):
+        m = '<mesh filename="../meshes/part.3dxml"/>'
+        return (f'  <link name="{name}">'
+                f'<visual><geometry>{m}</geometry></visual>'
+                f'<collision><geometry>{m}</geometry></collision></link>\n')
+    urdf = (f'<?xml version="1.0"?>\n<robot name="{robot}">\n' + _link("a")
+            + '  <joint name="a__b" type="fixed">'
+              '<origin xyz="0.1 0 0" rpy="0 0 0"/>'
+              '<parent link="a"/><child link="b"/></joint>\n'
+            + _link("b") + '</robot>\n')
+    (tmp_path / "urdf" / f"{robot}.urdf").write_text(urdf, encoding="utf-8")
+    return str(tmp_path)
+
+
+def test_merge_fixed_plus_coacd_compose(tmp_path, monkeypatch):
+    """merge_fixed + collision='coacd' together: the child lumps into the parent
+    FIRST, then CoACD decomposes every (now parent-owned) collision block."""
+    import xml.etree.ElementTree as ET
+
+    from sw2robot.exporter import ros_export
+
+    monkeypatch.setattr(ros_export, "coacd_available", lambda: True)
+    monkeypatch.setattr(ros_export, "_run_coacd",
+                        lambda v, f, params: _two_unit_boxes())
+
+    pkg_dir = _make_fixed_pkg_with_collision(tmp_path, robot="rc")
+    files = dict(ros_export.build_ros_description(
+        pkg_dir, "rc", merge_fixed=True, collision="coacd"))
+
+    root = ET.fromstring(
+        files["rc_description/urdf/rc_description.urdf"].decode())
+    assert {ln.get("name") for ln in root.findall("link")} == {"a"}   # merged
+    a = root.find("link")
+    # a held 2 collision blocks after the merge (its own + b's); CoACD split each
+    # into 2 convex parts -> 4 collision blocks, all pointing at coacd part STLs
+    cols = a.findall("collision")
+    assert len(cols) == 4
+    assert all("_collision_" in c.find(".//mesh").get("filename") for c in cols)
+    assert len(a.findall("visual")) == 2                 # both visuals lumped in
+
+
 def test_mesh_to_dae_scale_and_loadable():
     if not os.path.exists(_SAMPLE_MESH):
         pytest.skip("sample .3dxml mesh not present")
