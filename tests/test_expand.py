@@ -226,6 +226,33 @@ def test_hidden_components_excluded():
     assert "plate-1" not in {c.name for c in comps2}
 
 
+def test_exclude_applies_after_subassembly_expansion():
+    # excluding a part that only exists AFTER sub-assembly expansion (what the
+    # editor's Delete sends for a sub-assembly child) must remove it -- the
+    # top-level exclude filter never sees it, so the post-expansion pass does.
+    comps, adj, ground = from_graph(make_graph(), exclude=["servo-1/horn-1"])
+    names = {c.name for c in comps}
+    assert "servo-1/horn-1" not in names
+    assert names == {"plate-1", "servo-1/case-1"}
+    # the removed child no longer appears on any adjacency edge
+    assert not any("horn-1" in n for key in adj for n in key)
+    # a top-level exclude still works (regression guard)
+    comps2, _, _ = from_graph(make_graph(), exclude=["plate-1"])
+    assert "plate-1" not in {c.name for c in comps2}
+
+
+def test_excluded_matches_component_or_link_name():
+    # the editor's Delete may send the raw component name OR the sanitised link
+    # name; both must match (they differ by '.'/'/'/'-' vs '_').  Real vial case.
+    from sw2robot.exporter.model import _excluded
+    comp = "vial_phi30_all.SLDPRT-2/vial_phi30-1"
+    link = "vial_phi30_all_SLDPRT_2__vial_phi30_1"
+    assert _excluded(comp, link, [link.lower()])      # link-name form
+    assert _excluded(comp, link, [comp.lower()])      # component-name form
+    assert not _excluded(comp, link, ["unrelated"])
+    assert not _excluded(comp, link, ["vial_phi30_all_sldprt_1__vial_phi30_1"])
+
+
 def test_snap_not_fooled_by_multi_mate_single_instance():
     # ONE cover mated to two boards: hole A on its origin axis (0mm), hole B
     # 20mm away -- legitimate design, must NOT be "corrected"

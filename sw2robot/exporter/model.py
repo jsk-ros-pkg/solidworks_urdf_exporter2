@@ -2157,6 +2157,18 @@ def _edge_rec(e):
             "mates": [g.model_dump() for g in e.mates] if e.mates else []}
 
 
+def _excluded(name, link_name, exclude):
+    """True if an ``exclude`` entry matches a component's SolidWorks ``name`` OR
+    its (sanitised) URDF ``link_name``.  The editor's Delete may send either form
+    -- the raw component name (``vial_phi30_all.SLDPRT-2/vial_phi30-1``) or the
+    link name (``vial_phi30_all_SLDPRT_2__vial_phi30_1``) -- and the two differ
+    by '.'/'/'/'-' vs '_', so matching only the component name silently missed
+    links whose Delete fell back to the link name."""
+    n = (name or "").lower()
+    ln = (link_name or "").lower()
+    return any(e in n or (ln and e in ln) for e in exclude)
+
+
 def from_graph(graph, exclude=None, expand=None, no_expand=None):
     """GraphState -> (comps, adjacency, ground), applying ``exclude`` and
     expanding sub-assemblies whose internals move (see
@@ -2167,7 +2179,7 @@ def from_graph(graph, exclude=None, expand=None, no_expand=None):
         print(f"      excluding {len(hidden)} hidden components")
     comps = []
     for cs in graph.components:
-        if any(e in cs.name.lower() for e in exclude):
+        if _excluded(cs.name, cs.link_name, exclude):
             continue
         if cs.name in hidden:
             continue
@@ -2185,8 +2197,22 @@ def from_graph(graph, exclude=None, expand=None, no_expand=None):
         adjacency[frozenset((e.a, e.b))] = _edge_rec(e)
     ground = {g for g in graph.ground if g in names}
     _snap_unsolved_mates(comps, adjacency)
-    return _expand_subassemblies(graph, comps, adjacency, ground,
-                                 expand=expand, no_expand=no_expand)
+    comps, adjacency, ground = _expand_subassemblies(
+        graph, comps, adjacency, ground, expand=expand, no_expand=no_expand)
+    if exclude:
+        # Apply `exclude` AGAIN after expansion: the filter at the top of this
+        # function only sees top-level graph.components, so a part excluded from
+        # INSIDE an expanded sub-assembly (e.g. the editor's Delete on a
+        # palm_1__* child) would otherwise be spliced back in here.  Prune the
+        # matching components and any adjacency edge / ground entry that
+        # referenced them.
+        keep = {c.name for c in comps
+                if not _excluded(c.name, c.link_name, exclude)}
+        comps = [c for c in comps if c.name in keep]
+        adjacency = {k: v for k, v in adjacency.items()
+                     if all(n in keep for n in k)}
+        ground = {g for g in ground if g in keep}
+    return comps, adjacency, ground
 
 
 # --------------------------------------------------------------------
