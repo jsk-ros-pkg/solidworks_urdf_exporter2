@@ -16,7 +16,9 @@
 **SolidWorks → robot (URDF) converter.** Turn a SolidWorks assembly into a
 URDF, then clean it up in the browser.
 
-https://github.com/user-attachments/assets/d821525c-d1e2-4a33-8bbf-fea42ba12434
+<p align="center">
+  <img src="assets/solidworks-to-robot.gif" alt="SolidWorks → robot (URDF) editor demo">
+</p>
 
 One import package, with two subpackages:
 
