@@ -14,6 +14,7 @@ authors = [{ name = "Iori Yanokura", email = "ab.ioryz@gmail.com" }]
 dependencies = [
     "numpy>=2",
     "trimesh>=3.9",
+    "networkx>=3",
     "lxml",
     "pydantic>=2",
     "pyyaml>=6",
