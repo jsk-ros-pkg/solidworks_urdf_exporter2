@@ -1004,6 +1004,9 @@ skrobot / native-mesh consumers (not RViz-loadable)">⬇ glb</button></a>
     'types.rebuilt': { en: a => `rebuilt ✓ (${a.n} change(s)) — reloading (meshes come from cache, pose+camera kept)`,
                        ja: a => `再ビルド完了 ✓（${a.n} 件）— reloading（メッシュはキャッシュ、姿勢・カメラ維持）` },
     'types.applyFail': { en: a => `apply failed: ${a.e}`, ja: a => `適用に失敗: ${a.e}` },
+    'types.applied': { en: a => `${a.n} type change(s) applied instantly — saving in background …`,
+                       ja: a => `${a.n} 件の種類変更を即時反映しました — バックグラウンドで保存中 …` },
+    'types.saved': { en: a => `saved ✓ (${a.n} change(s))`, ja: a => `保存しました ✓（${a.n} 件）` },
     'jtype.toggle': { en: a => `${a.joint}: ${a.from} → ${a.to} (t)`,
                       ja: a => `${a.joint}: ${a.from} → ${a.to} に変更 (t)` },
     'flip.applying': { en: a => `reversing ${a.joint} …`,
@@ -3833,15 +3836,73 @@ document.getElementById('bulkset').addEventListener('click', () => {
   applyTypeChanges(changes);             // the whole batch in ONE rebuild
 });
 
-// set joint type(s) -> patch joints.yaml + rebuild + reload (applied instantly;
-// the sidebar dropdown / box-select / panel all funnel through here)
-async function applyTypeChanges(changes) {
-  if (!changes.length || !currentInfo) {
-    reselectAfterLoad = null;
-    return false;
+// set joint type(s).  A fixed<->movable flip NEVER changes topology (same links,
+// joint names and tree -- only the joint's type + <axis>/<limit> presence; the
+// exporter even writes a ghost <axis> on fixed joints), so we apply it INSTANTLY
+// in the live model and persist (patch joints.yaml + rebuild URDF) in the
+// BACKGROUND -- no full reload / mesh re-parse on the happy path, hence no lag.
+// Same trust-the-client pattern as root-frame edits.  The sidebar dropdown /
+// box-select / panel all funnel through here.
+
+// best-known axis [x,y,z] for a joint being (re)enabled: this session's memory
+// (stored whenever it was movable) -> the URDF's <axis> tag (present even on
+// fixed joints) -> the live loader axis.  null only if truly unknown.
+function jointAxisArray(j) {
+  const m = axisMemory.get(j.name);
+  if (m && m.length === 3 && m.every(n => Number.isFinite(n))) { return m; }
+  const el = j.urdfNode && [...j.urdfNode.children]
+    .find(e => e.tagName === 'axis');
+  if (el) {
+    const a = (el.getAttribute('xyz') ?? '').trim().split(/\s+/).map(Number);
+    if (a.length === 3 && a.every(n => Number.isFinite(n))) { return a; }
   }
-  log(t('types.applying', { n: changes.length }));
-  statusEl.textContent = t('status.rebuilding');
+  if (j.axis) { return j.axis.toArray(); }
+  return null;
+}
+
+// mutate the live urdf-loader joint so the 3D model + drag behave as the new
+// type, WITHOUT reloading the URDF (topology is identical across a type flip).
+function patchJointTypeLive(j, type) {
+  if (type === 'fixed') {
+    if (j.jointType !== 'fixed') {
+      axisMemory.set(j.name, j.axis.toArray());  // remember for un-fixing later
+      j.setJointValue(0);                         // return to rest before locking
+    }
+    j.jointType = 'fixed';
+    return;
+  }
+  // -> movable: ensure a usable axis (a freshly un-fixed joint may carry none)
+  const arr = jointAxisArray(j) ?? [0, 0, 1];
+  if (!j.axis) { j.axis = new THREE.Vector3(); }
+  j.axis.set(arr[0], arr[1], arr[2]).normalize();
+  j.jointType = type;
+  if (type === 'revolute' || type === 'prismatic') {
+    const lo = Number(j.limit?.lower), hi = Number(j.limit?.upper);
+    // un-fixed joints have no <limit>; default to +-pi like the exporter does.
+    // the background rebuild persists the authoritative range for next reload.
+    if (!(hi > lo)) { j.limit = { lower: -Math.PI, upper: Math.PI }; }
+  }
+  j.setJointValue(0);
+}
+
+// re-render everything that reads a joint's type WITHOUT touching the 3D scene
+// or re-parsing meshes: sidebar tree, move-mode sliders, axis markers, and the
+// open joint panel.  DOM-only -> this is what makes a type flip feel instant.
+function refreshAfterTypeChange() {
+  buildJointRows(viewer.robot);
+  if (playMode) { buildPlayRows(viewer.robot); }
+  addAxisMarkers(viewer.robot);
+  if (selectedLink && viewer.robot.links[selectedLink]) {
+    selectLink(selectedLink);          // rebuild the panel (type / limit / axis)
+  }
+  viewer.redraw();
+}
+
+// serialize the background persists: the editor server is threaded, so two
+// overlapping /api/set_types calls would race the shared joints.yaml + build()
+let typePersistChain = Promise.resolve();
+
+async function persistTypeChanges(changes) {
   try {
     const resp = await fetch('/api/set_types', {
       method: 'POST',
@@ -3849,23 +3910,45 @@ async function applyTypeChanges(changes) {
       body: JSON.stringify({ changes }) });
     const r = await resp.json();
     if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
+    refreshHistory();
     if (r.missed?.length) {
       log(t('types.notFound', { list: r.missed.join(', ') }), 'wrn');
-    }
-    if (!r.applied?.length) {
+    } else if (!r.applied?.length) {
       log(t('types.noneMatched'), 'err');
-      reselectAfterLoad = null;
-      return false;
+    } else {
+      log(t('types.saved', { n: r.applied.length }), 'ok');
+      return;
     }
-    log(t('types.rebuilt', { n: r.applied.length }), 'ok');
-    loadRobot(currentInfo, { keepPose: true });
-    refreshHistory();
-    return true;
+    // anything the optimistic view changed but the file did NOT accept -> resync
+    // the live model from the server's URDF so the editor never drifts.
+    if (currentInfo) { loadRobot(currentInfo, { keepPose: true }); }
   } catch (e) {
     log(t('types.applyFail', { e: e.message ?? e }), 'err');
+    if (currentInfo) { loadRobot(currentInfo, { keepPose: true }); }
+  }
+}
+
+function applyTypeChanges(changes) {
+  if (!changes.length || !currentInfo || !viewer.robot) {
     reselectAfterLoad = null;
     return false;
   }
+  // 1. optimistic in-place patch (instant)
+  const patched = [];
+  for (const ch of changes) {
+    const j = viewer.robot.joints[ch.name];
+    if (!j) { continue; }
+    patchJointTypeLive(j, ch.type);
+    patched.push(ch);
+  }
+  reselectAfterLoad = null;            // no reload -> nothing to reselect
+  if (!patched.length) { return false; }
+  refreshAfterTypeChange();
+  log(t('types.applied', { n: patched.length }));
+  // 2. persist + rebuild URDF in the background (serialized)
+  typePersistChain = typePersistChain
+    .then(() => persistTypeChanges(changes));
+  return true;                         // the panel/rows were rebuilt in place
 }
 
 // write one joint's travel range to joints.yaml (lower/upper, in NATIVE units:
@@ -5103,7 +5186,13 @@ window.addEventListener('pointerup', ev => {
   boxselEl.style.display = 'none';
   viewer.controls.enabled = true;
   applyPoseDrag();                 // restore the chosen drag mode (orbit/pose)
-  if (Math.abs(ev.clientX - x0) < 4 && Math.abs(ev.clientY - y0) < 4) { return; }
+  if (Math.abs(ev.clientX - x0) < 4 && Math.abs(ev.clientY - y0) < 4) {
+    // a Shift+CLICK (no drag): toggle the clicked link in the selection so
+    // repeated clicks accumulate, same as a region box-select
+    const ax = pickAxis(ev);
+    toggleBoxLink(ax ? ax.child : pickLink(ev));
+    return;
+  }
   selectLinksInBox({ l: Math.min(x0, ev.clientX), r: Math.max(x0, ev.clientX),
                      t: Math.min(y0, ev.clientY), b: Math.max(y0, ev.clientY) });
 });
@@ -5128,15 +5217,38 @@ function selectLinksInBox(rect) {
   }
   for (const n of boxSelected) { _tintLink(n, 'sel'); }
   op('boxSelect', { n: boxSelected.size });
+  refreshBulkbar();
+  log(boxSelected.size ? t('bulk.boxSelected', { n: boxSelected.size })
+                       : t('bulk.boxNone'), boxSelected.size ? undefined : 'wrn');
+}
+
+// reflect the current box-selection count in the bulkbar (shared by the
+// Shift+drag box and the Shift+click accumulation below)
+function refreshBulkbar() {
   if (boxSelected.size) {
     document.getElementById('bulkcount').textContent =
       t('bulk.count', { n: boxSelected.size });
     bulkbarEl.style.display = 'flex';
-    log(t('bulk.boxSelected', { n: boxSelected.size }));
   } else {
     bulkbarEl.style.display = 'none';
-    log(t('bulk.boxNone'), 'wrn');
   }
+}
+
+// Shift+CLICK a link to ADD/REMOVE it from the selection -- build a multi-select
+// one link at a time into the SAME set + bulkbar as a Shift+drag box, so you can
+// then bulk-set their joint type together.
+function toggleBoxLink(name) {
+  if (!name) { return; }
+  if (!boxSelected.size && selectedLink) { selectLink(null); }  // box replaces single
+  if (boxSelected.has(name)) {
+    boxSelected.delete(name);
+    _tintLink(name, baseTint(name));
+  } else {
+    boxSelected.add(name);
+    _tintLink(name, 'sel');
+  }
+  op('boxToggle', { name, n: boxSelected.size });
+  refreshBulkbar();
 }
 
 function clearBoxSelection() {
@@ -5272,29 +5384,26 @@ mimicBar.querySelector('#mimicapply').addEventListener('click', applyMimic);
 mimicBar.querySelector('#mimiccancel').addEventListener('click', cancelMimic);
 
 // apply one joint type to every box-selected link's controlling joint
-async function bulkSetType(type) {
+function bulkSetType(type) {
   const links = [...boxSelected];
   if (!links.length || !currentInfo) { return; }
-  bulkbarEl.querySelectorAll('button').forEach(b => b.disabled = true);
-  log(t('bulk.applying', { n: links.length, type }));
-  statusEl.textContent = t('status.rebuilding');
-  try {
-    const resp = await fetch('/api/set_types', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ changes: links.map(c => ({ child: c, type })) }) });
-    const r = await resp.json();
-    if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
-    log(t('bulk.applied', { n: r.applied?.length ?? 0 }) +
-        (r.missed?.length ? t('bulk.appliedMissed', { m: r.missed.length }) : '') +
-        t('bulk.reloadUndo'), 'ok');
-    clearBoxSelection();
-    loadRobot(currentInfo, { keepPose: true });
-    refreshHistory();
-  } catch (e) {
-    log(t('bulk.fail', { e: e.message ?? e }), 'err');
-  } finally {
-    bulkbarEl.querySelectorAll('button').forEach(b => b.disabled = false);
+  // route the 3D box-selection through the SAME optimistic path as the sidebar
+  // checkbox bulk: map each selected child link to its joint, apply instantly,
+  // persist in the background.  Root / unmatched links carry no joint -> skipped;
+  // joints already at `type` are no-ops and dropped.
+  const byChild = new Map([...rows.values()].map(r => [r.child, r]));
+  const changes = [];
+  for (const c of links) {
+    const rec = byChild.get(c);
+    if (rec && rec.joint.jointType !== type) {
+      changes.push({ name: rec.joint.name, parent: rec.parent,
+                     child: rec.child, type });
+    }
   }
+  clearBoxSelection();
+  if (!changes.length) { log(t('bulk.noneSelected'), 'wrn'); return; }
+  log(t('bulk.applying', { n: changes.length, type }));
+  applyTypeChanges(changes);          // instant + background persist (serialized)
 }
 bulkbarEl.querySelectorAll('button[data-bt]').forEach(b =>
   b.addEventListener('click', () => bulkSetType(b.dataset.bt)));
@@ -5885,6 +5994,9 @@ async function refreshHistory() {
 async function doHistory(which) {
   op(which);
   if (!currentInfo) { return; }
+  // a type flip persists its yaml+rebuild in the BACKGROUND; let it finish
+  // before undo/redo rebuilds, or the server runs two builds at once
+  await typePersistChain.catch(() => {});
   try {
     const resp = await fetch('/api/' + which, { method: 'POST' });
     const r = await resp.json();
