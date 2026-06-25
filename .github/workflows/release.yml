@@ -11,14 +11,15 @@ name: Build & Release
 #
 # NOTE: PyInstaller cannot cross-compile, so each OS/arch builds on its own
 # native runner.  Windows (.exe), macOS (Apple Silicon) and Linux (x64) each
-# bundle the editor-ui extra (live self-collision + auto joint-limits via
-# skrobot/fcl).  Only Windows can run the SolidWorks `extract` step; the macOS
-# and Linux binaries do view / edit / build / export -- including the
-# URDF-input editing mode -- without SolidWorks.  The Windows ARM64 build is
-# commented out (windows-11-arm hosted runners are limited on private repos) --
-# re-enable it once public; it would ship the base web editor only, since
-# python-fcl has no win-arm64 wheel.  fail-fast is off so one OS failing never
-# blocks the others.
+# ship the FULL-FEATURE editor: live self-collision + auto joint-limits
+# (skrobot/fcl) AND CoACD collision decomposition (coacd) are bundled (the
+# default build_exe.py build).  Only Windows can run the SolidWorks `extract`
+# step; the macOS and Linux binaries do view / edit / build / export --
+# including the URDF-input editing mode -- without SolidWorks.  The Windows ARM64
+# build is commented out (windows-11-arm hosted runners are limited on private
+# repos) -- re-enable it once public; it must build --lean (base web editor
+# only), since python-fcl has no win-arm64 wheel.  fail-fast is off so one OS
+# failing never blocks the others.
 
 on:
   push:
@@ -45,7 +46,7 @@ jobs:
             os: windows
             arch: x64
             ext: '.exe'
-            build_args: '--editor-ui'
+            build_args: ''
           # macos-latest is Apple Silicon (macOS 14+).  No SolidWorks/COM, so
           # this binary does view / edit / build / export incl. URDF-input mode.
           # build_exe.py emits a windowed .app (Finder/Dock icon); we ship it
@@ -54,12 +55,12 @@ jobs:
             os: macos
             arch: arm64
             ext: '.zip'
-            build_args: '--editor-ui'
+            build_args: ''
           - runner: ubuntu-latest
             os: linux
             arch: x64
             ext: ''
-            build_args: '--editor-ui'
+            build_args: ''
           # ARM64 Windows is disabled while the repo is private (windows-11-arm
           # hosted runners are limited/unavailable on private repos).
           # Re-enable once public, or swap in a self-hosted ARM runner.
@@ -79,14 +80,11 @@ jobs:
       - name: Install build dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install . pyinstaller pycollada scipy networkx
-
-      - name: Install editor-ui dependencies
-        if: contains(matrix.build_args, '--editor-ui')
-        # latest scikit-robot (the pyproject floor of 0.0.30 is just a minimum;
-        # it predates the FK/collision API used here) + python-fcl.  Wheels
-        # exist for win-x64, macos-arm64 and linux-x64.
-        run: pip install scikit-robot python-fcl
+          # the exe is the full-feature build, so install the same optional extras
+          # it bundles ([ui] = skrobot/fcl, [coacd]); trimesh[easy] (core) already
+          # pulls the pycollada/scipy/networkx mesh backends.  Wheels for
+          # skrobot/python-fcl/coacd exist on win-x64, macos-arm64 and linux-x64.
+          pip install ".[ui,coacd]" pyinstaller
 
       # Put the release version right before the extension so the binary is
       # self-identifying (sw2robot-web-macos-arm64-v0.1.9).  On a vX.Y.Z tag

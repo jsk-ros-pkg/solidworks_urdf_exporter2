@@ -15,10 +15,15 @@ cross-compile, so each OS/arch is built on its own native runner.
 
 Run it through uv so PyInstaller is available without polluting the project env::
 
-    uv run --with pyinstaller python build_exe.py            # web editor, one-file
+    uv run --with pyinstaller python build_exe.py            # full web editor, one-file
     uv run --with pyinstaller python build_exe.py --target export
     uv run --with pyinstaller python build_exe.py --onedir   # faster start, a folder
-    uv run --with pyinstaller python build_exe.py --with-ui  # + collision/auto-limits
+    uv run --with pyinstaller python build_exe.py --lean     # base exe, no optional backends
+
+The default build is the FULL-FEATURE editor: it bundles the optional runtime
+backends the editor/CLI can reach -- skrobot+fcl (live self-collision + auto
+joint-limits) and coacd (CoACD collision decomposition).  --lean drops them for
+a smaller binary; --with-viser also bundles the standalone viser GUI.
 
 Targets (entry points, mirroring [project.scripts] in pyproject.toml):
     web     sw2robot-web  -> the browser editor server (default; does
@@ -36,6 +41,7 @@ pywin32 is absent, so they are skipped.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import os
 import sys
 
@@ -61,13 +67,23 @@ WIN32_HIDDEN = [
     "win32api", "win32con", "win32timezone",
 ]
 
-# the optional ``ui`` extra.  The WEB editor's live self-collision + auto
-# joint-limit sweep need skrobot + fcl; only the STANDALONE viser GUI needs
-# viser.  Split so the web exe can bundle just the former (--editor-ui) without
-# dragging in viser's web-client assets.  All excluded by default (small exe).
+# Optional feature backends, named by IMPORT name (what PyInstaller --collect-all
+# wants); pyproject lists the matching DIST names per extra:
+#   EDITOR_UI -> [ui]  scikit-robot + python-fcl  (live self-collision + auto
+#                      joint-limit sweep in the web editor)
+#   COACD     -> [coacd]  CoACD convex decomposition (--collision coacd / the web
+#                      "CoACD collision" box)
+#   STANDALONE_UI -> [ui]  the standalone viser GUI -- a SEPARATE entry point, not
+#                      reachable from the web/cli/export exe targets
 EDITOR_UI_PACKAGES = ["skrobot", "fcl"]
+COACD_PACKAGES = ["coacd"]
 STANDALONE_UI_PACKAGES = ["viser"]
-UI_PACKAGES = EDITOR_UI_PACKAGES + STANDALONE_UI_PACKAGES
+# The frozen exe is the FULL-FEATURE distribution: every optional backend the
+# web editor / CLI can actually reach at runtime is bundled by default (the user
+# cannot ``pip install`` into a frozen binary, so anything not bundled is dead
+# there).  viser is excluded -- no exe entry point reaches it -- unless asked for.
+FULL_FEATURE_PACKAGES = EDITOR_UI_PACKAGES + COACD_PACKAGES
+ALL_OPTIONAL_PACKAGES = EDITOR_UI_PACKAGES + COACD_PACKAGES + STANDALONE_UI_PACKAGES
 # never needed at runtime -- dropping them shaves size / avoids hook noise
 BASE_EXCLUDES = ["tkinter", "matplotlib", "pytest", "IPython", "notebook",
                  "jupyter", "PyQt5", "PyQt6", "PySide2", "PySide6"]
@@ -117,12 +133,14 @@ def main() -> int:
     ap.add_argument("--onedir", action="store_true",
                     help="emit a folder instead of a single .exe (faster start, "
                          "more reliable for the COM/makepy path)")
-    ap.add_argument("--with-ui", action="store_true",
-                    help="bundle the full ui extra (skrobot/fcl/viser)")
-    ap.add_argument("--editor-ui", action="store_true",
-                    help="bundle just skrobot+fcl (web editor's live "
-                         "self-collision + auto joint limits) WITHOUT the "
-                         "standalone viser GUI -- lighter than --with-ui")
+    ap.add_argument("--lean", action="store_true",
+                    help="base build: skip the optional runtime backends "
+                         "(skrobot/fcl self-collision + auto joint-limits, coacd "
+                         "collision decomposition).  The default exe is the "
+                         "FULL-FEATURE build and bundles them.")
+    ap.add_argument("--with-viser", action="store_true",
+                    help="also bundle the standalone viser GUI (a separate entry "
+                         "point, not reached by the web/cli exe; off by default)")
     ap.add_argument("--windowed", action="store_true",
                     help="no console window (default keeps the console so the "
                          "server URL / logs are visible; on macOS the build is "
@@ -233,15 +251,24 @@ def main() -> int:
               file=sys.stderr)
 
     excludes = list(BASE_EXCLUDES)
-    if args.with_ui:
-        include_ui = UI_PACKAGES
-    elif args.editor_ui:
-        include_ui = EDITOR_UI_PACKAGES
-    else:
-        include_ui = []
-    for p in include_ui:
+    # Default is the full-feature build; --lean drops the optional backends,
+    # --with-viser adds the standalone GUI on top.
+    wanted = [] if args.lean else list(FULL_FEATURE_PACKAGES)
+    if args.with_viser:
+        wanted += STANDALONE_UI_PACKAGES
+    # Only --collect-all what is actually installed.  A requested-but-missing
+    # backend is reported LOUDLY (never silently dropped) so a "full" exe that is
+    # in fact missing a feature is visible at build time, not at the user's first
+    # click -- they cannot pip-install into a frozen binary to recover.
+    include = [p for p in wanted if importlib.util.find_spec(p) is not None]
+    missing = [p for p in wanted if p not in include]
+    for p in missing:
+        print(f"WARNING: '{p}' is not installed -> NOT bundled; this exe will "
+              f"lack that feature.  `pip install` it before building (or pass "
+              f"--lean to build a base exe on purpose).", file=sys.stderr)
+    for p in include:
         pyi_args += ["--collect-all", p]
-    excludes += [p for p in UI_PACKAGES if p not in include_ui]
+    excludes += [p for p in ALL_OPTIONAL_PACKAGES if p not in include]
     for e in excludes:
         pyi_args += ["--exclude-module", e]
 

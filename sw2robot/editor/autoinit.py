@@ -38,25 +38,6 @@ def _rotational_joints(robot):
             if type(j).__name__ == "RotationalJoint"]
 
 
-def _child_map(robot):
-    children = {}
-    for j in robot.joint_list:
-        if j.parent_link and j.child_link:
-            children.setdefault(j.parent_link.name, []).append(j.child_link.name)
-    return children
-
-
-def _descendants(root, children):
-    out, stack = set(), [root]
-    while stack:
-        n = stack.pop()
-        if n in out:
-            continue
-        out.add(n)
-        stack.extend(children.get(n, []))
-    return out
-
-
 def link_visual_mesh(link):
     """A single local-frame trimesh for a skrobot link's visual geometry, or
     None.  ``visual_mesh`` is a single mesh, a list, or None depending on the

@@ -44,6 +44,8 @@ coacd = [
 # (skrobot, used to load the exported URDF + resolve package:// meshes, is in ui).
 test = [
     "catkin_pkg",
+    "pytest",
+    "packaging",
 ]
 
 [project.scripts]

@@ -61,7 +61,7 @@ jobs:
           # coacd -> exercise the REAL convex-decomposition wheel (the smoke test
           #          in test_coacd_smoke.py), so a missing/broken coacd wheel
           #          fails CI instead of surfacing at runtime
-          pip install ".[ui,test,coacd]" pytest
+          pip install ".[ui,test,coacd]"
 
       - name: Run tests
         run: pytest -q
@@ -82,7 +82,7 @@ jobs:
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          pip install ".[ui,test,coacd]" pytest
+          pip install ".[ui,test,coacd]"
 
       - name: Run tests
         run: pytest -q
@@ -101,12 +101,14 @@ jobs:
       - name: Install build dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install . pyinstaller pycollada scipy networkx
-          pip install scikit-robot python-fcl
+          # the exe is the full-feature build, so install the same optional extras
+          # it bundles ([ui] = skrobot/fcl, [coacd]); trimesh[easy] (core) already
+          # pulls the pycollada/scipy/networkx mesh backends the freeze needs.
+          pip install ".[ui,coacd]" pyinstaller
 
       - name: Freeze the web editor .exe (no release)
         run: |
-          python build_exe.py --editor-ui --name sw2robot-web-ci
+          python build_exe.py --name sw2robot-web-ci
           if (!(Test-Path dist\sw2robot-web-ci.exe)) {
             Write-Error "PyInstaller did not produce the expected .exe"
             exit 1
@@ -248,9 +250,9 @@ jobs:
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          # pycollada: the .dae visual-mesh writer; scipy/networkx: trimesh's
-          # mesh-processing deps the converter needs (mirrors build-check)
-          pip install . pycollada scipy networkx
+          # trimesh[easy] (a core dep) pulls the .dae writer (pycollada) plus the
+          # scipy/networkx mesh-processing deps the converter needs.
+          pip install .
 
       - name: Build ROS 1 + ROS 2 <name>_description packages from the example
         run: |
