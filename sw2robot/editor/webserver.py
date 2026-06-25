@@ -40,6 +40,11 @@ PACKAGE_ROOT = os.path.dirname(HERE)
 PROJECT_ROOT = os.path.dirname(PACKAGE_ROOT)
 WEB_DIR = os.path.join(HERE, "web")
 
+# The port the running server bound (set in serve()).  The self-update relaunch
+# reads this (sw2robot.editor.update._current_bound_port) to reclaim the SAME
+# port, so the page that reloads after an update reconnects at the same URL.
+BOUND_PORT = None
+
 
 def _app_data_dir():
     """Writable base for runtime side-files (the default package root, the
@@ -2881,14 +2886,28 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         pass
 
 
-def _bind_free_port(handler, port, tries=20):
+def _bind_free_port(handler, port, tries=20, wait_first=0.0):
     """Bind a ThreadingTCPServer on the first free port >= ``port``.
 
     A second editor instance (or a leftover one) would otherwise collide on the
     default port and the launch crashes with ``WinError 10048`` (address in
     use); walking forward to the next free port lets every instance just come
-    up. Returns ``(httpd, bound_port)``."""
+    up. Returns ``(httpd, bound_port)``.
+
+    ``wait_first`` (seconds) makes a self-update relaunch RECLAIM the exact same
+    port: the instance we are replacing is still mid-exit, so retry ``port`` for
+    a moment before walking forward -- that way the browser tab that reloads
+    after the update reconnects at the same URL instead of finding the new
+    server on a drifted port."""
     last = None
+    if wait_first > 0:
+        deadline = time.time() + wait_first
+        while time.time() < deadline:
+            try:
+                return socketserver.ThreadingTCPServer(("", port), handler), port
+            except OSError as e:
+                last = e
+                time.sleep(0.3)
     for p in range(port, port + tries):
         try:
             return socketserver.ThreadingTCPServer(("", p), handler), p
@@ -2897,7 +2916,9 @@ def _bind_free_port(handler, port, tries=20):
     raise OSError(f"no free port in {port}..{port + tries - 1}: {last}")
 
 
-def serve(package_dir=None, root_dir=None, port=8090, open_browser=True):
+def serve(package_dir=None, root_dir=None, port=8090, open_browser=True,
+          reclaim_port=False):
+    global BOUND_PORT
     import atexit
     import signal
     # reap any private SolidWorks instance a PREVIOUS run spawned and leaked
@@ -2929,10 +2950,14 @@ def serve(package_dir=None, root_dir=None, port=8090, open_browser=True):
     else:
         print(f"[sw2robot.web] no package yet -- pick one in the browser "
               f"(root: {_Handler.root_dir})")
-    httpd, bound = _bind_free_port(_Handler, port)
+    # a self-update relaunch reclaims the exact port the old instance had (it is
+    # mid-exit), so wait briefly for it instead of immediately drifting forward
+    httpd, bound = _bind_free_port(_Handler, port,
+                                   wait_first=8.0 if reclaim_port else 0.0)
     if bound != port:
         print(f"[sw2robot.web] port {port} busy -> using {bound}")
     port = bound
+    BOUND_PORT = bound
     httpd.daemon_threads = True
     url = f"http://localhost:{port}"
     print(f"[sw2robot.web] open {url}")
@@ -2945,6 +2970,141 @@ def serve(package_dir=None, root_dir=None, port=8090, open_browser=True):
     httpd.serve_forever()
 
 
+# --- run-from-%LOCALAPPDATA% relocation (avoid self-updating inside OneDrive) -
+# A self-updating single-file exe must never live in a cloud-synced folder: the
+# sync client (OneDrive/Dropbox) watches the file, so the in-place swap fights
+# the uploader (locks, conflict copies, a stale cloud copy rehydrating the OLD
+# version).  Surface/Win11 ships with the Desktop redirected INTO OneDrive, so
+# users routinely drop the exe there.  Fix: on launch, if we are a frozen exe
+# sitting under a synced root, copy ourselves once to a stable, NON-synced
+# install dir (%LOCALAPPDATA%\sw2robot\bin) and relaunch from there.  Every later
+# self-update then rewrites that LocalAppData copy, which no sync client touches.
+
+def _sync_roots():
+    """Cloud-sync root dirs (OneDrive/Dropbox/Google Drive) a self-updating exe
+    must not live in.  Best-effort; empty off Windows."""
+    if sys.platform != "win32":
+        return []
+    roots, home = [], os.path.expanduser("~")
+    for var in ("OneDrive", "OneDriveConsumer", "OneDriveCommercial"):
+        v = os.environ.get(var)
+        if v:
+            roots.append(v)
+    try:
+        for n in os.listdir(home):
+            low = n.lower()
+            if low.startswith("onedrive") or low in ("dropbox", "google drive",
+                                                      "my drive"):
+                roots.append(os.path.join(home, n))
+    except OSError:
+        pass
+    out, seen = [], set()
+    for r in roots:
+        nr = os.path.normcase(os.path.normpath(r))
+        if nr not in seen:
+            seen.add(nr)
+            out.append(nr)
+    return out
+
+
+def _under_any(path, roots):
+    p = os.path.normcase(os.path.normpath(os.path.realpath(path)))
+    for r in roots:
+        try:
+            if os.path.commonpath([p, r]) == r:
+                return True
+        except ValueError:
+            pass                              # different drive -> not under it
+    return False
+
+
+def _install_dir():
+    base = os.environ.get("LOCALAPPDATA") or os.path.join(
+        os.path.expanduser("~"), "AppData", "Local")
+    return os.path.join(base, "sw2robot", "bin")
+
+
+def _make_start_menu_shortcut(target):
+    """Best-effort Start-menu .lnk to the installed exe, so there's a fast launch
+    path that doesn't go through the synced stub.  win32com is bundled on the
+    Windows build (it's the SolidWorks COM glue); absent -> just skip."""
+    try:
+        import win32com.client
+        programs = os.path.join(os.environ["APPDATA"], "Microsoft", "Windows",
+                                "Start Menu", "Programs")
+        os.makedirs(programs, exist_ok=True)
+        sc = win32com.client.Dispatch("WScript.Shell").CreateShortcut(
+            os.path.join(programs, "sw2robot-web.lnk"))
+        sc.TargetPath = target
+        sc.WorkingDirectory = os.path.dirname(target)
+        sc.Description = "sw2robot web editor"
+        sc.save()
+    except Exception as e:
+        print(f"[sw2robot.web] start-menu shortcut skipped: {e!r}")
+
+
+def _relocate_to_install_dir():
+    """If we're a frozen exe running from a cloud-synced folder, install a copy
+    to %LOCALAPPDATA%\\sw2robot\\bin and relaunch it.  Returns True if it
+    relaunched (caller must exit), False to keep running in place.  No-op in a
+    source checkout, off Windows, when already the installed copy, or when run
+    from a normal local folder (stays portable)."""
+    if not getattr(sys, "frozen", False) or sys.platform != "win32":
+        return False
+    if "--no-relocate" in sys.argv:           # we ARE the relaunched install
+        return False
+    try:
+        me = os.path.normcase(os.path.realpath(sys.executable))
+        canonical = os.path.join(_install_dir(), "sw2robot-web.exe")
+        if me == os.path.normcase(os.path.realpath(canonical)):
+            return False                      # already running from the install
+        if not _under_any(sys.executable, _sync_roots()):
+            return False                      # local/portable run -> leave as-is
+        from . import update  # reuse the detached launcher + ver parse
+        bindir = os.path.dirname(canonical)
+        os.makedirs(bindir, exist_ok=True)
+        verfile = os.path.join(bindir, "installed-version.txt")
+        old = canonical + ".old"
+        try:
+            if os.path.exists(old):
+                os.remove(old)                # reap a prior upgrade's leftover
+        except OSError:
+            pass
+        try:
+            with open(verfile, encoding="utf-8") as f:
+                installed = f.read().strip()
+        except OSError:
+            installed = ""
+        from .. import __version__
+        fresh = (not os.path.exists(canonical)
+                 or update._parse_version(__version__)
+                 > update._parse_version(installed))
+        if fresh:
+            import shutil
+            tmp = canonical + ".new"
+            shutil.copyfile(sys.executable, tmp)
+            try:
+                os.replace(tmp, canonical)
+            except OSError:                   # an installed instance is running
+                os.replace(canonical, old)    # rename it aside (allowed)
+                os.replace(tmp, canonical)
+            try:
+                with open(verfile, "w", encoding="utf-8") as f:
+                    f.write(__version__)
+            except OSError:
+                pass
+            _make_start_menu_shortcut(canonical)
+            print(f"[sw2robot.web] installed v{__version__} -> {canonical}")
+        # relaunch the install copy with the same args, flagged so it won't loop
+        update._popen_detached([canonical, *sys.argv[1:], "--no-relocate"])
+        print(f"[sw2robot.web] relaunching from {canonical} "
+              f"(was running from a synced folder)")
+        return True
+    except Exception as e:
+        print(f"[sw2robot.web] relocate skipped: {e!r}")
+        return False
+
+
 def main():
     # self-dispatch: the auto-limit sweep re-invokes this exe as a subprocess
     # (a frozen .exe has no `python -m` to call) with a sentinel first arg.
@@ -2952,6 +3112,11 @@ def main():
         from ._autolimits_cli import main as _autolimits_main
         del sys.argv[1]                       # _autolimits_cli reads argv[1:]
         return _autolimits_main()
+
+    # before anything else, move out of a OneDrive/Dropbox-synced folder so the
+    # self-update never rewrites a binary the sync client is watching
+    if _relocate_to_install_dir():
+        return 0
 
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("package_dir", nargs="?", default=None)
@@ -2964,9 +3129,16 @@ def main():
     ap.add_argument("--no-browser", action="store_true",
                     help="do not open the editor in the default browser on "
                          "startup")
+    ap.add_argument("--reclaim-port", action="store_true",
+                    help=argparse.SUPPRESS)   # internal: set by the self-update
+                    # relaunch so the new instance waits for the exact port the
+                    # exiting old instance is about to free (see _bind_free_port)
+    ap.add_argument("--no-relocate", action="store_true",
+                    help=argparse.SUPPRESS)   # internal: set on the relaunch from
+                    # the %LOCALAPPDATA% install copy so it doesn't re-relocate
     args = ap.parse_args()
     serve(args.package_dir, root_dir=args.root, port=args.port,
-          open_browser=not args.no_browser)
+          open_browser=not args.no_browser, reclaim_port=args.reclaim_port)
 
 
 if __name__ == "__main__":

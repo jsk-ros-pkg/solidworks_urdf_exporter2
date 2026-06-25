@@ -33,6 +33,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.request
@@ -218,10 +219,67 @@ def _popen_detached(argv):
     subprocess.Popen(argv, **kw)
 
 
+def _current_bound_port():
+    """The port the running web server actually bound (so the relaunch can
+    reclaim the SAME one); None outside the web server."""
+    try:
+        from . import webserver
+        return getattr(webserver, "BOUND_PORT", None)
+    except Exception:
+        return None
+
+
 def _relaunch_argv(exe):
-    """The new binary + the same user args (package dir, --root, --port ...)
-    the current run got, so the relaunched editor reopens the same context."""
-    return [exe, *sys.argv[1:]]
+    """The new binary + the user's original args (package dir, --root ...), with
+    three adjustments so the relaunch lands back in the SAME browser tab instead
+    of leaving a dead one behind on a drifting port:
+
+      * force ``--no-browser`` -- the page that triggered the update reloads
+        itself once the new server is up (see index.html), so opening a second
+        tab is just clutter that points at the old, now-exited instance;
+      * pin ``--port`` to the port THIS server actually bound, so that reload
+        reconnects at the same URL (without it the relaunch defaults to 8090 and
+        may bind a different free port than the tab is open on);
+      * pass ``--reclaim-port`` so the new instance briefly WAITS for that exact
+        port to free up (the old one is mid-exit) rather than immediately
+        walking forward to the next free port.
+    The three flags are stripped from the inherited args first so they don't
+    accumulate across successive self-updates."""
+    args, skip = [], False
+    for a in sys.argv[1:]:
+        if skip:                                   # value of a prior "--port"
+            skip = False
+            continue
+        if a == "--port":
+            skip = True
+            continue
+        if a.startswith("--port=") or a in ("--no-browser", "--reclaim-port"):
+            continue
+        args.append(a)
+    argv = [exe, *args, "--no-browser", "--reclaim-port"]
+    port = _current_bound_port()
+    if port:
+        argv += ["--port", str(port)]
+    return argv
+
+
+def _replace_into(src, dst):
+    """Move ``src`` onto ``dst``.  ``os.replace`` is atomic but only WITHIN one
+    filesystem; the download now lives in %TEMP%, which may sit on a different
+    volume than the exe (e.g. TEMP on C:, the exe on D:), where ``os.replace``
+    raises EXDEV / WinError 17.  Fall back to copying onto a sibling of ``dst``
+    (same volume) and atomically replacing from there, so ``dst`` is never seen
+    half-written by a concurrent reader."""
+    try:
+        os.replace(src, dst)
+    except OSError:
+        tmp = dst + ".new"
+        shutil.copyfile(src, tmp)
+        os.replace(tmp, dst)            # same-dir -> atomic
+        try:
+            os.remove(src)
+        except OSError:
+            pass
 
 
 def _swap_exe_and_relaunch(new_file, target):
@@ -235,7 +293,7 @@ def _swap_exe_and_relaunch(new_file, target):
         pass
     os.replace(target, old)             # rename the running image (allowed)
     try:
-        os.replace(new_file, target)    # move the new binary into place
+        _replace_into(new_file, target)  # move the new binary into place
     except OSError:
         os.replace(old, target)         # roll the rename back on failure
         raise
@@ -297,11 +355,15 @@ def _run_update(info):
     url = asset.get("url")
     name = asset.get("name") or "sw2robot-web-update"
     kind, target = _current_target()
-    dldir = os.path.dirname(target)
-    # download next to the target so the final os.replace is a same-filesystem
-    # rename; a leading '.' keeps the package scanner from picking it up
-    part = os.path.join(dldir, "." + name + ".part")
-    final = os.path.join(dldir, "." + name + ".download")
+    # Download into a private, NON-synced temp dir -- NOT next to the exe.  The
+    # exe often lives in a OneDrive/Dropbox-synced folder (e.g. the Desktop);
+    # streaming a multi-100MB .part right beside a synced binary makes the sync
+    # client fight us for the file the whole download.  We download to %TEMP%
+    # and only move the finished file across at the very end (_replace_into
+    # handles the cross-volume case).
+    dldir = tempfile.mkdtemp(prefix="sw2robot-update-")
+    part = os.path.join(dldir, name + ".part")
+    final = os.path.join(dldir, name)
     try:
         _set(state="downloading", pct=0, error=None, version=info.get("latest"),
              downloaded=0, total=asset.get("size") or 0)
@@ -320,15 +382,10 @@ def _run_update(info):
             _swap_exe_and_relaunch(final, target)
         _set(state="restarting")
         # let the UI's status poll read 'restarting' once, then exit so the
-        # relaunched instance can bind the (now-freed) port
+        # relaunched instance can reclaim the (now-freed) port
         threading.Timer(1.0, lambda: os._exit(0)).start()
     except Exception as e:
-        for p in (part, final):
-            try:
-                if os.path.exists(p):
-                    os.remove(p)
-            except OSError:
-                pass
+        shutil.rmtree(dldir, ignore_errors=True)
         _set(state="error", error=f"{type(e).__name__}: {e}")
 
 
