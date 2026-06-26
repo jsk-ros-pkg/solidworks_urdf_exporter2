@@ -281,74 +281,64 @@ def test_invalid_ros_version_rejected(tmp_path):
         build_ros_description(pkg_dir, "r", ros_version=3)
 
 
-def test_ros2_loop_couplings_ship_relay_and_config(tmp_path):
-    # a detected closed loop ships a relay node + cubic config + a launch wired
-    # GUI -> relay -> robot_state_publisher so the four-bar tracks in RViz
+_CLOSURES = {
+    "closures": [{"link_a": "c", "link_b": "d",
+                  "point": [0.01, 0.02, 0.03], "axis": [0.0, 0.0, 1.0]}],
+    "dependent": ["c__d", "e__f"],
+    "independent": ["a__b"],
+}
+
+
+def test_ros2_loop_closures_ship_ik_relay_and_config(tmp_path):
+    # a detected closed loop ships the skrobot IK relay + closure config + a
+    # launch wired GUI -> relay -> robot_state_publisher so the loop tracks
     from sw2robot.exporter.ros_export import build_ros_description
 
     pkg_dir = _make_pkg(tmp_path, robot="fb")
-    couplings = [{
-        "driver": "a__b",
-        "followers": [
-            {"joint": "c__d", "poly": [0.0878, 0.0034, 1.3246, -0.0003]},
-            {"joint": "e__f", "poly": [0.0135, 0.1572, 0.5728, -0.0003]},
-        ],
-    }]
     files = dict(build_ros_description(pkg_dir, "fb", ros_version=2,
-                                       loop_couplings=couplings))
+                                       loop_closures=_CLOSURES))
     arcs = set(files)
+    assert "fb_description/config/loop_closures.yaml" in arcs
+    assert "fb_description/scripts/loop_closure_relay.py" in arcs
 
-    # the extra artifacts only the coupled path emits
-    assert "fb_description/config/loop_couplings.yaml" in arcs
-    assert "fb_description/scripts/loop_coupling_relay.py" in arcs
-
-    cfg = files["fb_description/config/loop_couplings.yaml"].decode()
     import yaml
-    parsed = yaml.safe_load(cfg)
-    assert parsed["couplings"][0]["driver"] == "a__b"
-    polys = {f["joint"]: f["poly"]
-             for f in parsed["couplings"][0]["followers"]}
-    assert polys["c__d"][2] == 1.3246           # the ~linear (degree-1) term
-    assert len(polys["e__f"]) == 4              # cubic
+    parsed = yaml.safe_load(files["fb_description/config/loop_closures.yaml"])
+    assert parsed["dependent"] == ["c__d", "e__f"]
+    assert parsed["independent"] == ["a__b"]
+    assert parsed["closures"][0]["link_a"] == "c"
 
-    # relay node is valid python and reads the config param
-    relay = files["fb_description/scripts/loop_coupling_relay.py"].decode()
-    compile(relay, "loop_coupling_relay.py", "exec")
-    assert "config_file" in relay and "joint_states_source" in relay
+    # relay node is valid python, pure-numpy URDF FK + the IK loop closure
+    relay = files["fb_description/scripts/loop_closure_relay.py"].decode()
+    compile(relay, "loop_closure_relay.py", "exec")
+    assert "joint_states_source" in relay and "lstsq" in relay
+    assert "skrobot" not in relay              # no pip-only dependency
 
-    # launch wires GUI -> relay -> RSP (GUI publishes on the source topic)
     launch = files["fb_description/launch/display.launch.py"].decode()
     compile(launch, "display.launch.py", "exec")
     assert '("joint_states", "joint_states_source")' in launch
-    assert "loop_coupling_relay.py" in launch
+    assert "loop_closure_relay.py" in launch
 
-    # build + deps follow: install config/scripts, depend on rclpy/sensor_msgs
     cmake = files["fb_description/CMakeLists.txt"].decode()
-    assert "config" in cmake and "scripts/loop_coupling_relay.py" in cmake
+    assert "config" in cmake and "scripts/loop_closure_relay.py" in cmake
     pxml = files["fb_description/package.xml"].decode()
-    assert "<exec_depend>rclpy</exec_depend>" in pxml
-    assert "<exec_depend>sensor_msgs</exec_depend>" in pxml
+    assert "python3-numpy" in pxml and "<exec_depend>rclpy</exec_depend>" in pxml
+    assert "scikit-robot" not in pxml          # only rosdep-resolvable deps
 
 
-def test_ros2_loop_couplings_autoload_from_sidecar(tmp_path):
-    # the editor's ZIP export calls build_ros_description directly (no model /
-    # no explicit couplings); a loop_couplings.yaml that build() left beside the
-    # package must still get the relay shipped
+def test_ros2_loop_closures_autoload_from_sidecar(tmp_path):
+    # the editor's ZIP export calls build_ros_description directly (no model);
+    # a loop_closures.yaml build() left beside the package must still ship
     from sw2robot.exporter.ros_export import build_ros_description
 
     pkg_dir = _make_pkg(tmp_path, robot="sc")
-    (tmp_path / "loop_couplings.yaml").write_text(
-        "couplings:\n"
-        "  - driver: a__b\n"
-        "    followers:\n"
-        "      - joint: c__d\n"
-        "        poly: [0.1, 0.0, 1.3, 0.0]\n",
-        encoding="utf-8")
-    # note: NO loop_couplings kwarg -- must be picked up from the sidecar
+    import yaml
+    (tmp_path / "loop_closures.yaml").write_text(
+        yaml.safe_dump(_CLOSURES), encoding="utf-8")
+    # note: NO loop_closures kwarg -- must be picked up from the sidecar
     files = dict(build_ros_description(pkg_dir, "sc", ros_version=2))
-    assert "sc_description/scripts/loop_coupling_relay.py" in files
-    cfg = files["sc_description/config/loop_couplings.yaml"].decode()
-    assert "a__b" in cfg and "c__d" in cfg
+    assert "sc_description/scripts/loop_closure_relay.py" in files
+    cfg = files["sc_description/config/loop_closures.yaml"].decode()
+    assert "c__d" in cfg and "a__b" in cfg
 
 
 def test_dae_pure_black_lifted_to_dark_grey(tmp_path):
@@ -379,8 +369,8 @@ def test_ros2_without_couplings_has_no_relay(tmp_path):
     pkg_dir = _make_pkg(tmp_path, robot="pl")
     files = dict(build_ros_description(pkg_dir, "pl", ros_version=2))
     arcs = set(files)
-    assert "pl_description/config/loop_couplings.yaml" not in arcs
-    assert "pl_description/scripts/loop_coupling_relay.py" not in arcs
+    assert "pl_description/config/loop_closures.yaml" not in arcs
+    assert "pl_description/scripts/loop_closure_relay.py" not in arcs
     launch = files["pl_description/launch/display.launch.py"].decode()
     assert "joint_states_source" not in launch
     pxml = files["pl_description/package.xml"].decode()

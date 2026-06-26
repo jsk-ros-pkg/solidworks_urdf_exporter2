@@ -113,6 +113,127 @@ def test_loop_mimic_round_trips_through_joints_yaml(tmp_path):
     assert f2.mimic["joint"] == follower.mimic["joint"]
 
 
+def test_loop_closures_exported_for_runtime_ik():
+    # the model carries general loop-closure data for the runtime-IK relay:
+    # the cut hinge (two links + base-frame point/axis) and which joints are
+    # driven (independent) vs solved (dependent)
+    model = build_model(_parallelogram())
+    lc = model.loop_closures
+    assert lc is not None
+    assert len(lc["closures"]) == 1
+    c = lc["closures"][0]
+    assert {c["link_a"], c["link_b"]} <= {"base_link", "inlink", "coupler",
+                                          "outlink"}
+    assert len(c["point"]) == 3 and len(c["axis"]) == 3
+    # one driver, the rest solved (a 1-DOF four-bar)
+    assert len(lc["independent"]) == 1 and len(lc["dependent"]) == 2
+    # dependent = the <mimic> followers; independent = the driver
+    mimics = {j.name for j in model.joints if j.mimic}
+    assert set(lc["dependent"]) == mimics
+    assert lc["independent"][0] not in mimics
+
+
+def _fk_chain(urdf_path):
+    """Tiny URDF FK (the same maths the shipped relay embeds) for the test."""
+    import xml.etree.ElementTree as ET
+
+    from sw2robot.exporter.geometry import matrix_from_rpy
+    root = ET.parse(urdf_path).getroot()
+    js = {}
+    for j in root.findall("joint"):
+        o = j.find("origin")
+        xyz = ([float(x) for x in o.get("xyz", "0 0 0").split()]
+               if o is not None else [0, 0, 0])
+        rpy = ([float(x) for x in o.get("rpy", "0 0 0").split()]
+               if o is not None else [0, 0, 0])
+        ax = j.find("axis")
+        axis = (np.array([float(x) for x in ax.get("xyz").split()])
+                if ax is not None else np.array([0.0, 0.0, 1.0]))
+        t = matrix_from_rpy(rpy).copy()
+        t[:3, 3] = xyz
+        js[j.get("name")] = (j.get("type"), j.find("child").get("link"),
+                             j.find("parent").get("link"), t, axis)
+    cj = {v[1]: n for n, v in js.items()}
+
+    def rot(a, q):
+        a = a / (np.linalg.norm(a) or 1.0)
+        x, y, z = a
+        c, s = np.cos(q), np.sin(q)
+        cc = 1 - c
+        return np.array([[c+x*x*cc, x*y*cc-z*s, x*z*cc+y*s, 0],
+                         [y*x*cc+z*s, c+y*y*cc, y*z*cc-x*s, 0],
+                         [z*x*cc-y*s, z*y*cc+x*s, c+z*z*cc, 0], [0, 0, 0, 1.0]])
+
+    def world(link, Q):
+        chain, ln = [], link
+        while ln in cj:
+            n = cj[ln]
+            chain.append(n)
+            ln = js[n][2]
+        m = np.eye(4)
+        for n in reversed(chain):
+            typ, _c, _p, t, axis = js[n]
+            m = m @ (t @ rot(axis, Q.get(n, 0.0)) if typ in
+                     ("revolute", "continuous") else t)
+        return m
+    return world
+
+
+def test_runtime_ik_relay_closes_the_loop(tmp_path):
+    # End-to-end: build the parallelogram, write its URDF, and run the relay's
+    # loop-closure IK (pure-numpy FK, no extra deps) -- the cut hinge must
+    # coincide and the parallelogram coupling must come out +-1.
+    from sw2robot.exporter.urdf_writer import write_urdf
+    model = build_model(_parallelogram())
+    lc = model.loop_closures
+    urdf = tmp_path / "p.urdf"
+    write_urdf(model, str(urdf))
+    world = _fk_chain(str(urdf))
+
+    c = lc["closures"][0]
+    la, lb = c["link_a"], c["link_b"]
+    p = np.asarray(c["point"], float)
+    a = np.asarray(c["axis"], float)
+    a = a / np.linalg.norm(a)
+    t0a, t0b = world(la, {}), world(lb, {})
+    wit = []
+    for q in (p, p + a * 0.03):
+        wit.append((la, (np.linalg.inv(t0a) @ np.append(q, 1.0))[:3],
+                    lb, (np.linalg.inv(t0b) @ np.append(q, 1.0))[:3]))
+
+    def resid(Q):
+        return np.concatenate([(world(L, Q) @ np.append(ll, 1.0))[:3]
+                               - (world(M, Q) @ np.append(ml, 1.0))[:3]
+                               for L, ll, M, ml in wit])
+
+    deps = lc["dependent"]
+    drv = lc["independent"][0]
+
+    def solve(qd, warm):
+        Q = {drv: qd}
+        x = warm.copy()
+        for _ in range(40):
+            for i, dn in enumerate(deps):
+                Q[dn] = x[i]
+            r = resid(Q)
+            if np.linalg.norm(r) < 1e-10:
+                break
+            jac = np.zeros((len(r), len(deps)))
+            for i, dn in enumerate(deps):
+                Q2 = dict(Q)
+                Q2[dn] = x[i] + 1e-7
+                jac[:, i] = (resid(Q2) - r) / 1e-7
+            x = x + np.linalg.lstsq(jac, -r, rcond=None)[0]
+        return x
+
+    x = solve(np.radians(5.0), np.zeros(len(deps)))
+    Q = {drv: np.radians(5.0)}
+    Q.update({deps[i]: x[i] for i in range(len(deps))})
+    assert np.linalg.norm(resid(Q)) < 1e-6         # loop closed
+    for v in x:
+        assert abs(abs(v) - np.radians(5.0)) < 1e-3   # parallelogram = +-1
+
+
 def test_four_bar_driver_carries_no_mimic_and_loop_is_open():
     model = build_model(_parallelogram())
     # exactly one revolute hinge is dropped (the URDF tree stays acyclic): 4

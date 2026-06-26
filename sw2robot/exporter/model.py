@@ -241,6 +241,9 @@ class RobotModel:
     # link is written as (the convention is ``base_link`` = input port).
     ports: list = field(default_factory=list)
     root_link_name: str = "base_link"
+    # closed-loop (four-bar / parallel) data for the runtime-IK relay:
+    # {closures:[{link_a,link_b,point,axis}], dependent:[...], independent:[...]}
+    loop_closures: dict | None = None
 
 
 def _match_component(comps, ref):
@@ -1995,6 +1998,97 @@ def _auto_loop_mimic(comps, adjacency, parent_of, edge_info, base):
                   f", {n_set} mimic follower(s)")
 
 
+def _collect_loop_closures(comps, adjacency, parent_of, edge_info, base):
+    """General closed-loop data for the runtime-IK relay.
+
+    For every dropped (non-tree) movable edge -- a loop the spanning tree had to
+    cut -- record the two links it rejoined plus the hinge point/axis in
+    base_link frame, and split the loop's movable joints into DRIVEN
+    (independent) vs SOLVED (dependent).  The relay closes each loop numerically
+    with skrobot FK, so NO four-bar-specific geometry is needed here: this works
+    for any single-DOF-per-loop linkage (planar or spatial, revolute or
+    prismatic).  Returns ``None`` when the assembly has no closed loop.
+
+    Dependents are the loop joints carrying a ``<mimic>`` (the four-bar pass
+    already chose those); on a loop the four-bar pass skipped, the joint nearest
+    the root drives and the rest are solved."""
+    link_of = {c.name: c.link_name for c in comps}
+    wb_inv = np.linalg.inv(base.world)        # SW world -> base_link frame
+
+    uf = {c.name: c.name for c in comps}
+
+    def find(x):
+        while uf[x] != x:
+            uf[x] = uf[uf[x]]
+            x = uf[x]
+        return x
+
+    movable_tree = {}
+    for child, par in parent_of.items():
+        info = edge_info.get((child, par), {})
+        if info.get("type") in _MOVABLE_TYPES and info.get("axis") is not None:
+            movable_tree[(child, par)] = info
+        else:
+            uf[find(child)] = find(par)
+    tree_pairs = {frozenset((c, p)) for c, p in parent_of.items()}
+
+    def root_path(n):
+        out = [n]
+        while n in parent_of:
+            n = parent_of[n]
+            out.append(n)
+        return out
+
+    def jname(te):                            # model joint name = parent__child
+        c, p = te
+        return f"{link_of[p]}__{link_of[c]}"
+
+    def lname(comp):
+        return "base_link" if comp == base.name else safe_name(link_of[comp])
+
+    closures, dependent = [], set()
+    for key, rec in adjacency.items():
+        if key in tree_pairs:
+            continue
+        jt, ax, _n = classify_edge_auto(rec)
+        if jt not in _MOVABLE_TYPES or ax is None:
+            continue
+        a, b = tuple(key)
+        if a not in parent_of or b not in parent_of:
+            continue
+        pa, pb = root_path(a), root_path(b)
+        sb = set(pb)
+        lca = next((x for x in pa if x in sb), None)
+        if lca is None:
+            continue
+        ring = pa[:pa.index(lca) + 1] + list(reversed(pb[:pb.index(lca)]))
+        cyc = []
+        for u, v in zip(ring, ring[1:] + ring[:1]):
+            if (u, v) in movable_tree:
+                cyc.append((u, v))
+            elif (v, u) in movable_tree:
+                cyc.append((v, u))
+        if not cyc:
+            continue
+        mimic_deps = [te for te in cyc if edge_info[te].get("mimic")]
+        if mimic_deps:
+            dependent.update(jname(te) for te in mimic_deps)
+        else:                                 # general loop: nearest-root drives
+            driver = min(cyc, key=lambda te: (len(root_path(te[0])), jname(te)))
+            dependent.update(jname(te) for te in cyc if te != driver)
+        pt, d = ax
+        p_b = (wb_inv @ np.append(np.asarray(pt, float), 1.0))[:3]
+        d_b = wb_inv[:3, :3] @ np.asarray(d, float)
+        closures.append({"link_a": lname(a), "link_b": lname(b),
+                         "point": [round(float(x), 8) for x in p_b],
+                         "axis": [round(float(x), 8) for x in d_b]})
+    if not closures:
+        return None
+    movable_all = {jname(te) for te in movable_tree}
+    return {"closures": closures, "dependent": sorted(dependent),
+            "independent": sorted(movable_all - dependent)}
+
+
 def _config_parent_map(comps, adjacency, base, directed):
     """Build parent_of + edge_info from an explicit directed joint list.
 
@@ -2181,7 +2275,7 @@ def _finalize_tree(comps, adjacency, base, parent_of, edge_info, root_rpy=None,
 
 
 def build_tree(comps, adjacency, base, directed=None, root_rpy=None,
-               root_z_offset=0.0, root_xyz=None):
+               root_z_offset=0.0, root_xyz=None, closures_out=None):
     if directed:
         parent_of, edge_info = _config_parent_map(comps, adjacency, base,
                                                   directed)
@@ -2189,6 +2283,21 @@ def build_tree(comps, adjacency, base, directed=None, root_rpy=None,
         parent_of, edge_info = _auto_parent_map(comps, adjacency, base)
         _auto_mimic(comps, adjacency, parent_of, edge_info)
         _auto_loop_mimic(comps, adjacency, parent_of, edge_info, base)
+    # closed-loop data for the runtime-IK relay (hinge in base_link frame, so use
+    # the SAME base anchor the URDF root is built on, incl. any root re-orient)
+    if closures_out is not None:
+        base_anchor = base.world.copy()
+        if root_rpy:
+            base_anchor = base_anchor @ matrix_from_rpy(root_rpy)
+        saved = base.world
+        try:
+            base.world = base_anchor
+            lc = _collect_loop_closures(comps, adjacency, parent_of,
+                                        edge_info, base)
+        finally:
+            base.world = saved
+        if lc:
+            closures_out.append(lc)
     return _finalize_tree(comps, adjacency, base, parent_of, edge_info,
                           root_rpy=root_rpy, root_z_offset=root_z_offset,
                           root_xyz=root_xyz)
@@ -2858,9 +2967,10 @@ def build_model(graph, robot_name=None, base_hint=None, config=None,
 
     base = choose_base(comps, ground, base_hint, adjacency)
     print(f"      base link: {base.link_name}")
+    closures_out = []
     joints = build_tree(comps, adjacency, base, directed=directed,
                         root_rpy=root_rpy, root_z_offset=root_z_offset,
-                        root_xyz=root_xyz)
+                        root_xyz=root_xyz, closures_out=closures_out)
     nrev = sum(1 for j in joints if j.jtype == "revolute")
     npri = sum(1 for j in joints if j.jtype == "prismatic")
     print(f"      joint types: {nrev} revolute, {npri} prismatic, "
@@ -2887,4 +2997,5 @@ def build_model(graph, robot_name=None, base_hint=None, config=None,
     return RobotModel(name=robot_name, components=comps, joints=joints,
                       detected_edges=detected, base_link=base.link_name,
                       ports=ports,
-                      root_link_name=root_link_name or base.link_name)
+                      root_link_name=root_link_name or base.link_name,
+                      loop_closures=closures_out[0] if closures_out else None)

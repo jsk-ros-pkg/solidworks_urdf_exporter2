@@ -426,12 +426,12 @@ Visualization Manager:
       Name: Current View
 """
 
-# --- ROS 2 closed-loop (four-bar) variants ----------------------------------
-# A package with a detected kinematic loop ships three extra pieces: the cubic
-# coupling config, a relay node that applies it, and a launch file wired
-# GUI -> relay -> robot_state_publisher so the loop tracks faithfully in RViz.
-# (robot_state_publisher honours a URDF <mimic> only LINEARLY, which a general
-# four-bar's follower angle is not.)
+# --- ROS 2 closed-loop variants ---------------------------------------------
+# A package with a detected kinematic loop ships three extra pieces: the loop
+# closure config, a relay node that CLOSES the loop by runtime IK (pure-numpy
+# URDF FK), and a launch file wired GUI -> relay -> robot_state_publisher so the
+# linkage tracks exactly in RViz.  (robot_state_publisher honours a URDF <mimic>
+# only LINEARLY, which a real loop is not; the relay solves the true closure.)
 PACKAGE_XML_ROS2_COUPLED = """<?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
@@ -449,6 +449,7 @@ PACKAGE_XML_ROS2_COUPLED = """<?xml version="1.0"?>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
   <export>
     <build_type>ament_cmake</build_type>
   </export>
@@ -460,16 +461,23 @@ project({name})
 find_package(ament_cmake REQUIRED)
 install(DIRECTORY urdf meshes launch rviz config
   DESTINATION share/${{PROJECT_NAME}})
-install(PROGRAMS scripts/loop_coupling_relay.py
+# The relay must be executable for `ros2 run`/launch to find it in libexec.
+# `colcon build --symlink-install` symlinks the installed file back to this
+# source, so a non-executable source (a Windows export can't set the bit)
+# leaves a dead libexec entry -- chmod the source here so the symlink works.
+if(UNIX)
+  execute_process(COMMAND chmod +x
+    ${{CMAKE_CURRENT_SOURCE_DIR}}/scripts/loop_closure_relay.py)
+endif()
+install(PROGRAMS scripts/loop_closure_relay.py
   DESTINATION lib/${{PROJECT_NAME}})
 ament_package()
 """
 
 # {name} = package name, {robot} = urdf file stem.  Sliders drive the
-# independent joints; <mimic> followers are dependent, so the GUI shows no
-# slider for them.  The GUI publishes on joint_states_source; the relay
-# overrides the loop followers with their exact cubic coupling and republishes
-# on joint_states, which robot_state_publisher consumes.
+# independent joints; the dependent (loop) joints carry no slider.  The GUI
+# publishes on joint_states_source; the relay solves the loop closure for the
+# dependent joints and republishes on joint_states, which RSP consumes.
 DISPLAY_LAUNCH_ROS2_COUPLED = '''import os
 
 from ament_index_python.packages import get_package_share_directory
@@ -483,7 +491,7 @@ def generate_launch_description():
     with open(urdf) as f:
         robot_description = f.read()
     rviz = os.path.join(pkg, "rviz", "{robot}.rviz")
-    couplings = os.path.join(pkg, "config", "loop_couplings.yaml")
+    closures = os.path.join(pkg, "config", "loop_closures.yaml")
     return LaunchDescription([
         Node(
             package="robot_state_publisher",
@@ -499,9 +507,9 @@ def generate_launch_description():
         ),
         Node(
             package="{name}",
-            executable="loop_coupling_relay.py",
+            executable="loop_closure_relay.py",
             output="screen",
-            parameters=[{{"config_file": couplings}}],
+            parameters=[{{"urdf_file": urdf, "config_file": closures}}],
         ),
         Node(
             package="rviz2",
@@ -512,55 +520,164 @@ def generate_launch_description():
     ])
 '''
 
-# A standalone rclpy node (no {{}} .format here -- shipped verbatim).
+# A standalone rclpy node, pure numpy FK (no {{}} .format -- shipped verbatim).
 LOOP_COUPLING_RELAY_PY = '''#!/usr/bin/env python3
-"""Apply the exact (nonlinear) coupling of a closed-loop linkage's followers.
+"""Close kinematic loops at runtime by numerical IK (pure-numpy URDF FK).
 
-robot_state_publisher / joint_state_publisher honour a URDF <mimic> only
-LINEARLY (multiplier*q + offset).  A four-bar's follower angle is a nonlinear
-function of its driver, so this node republishes /joint_states with each loop
-follower recomputed from the cubic polynomial in config/loop_couplings.yaml.
-Wire it between the joint-state source and robot_state_publisher.
+A URDF is a tree, so a closed linkage (four-bar / parallel mechanism) has its
+loops cut and robot_state_publisher honours the cut joints\' <mimic> only
+linearly -- which a real loop is not.  This node parses the URDF and, on every
+joint-state, sets the DRIVEN (independent) joints, then Gauss-Newton-solves the
+DEPENDENT joints so each cut loop closes (the two link points the dropped hinge
+joined coincide), and republishes the corrected joint_states.  Exact and
+general: any single-DOF-per-loop linkage, planar or spatial.  Needs only rclpy,
+sensor_msgs, numpy and yaml -- no extra install.
+
+Config (config/loop_closures.yaml): {independent:[...], dependent:[...],
+closures:[{link_a, link_b, point:[xyz in base_link], axis:[xyz]}]}.
 """
+import xml.etree.ElementTree as ET
+
+import numpy as np
 import rclpy
 import yaml
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
 
 
-def _polyval(coeffs, x):
-    # Horner, highest-degree coefficient first (numpy.polyval order)
-    acc = 0.0
-    for c in coeffs:
-        acc = acc * x + c
-    return acc
+def _rpy_matrix(rpy):
+    rx, ry, rz = rpy
+    cx, cy, cz = np.cos(rx), np.cos(ry), np.cos(rz)
+    sx, sy, sz = np.sin(rx), np.sin(ry), np.sin(rz)
+    rxm = np.array([[1, 0, 0], [0, cx, -sx], [0, sx, cx]])
+    rym = np.array([[cy, 0, sy], [0, 1, 0], [-sy, 0, cy]])
+    rzm = np.array([[cz, -sz, 0], [sz, cz, 0], [0, 0, 1]])
+    m = np.eye(4)
+    m[:3, :3] = rzm @ rym @ rxm
+    return m
 
 
-class LoopCouplingRelay(Node):
+class _FK:
+    """Minimal URDF forward kinematics (revolute/continuous/prismatic/fixed)."""
+
+    def __init__(self, urdf_path):
+        root = ET.parse(urdf_path).getroot()
+        self.j = {}
+        for j in root.findall("joint"):
+            o = j.find("origin")
+            xyz = ([float(x) for x in o.get("xyz", "0 0 0").split()]
+                   if o is not None else [0, 0, 0])
+            rpy = ([float(x) for x in o.get("rpy", "0 0 0").split()]
+                   if o is not None else [0, 0, 0])
+            ax = j.find("axis")
+            axis = (np.array([float(x) for x in ax.get("xyz").split()])
+                    if ax is not None else np.array([0.0, 0.0, 1.0]))
+            t = _rpy_matrix(rpy)
+            t[:3, 3] = xyz
+            self.j[j.get("name")] = (j.get("type"),
+                                     j.find("child").get("link"),
+                                     j.find("parent").get("link"), t, axis)
+        self.cj = {v[1]: n for n, v in self.j.items()}
+
+    @staticmethod
+    def _rot(a, q):
+        a = a / (np.linalg.norm(a) or 1.0)
+        x, y, z = a
+        c, s = np.cos(q), np.sin(q)
+        cc = 1.0 - c
+        return np.array([[c + x * x * cc, x * y * cc - z * s, x * z * cc + y * s, 0],
+                         [y * x * cc + z * s, c + y * y * cc, y * z * cc - x * s, 0],
+                         [z * x * cc - y * s, z * y * cc + x * s, c + z * z * cc, 0],
+                         [0, 0, 0, 1.0]])
+
+    def _tj(self, n, q):
+        typ, _c, _p, t, axis = self.j[n]
+        if typ in ("revolute", "continuous"):
+            return t @ self._rot(axis, q)
+        if typ == "prismatic":
+            m = np.eye(4)
+            m[:3, 3] = axis / (np.linalg.norm(axis) or 1.0) * q
+            return t @ m
+        return t
+
+    def world(self, link, q):
+        chain, ln = [], link
+        while ln in self.cj:
+            n = self.cj[ln]
+            chain.append(n)
+            ln = self.j[n][2]
+        m = np.eye(4)
+        for n in reversed(chain):
+            m = m @ self._tj(n, q.get(n, 0.0))
+        return m
+
+
+class LoopClosureRelay(Node):
     def __init__(self):
-        super().__init__("loop_coupling_relay")
+        super().__init__("loop_closure_relay")
+        self.declare_parameter("urdf_file", "")
         self.declare_parameter("config_file", "")
+        self.fk = _FK(self.get_parameter("urdf_file").value)
+        cfg = {}
         path = self.get_parameter("config_file").value
-        couplings = []
         if path:
             with open(path) as f:
-                couplings = (yaml.safe_load(f) or {}).get("couplings", []) or []
-        self._couplings = couplings
-        if not couplings:
-            self.get_logger().warn("no couplings loaded; relaying unchanged")
+                cfg = yaml.safe_load(f) or {}
+        self.deps = list(cfg.get("dependent", []))
+        self.indep = set(cfg.get("independent", []))
+        self.wit = []
+        for c in cfg.get("closures", []):
+            la, lb = c["link_a"], c["link_b"]
+            t0a, t0b = self.fk.world(la, {}), self.fk.world(lb, {})
+            p = np.asarray(c["point"], float)
+            a = np.asarray(c["axis"], float)
+            a = a / (np.linalg.norm(a) or 1.0)
+            for q in (p, p + a * 0.03):
+                la_loc = (np.linalg.inv(t0a) @ np.append(q, 1.0))[:3]
+                lb_loc = (np.linalg.inv(t0b) @ np.append(q, 1.0))[:3]
+                self.wit.append((la, la_loc, lb, lb_loc))
+        self._x = np.zeros(len(self.deps))        # warm start (tracks branch)
+        if not self.deps or not self.wit:
+            self.get_logger().warn("no loop closures loaded; relaying unchanged")
         self._pub = self.create_publisher(JointState, "joint_states", 10)
         self.create_subscription(JointState, "joint_states_source",
                                  self._cb, 10)
 
+    def _resid(self, q):
+        out = []
+        for la, lal, lb, lbl in self.wit:
+            wa = (self.fk.world(la, q) @ np.append(lal, 1.0))[:3]
+            wb = (self.fk.world(lb, q) @ np.append(lbl, 1.0))[:3]
+            out.append(wa - wb)
+        return np.concatenate(out) if out else np.zeros(0)
+
+    def _solve(self, q):
+        x = self._x.copy()
+        for _ in range(20):
+            for i, dn in enumerate(self.deps):
+                q[dn] = x[i]
+            r = self._resid(q)
+            if r.size == 0 or np.linalg.norm(r) < 1e-9:
+                break
+            jac = np.zeros((r.size, len(self.deps)))
+            for i, dn in enumerate(self.deps):
+                xb = x[i]
+                q[dn] = xb + 1e-6
+                jac[:, i] = (self._resid(q) - r) / 1e-6
+                q[dn] = xb
+            x = x + np.linalg.lstsq(jac, -r, rcond=None)[0]
+        self._x = x
+        return x
+
     def _cb(self, msg):
         pos = dict(zip(msg.name, msg.position))
-        for c in self._couplings:
-            drv = c.get("driver")
-            if drv not in pos:
-                continue
-            q = pos[drv]
-            for f in c.get("followers", []):
-                pos[f["joint"]] = _polyval(f.get("poly", []), q)
+        if not self.deps or not self.wit:
+            self._pub.publish(msg)
+            return
+        q = {n: pos[n] for n in self.indep if n in pos}
+        x = self._solve(q)
+        for i, dn in enumerate(self.deps):
+            pos[dn] = float(x[i])
         out = JointState()
         out.header = msg.header
         out.name = list(pos.keys())
@@ -570,7 +687,7 @@ class LoopCouplingRelay(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = LoopCouplingRelay()
+    node = LoopClosureRelay()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

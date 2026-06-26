@@ -44,26 +44,15 @@ from .urdf_writer import (
 )
 
 
-def _loop_couplings_yaml(couplings):
-    """Serialise the closed-loop coupling list to the relay node's config YAML.
-
-    Hand-formatted (not via the yaml dumper) so the polynomial coefficients
-    stay readable and the file carries an explaining header."""
-    lines = [
-        "# Closed-loop (four-bar) joint couplings for loop_coupling_relay.",
-        "# Each follower angle = polyval(poly, driver_angle) (highest-degree",
-        "# coefficient first); this is the exact coupling the linear URDF",
-        "# <mimic> can only approximate.",
-        "couplings:",
-    ]
-    for c in couplings:
-        lines.append(f"  - driver: {c['driver']}")
-        lines.append("    followers:")
-        for f in c["followers"]:
-            poly = ", ".join(repr(float(x)) for x in f["poly"])
-            lines.append(f"      - joint: {f['joint']}")
-            lines.append(f"        poly: [{poly}]")
-    return "\n".join(lines) + "\n"
+def _loop_closures_yaml(closures):
+    """Serialise the loop-closure config (closures + driven/solved joint split)
+    to the IK relay's config YAML."""
+    import yaml
+    head = ("# Closed-loop closures for loop_closure_relay (runtime IK).\n"
+            "# independent = driven joints (sliders); dependent = solved by IK\n"
+            "# so each closure's two link points (the cut hinge) coincide.\n")
+    return head + yaml.safe_dump(closures, sort_keys=False,
+                                 default_flow_style=None)
 
 # extensions we convert; anything else (already .dae/.stl, abs URLs) is left alone
 # source mesh formats we can load + reconvert: CAD output (.3dxml mm, .glb m)
@@ -636,7 +625,7 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
                           ctx_fmt=_CTX_FMT, ros_version=1, pkg_name=None,
                           urdf_name=None, colors=None, collision="copy",
                           collision_quality="balanced", merge_fixed=False,
-                          mesh_dir=None, loop_couplings=None):
+                          mesh_dir=None, loop_closures=None):
     """``pkg_dir`` (a built package) -> ``[(arcname, bytes), ...]`` for a portable
     ROS package, all behind ``package://`` URLs.  The package is named
     ``pkg_name`` if given (validated, see :func:`ros_pkg_name`), else
@@ -696,18 +685,20 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
                 "CoACD collision decomposition needs the optional 'coacd' "
                 "package -- install it with: pip install coacd")
     coacd_cache_dir = os.path.join(pkg_dir, "meshes", ".coacd_cache")
-    if loop_couplings is None:
+    if loop_closures is None:
         # the editor's ZIP export calls us directly (no model); pick up the
-        # closed-loop couplings build() persisted beside the package so the ZIP
-        # ships the relay node + cubic config too
-        side = os.path.join(pkg_dir, "loop_couplings.yaml")
+        # loop-closure data build() persisted beside the package so the ZIP
+        # ships the IK relay node + closure config too
+        side = os.path.join(pkg_dir, "loop_closures.yaml")
         if os.path.isfile(side):
             try:
                 import yaml
                 with open(side, encoding="utf-8") as f:
-                    loop_couplings = (yaml.safe_load(f) or {}).get("couplings")
+                    loop_closures = yaml.safe_load(f) or None
+                if loop_closures and not loop_closures.get("closures"):
+                    loop_closures = None
             except Exception:
-                loop_couplings = None
+                loop_closures = None
     pkg = ros_pkg_name(robot_name, pkg_name)
     urdf_stem = ros_urdf_stem(pkg, urdf_name)
     mesh_rel = ros_mesh_dir(mesh_dir)
@@ -863,10 +854,10 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
         first_link = root.find("link")
         fixed_frame = (first_link.get("name") if first_link is not None
                        else "base_link") or "base_link"
-        # a detected kinematic loop ships a relay node + cubic config + a launch
-        # wired GUI -> relay -> robot_state_publisher (linear <mimic> alone can't
-        # track a four-bar); a plain robot keeps the simpler GUI -> RSP launch
-        coupled = bool(loop_couplings)
+        # a detected kinematic loop ships the IK relay node + closure config + a
+        # launch wired GUI -> relay -> robot_state_publisher (linear <mimic>
+        # alone can't track a loop); a plain robot keeps the simpler GUI -> RSP
+        coupled = bool(loop_closures and loop_closures.get("closures"))
         pkg_xml = PACKAGE_XML_ROS2_COUPLED if coupled else PACKAGE_XML_ROS2
         cmake = CMAKELISTS_ROS2_COUPLED if coupled else CMAKELISTS_ROS2
         launch = DISPLAY_LAUNCH_ROS2_COUPLED if coupled else DISPLAY_LAUNCH_ROS2
@@ -880,9 +871,9 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
                       RVIZ_CONFIG_ROS2.format(fixed_frame=fixed_frame)
                       .encode("utf-8")))
         if coupled:
-            files.append((f"{pkg}/config/loop_couplings.yaml",
-                          _loop_couplings_yaml(loop_couplings).encode("utf-8")))
-            files.append((f"{pkg}/scripts/loop_coupling_relay.py",
+            files.append((f"{pkg}/config/loop_closures.yaml",
+                          _loop_closures_yaml(loop_closures).encode("utf-8")))
+            files.append((f"{pkg}/scripts/loop_closure_relay.py",
                           LOOP_COUPLING_RELAY_PY.encode("utf-8")))
     else:
         files.append((f"{pkg}/package.xml",
@@ -898,7 +889,7 @@ def write_ros_description_package(pkg_dir, robot_name, dest_dir,
                                   collision="copy",
                                   collision_quality="balanced",
                                   merge_fixed=False, mesh_dir=None,
-                                  loop_couplings=None):
+                                  loop_closures=None):
     """Write the ROS package under ``dest_dir`` and return its directory path.
     The package is named ``pkg_name`` if given, else ``<robot_name>_description``;
     the URDF inside is named ``urdf_name`` if given, else the package name.
@@ -915,7 +906,7 @@ def write_ros_description_package(pkg_dir, robot_name, dest_dir,
                                   collision=collision,
                                   collision_quality=collision_quality,
                                   merge_fixed=merge_fixed, mesh_dir=mesh_dir,
-                                  loop_couplings=loop_couplings)
+                                  loop_closures=loop_closures)
     root = os.path.abspath(dest_dir)
     for arc, data in files:
         dst = os.path.join(root, *arc.split("/"))
