@@ -328,6 +328,33 @@ def _set_origin_el(el, M):
     o.set("rpy", " ".join(_fmt_num(v) for v in rpy))
 
 
+def _tf_marker_scale(root, pkg_dir, own_pkgs):
+    """TF axis ("Marker Scale") sized to the model: the median visual-mesh
+    diagonal (a typical part's size), floored at 0.02 m and capped at 1.0, so
+    RViz triads match the parts instead of dwarfing a small robot."""
+    import numpy as np
+    sizes = []
+    for link in root.findall("link"):
+        vis = link.find("visual")
+        me = vis.find(".//mesh") if vis is not None else None
+        if me is None:
+            continue
+        _b, src, _e = _resolve_mesh(pkg_dir, me.get("filename"),
+                                    own_pkgs=own_pkgs)
+        if src is None:
+            continue
+        try:
+            d = float(np.linalg.norm(_load_mesh_metres(src).extents))
+            if d > 0.0:
+                sizes.append(d)
+        except Exception:
+            continue
+    if not sizes:
+        return 1.0
+    sizes.sort()
+    return round(min(1.0, max(0.02, sizes[len(sizes) // 2])), 4)
+
+
 def _bake_origins(root, pkg_dir, own_pkgs):
     """Normalise link origins for the portable package (MuJoCo-friendly):
 
@@ -339,11 +366,15 @@ def _bake_origins(root, pkg_dir, own_pkgs):
       gets its frame moved onto the mesh -- the parent joint, child joints and
       inertial origin absorb the shift, so every world pose is unchanged.
 
-    Returns ``{id(mesh_el): 4x4}`` so the mesh converter bakes the matching
-    transform into each mesh's vertices.  Best effort: a link whose mesh cannot
-    be loaded keeps its (zeroed) origin and is not re-centred."""
+    Returns ``(bake, tf_scale)`` where ``bake`` is ``{id(mesh_el): 4x4}`` so the
+    mesh converter bakes the matching transform into each mesh's vertices, and
+    ``tf_scale`` is a TF axis ("Marker Scale") sized to the model (the median
+    visual-mesh diagonal, capped at 1.0) so RViz triads do not dwarf small parts.
+    Best effort: a link whose mesh cannot be loaded keeps its (zeroed) origin and
+    is not re-centred."""
     import numpy as np
     bake = {}
+    sizes = []
     child_joint, child_lists = {}, {}
     for j in root.findall("joint"):
         c, p = j.find("child").get("link"), j.find("parent").get("link")
@@ -358,15 +389,17 @@ def _bake_origins(root, pkg_dir, own_pkgs):
         v_mat = _origin_matrix(vis.find("origin")) if vis is not None \
             else np.eye(4)
         d = np.zeros(3)
-        if fixed and vis is not None:
+        if vis is not None:
             me = vis.find(".//mesh")
             if me is not None:
                 _b, src, _e = _resolve_mesh(pkg_dir, me.get("filename"),
                                             own_pkgs=own_pkgs)
                 if src is not None:
-                    try:                       # centroid of the mesh in link frame
-                        cen = _load_mesh_metres(src).centroid
-                        d = (v_mat @ np.append(cen, 1.0))[:3]
+                    try:                       # load the mesh once: size + centroid
+                        m = _load_mesh_metres(src)
+                        sizes.append(float(np.linalg.norm(m.extents)))
+                        if fixed:              # centroid in link frame
+                            d = (v_mat @ np.append(m.centroid, 1.0))[:3]
                     except Exception:
                         d = np.zeros(3)
         moved = float(np.linalg.norm(d)) > 1e-9
@@ -397,7 +430,12 @@ def _bake_origins(root, pkg_dir, own_pkgs):
                     o = ET.SubElement(block, "origin")
                 o.set("xyz", "0 0 0")
                 o.set("rpy", "0 0 0")
-    return bake
+    sizes = [s for s in sizes if s > 0.0]
+    tf_scale = 1.0
+    if sizes:
+        sizes.sort()
+        tf_scale = round(min(1.0, max(0.02, sizes[len(sizes) // 2])), 4)
+    return bake, tf_scale
 
 
 def coacd_preview_glbs(pkg_dir, robot_name, quality="balanced", progress=None,
@@ -827,7 +865,10 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
     colors = colors or {}
     # bake visual/collision origins into meshes (-> origin 0 0 0, MuJoCo-ready)
     # and re-centre fixed links on their geometry; {id(mesh_el): 4x4 transform}
-    bake = _bake_origins(root, pkg_dir, own_pkgs) if zero_origins else {}
+    if zero_origins:
+        bake, tf_scale = _bake_origins(root, pkg_dir, own_pkgs)
+    else:
+        bake, tf_scale = {}, _tf_marker_scale(root, pkg_dir, own_pkgs)
 
     files = []
     # keyed by the SOURCE mesh (+fmt), so one source converted once is reused,
@@ -984,7 +1025,8 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
         files.append((f"{pkg}/launch/display.launch.py",
                       launch.format(name=pkg, robot=urdf_stem).encode("utf-8")))
         files.append((f"{pkg}/rviz/{urdf_stem}.rviz",
-                      RVIZ_CONFIG_ROS2.format(fixed_frame=fixed_frame)
+                      RVIZ_CONFIG_ROS2.format(fixed_frame=fixed_frame,
+                                              tf_scale=tf_scale)
                       .encode("utf-8")))
         if coupled:
             files.append((f"{pkg}/config/loop_closures.yaml",

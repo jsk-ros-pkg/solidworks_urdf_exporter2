@@ -390,7 +390,9 @@ def generate_launch_description():
 '''
 
 # A minimal RViz2 config so the robot shows up immediately (RobotModel from the
-# /robot_description topic, TF, grid).  {fixed_frame} = the root link name.
+# /robot_description topic, TF, grid).  {fixed_frame} = the root link name,
+# {tf_scale} = TF axis ("Marker Scale") sized to the model so the triads do not
+# dwarf small parts (<= 1.0).
 RVIZ_CONFIG_ROS2 = """Panels:
   - Class: rviz_common/Displays
     Name: Displays
@@ -414,6 +416,7 @@ Visualization Manager:
     - Class: rviz_default_plugins/TF
       Enabled: true
       Name: TF
+      Marker Scale: {tf_scale}
   Global Options:
     Fixed Frame: {fixed_frame}
     Frame Rate: 30

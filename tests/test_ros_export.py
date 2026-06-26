@@ -188,6 +188,24 @@ def test_build_ros_description_layout(tmp_path):
             assert len(m.faces) > 0
 
 
+def test_rviz_tf_marker_scale_sized_to_model(tmp_path):
+    """The generated .rviz caps the TF axis ("Marker Scale") at 1.0 and sizes it
+    to the model, so the triads don't dwarf a small part."""
+    import re as _re
+
+    from sw2robot.exporter.ros_export import build_ros_description
+
+    pkg_dir = _make_pkg(tmp_path, robot="fing")
+    files = dict(build_ros_description(pkg_dir, "fing", ros_version=2))
+    rviz = files["fing_description/rviz/fing_description.rviz"].decode()
+
+    assert "rviz_default_plugins/TF" in rviz
+    m = _re.search(r"Marker Scale:\s*([0-9.]+)", rviz)
+    assert m, "TF display has no Marker Scale"
+    scale = float(m.group(1))
+    assert 0.0 < scale <= 1.0
+
+
 def test_build_ros_description_custom_mesh_dir(tmp_path):
     """``mesh_dir`` moves the emitted meshes (and repoints the URDF's
     package:// refs) to a custom package-relative directory."""
