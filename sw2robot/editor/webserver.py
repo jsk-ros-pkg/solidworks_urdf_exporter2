@@ -519,22 +519,27 @@ def _read_root_pose(txt):
 #   curl -s http://<host>/api/launch_it.sh | bash
 _LAUNCH_IT_SH = r"""#!/bin/bash
 set -e
-G='\033[0;32m'; N='\033[0m'
+G='\033[0;32m'; R='\033[0;31m'; N='\033[0m'
 PKG="{pkg}"
 ZIP_URL="{zip_url}"
-echo -e "${{G}}sw2robot: build + launch ${{PKG}}${{N}}"
+# safety: PKG must be a plain package name (never empty, a slash or '..'), so the
+# scoped removals below can only ever touch <ws>/{{src,build,install}}/$PKG
+case "$PKG" in ""|*/*|*..*) echo -e "${{R}}refusing: unsafe package name${{N}}"; exit 1 ;; esac
 WS="$(pwd)/${{PKG}}_ws"
-[ -d "$WS" ] && echo "wiping $WS" && rm -rf "$WS"
+echo -e "${{G}}sw2robot: build + launch ${{PKG}}${{N}}  ($WS)"
 mkdir -p "$WS/src"
+# replace ONLY this package (never wipe the whole workspace) -- any other
+# packages or files you keep in ${{PKG}}_ws are left untouched
+rm -rf "$WS/src/$PKG" "$WS/build/$PKG" "$WS/install/$PKG"
 cd "$WS"
 echo -e "${{G}}downloading package zip ...${{N}}"
 code=$(curl -sSL -w "%{{http_code}}" -o robot.zip "$ZIP_URL")
-if [ "$code" != "200" ]; then echo "download failed (HTTP $code)"; cat robot.zip; exit 1; fi
-( cd src && unzip -oq ../robot.zip ) && rm robot.zip
+if [ "$code" != "200" ]; then echo -e "${{R}}download failed (HTTP $code)${{N}}"; cat robot.zip; rm -f robot.zip; exit 1; fi
+( cd src && unzip -oq ../robot.zip ) && rm -f robot.zip
 source "/opt/ros/${{ROS_DISTRO:-humble}}/setup.bash"
 echo -e "${{G}}rosdep + colcon build ...${{N}}"
 rosdep install --from-paths src --ignore-src -r -y 2>/dev/null || true
-colcon build --symlink-install
+colcon build --symlink-install --packages-select "$PKG"
 source install/setup.bash
 echo -e "${{G}}launching display.launch.py ...${{N}}"
 exec ros2 launch "$PKG" display.launch.py
