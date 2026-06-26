@@ -738,6 +738,15 @@ joints.yaml -- keeping your types/renames/base. Use it to pick up the couplings
 on a package that was extracted before the feature existed (a re-extract reuses
 the config and does NOT re-detect). Needs graph.json (CAD mode).">🔗 re-detect mimic</button>
       </div>
+      <!-- one-liner: build + launch the ROS 2 package on a ROS box (curl|bash) -->
+      <div style="margin-top:6px">
+        <div style="color:#8a93a3;font-size:10px;margin-bottom:2px"
+             data-i18n="ui.launchit">🚀 build + launch on a ROS 2 machine (curl | bash):</div>
+        <code id="launchitcmd" title="copies to clipboard"
+              style="display:block;background:#15171a;color:#8fd99f;border:1px solid #2d4a35;
+                     border-radius:3px;padding:4px 6px;font-size:10px;cursor:pointer;
+                     overflow-x:auto;white-space:nowrap"></code>
+      </div>
     </div>
     <div id="hint" data-i18n="ui.hint">left-drag: 視点回転 · right-drag: pan · wheel: zoom ·
       クリックでリンク選択 · 関節はパネルのスライダーで操作
@@ -1254,6 +1263,9 @@ the config and does NOT re-detect). Needs graph.json (CAD mode).">🔗 re-detect
     't.selexclude': { en: 'exclude from the URDF (adds to yaml exclude:, Ctrl+Z to undo)',
                       ja: 'URDFから除外する (yaml exclude: に追加、Ctrl+Zで戻る)' },
     'ui.redetectmimic': { en: '🔗 re-detect mimic', ja: '🔗 mimic再検出' },
+    'ui.launchit': { en: '🚀 build + launch on a ROS 2 machine (curl | bash):',
+                     ja: '🚀 ROS 2マシンでビルド＆起動 (curl | bash):' },
+    'launchit.copied': { en: 'copied — run it on your ROS 2 box', ja: 'コピーしました — ROS 2マシンで実行' },
     't.redetectmimic': { en: 'auto-detect closed-loop (four-bar) couplings from the CAD graph and merge them into joints.yaml (keeps your edits)',
                          ja: 'CADグラフから閉ループ(四節)のmimicを自動検出し、joints.yamlにマージ（編集は保持）' },
     'redetect.start': { en: 're-detecting closed-loop couplings …', ja: '閉ループmimicを再検出中 …' },
@@ -4579,6 +4591,30 @@ async function redetectMimic() {
 }
 document.getElementById('redetectmimic')
   ?.addEventListener('click', redetectMimic);
+
+// one-liner that downloads the ROS 2 package zip, colcon-builds it and brings
+// up display.launch.py on a ROS 2 machine (served by /api/launch_it.sh)
+(function () {
+  const el = document.getElementById('launchitcmd');
+  if (!el) { return; }
+  // Robust across WSL networking modes (and a LAN box) without the user caring:
+  // try the browser's host, then localhost (mirrored WSL / same machine), then
+  // the WSL2 NAT gateway -- the first that responds wins, and launch_it.sh
+  // derives its zip URL from that same host, so it all stays consistent.
+  const port = location.port || '8090';
+  const lh = 'localhost:' + port;
+  const gw = `$(ip route show default 2>/dev/null|awk '{print $3}'):${port}`;
+  const hosts = (location.host === lh) ? [lh, gw] : [location.host, lh, gw];
+  const cmd = 'bash <(' + hosts.map(
+    h => `curl -fs http://${h}/api/launch_it.sh`).join(' || ') + ')';
+  el.textContent = cmd;
+  el.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(cmd);
+      log(t('launchit.copied'), 'ok');
+    } catch (e) { /* clipboard blocked -- user can still select the text */ }
+  });
+})();
 
 // ---- 3D hover: name the link under the cursor, R = make it root,
 // double-click = jump to its row in the tree -------------------------------

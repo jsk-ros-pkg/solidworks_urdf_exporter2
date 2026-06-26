@@ -514,6 +514,33 @@ def _read_root_pose(txt):
             float(m.group(1)) if m else 0.0)
 
 
+# Build-and-launch one-liner (robot-compiler style).  {pkg} = ROS 2 package
+# name, {zip_url} = this server's /api/export/zip URL.  Run with:
+#   curl -s http://<host>/api/launch_it.sh | bash
+_LAUNCH_IT_SH = r"""#!/bin/bash
+set -e
+G='\033[0;32m'; N='\033[0m'
+PKG="{pkg}"
+ZIP_URL="{zip_url}"
+echo -e "${{G}}sw2robot: build + launch ${{PKG}}${{N}}"
+WS="$(pwd)/${{PKG}}_ws"
+[ -d "$WS" ] && echo "wiping $WS" && rm -rf "$WS"
+mkdir -p "$WS/src"
+cd "$WS"
+echo -e "${{G}}downloading package zip ...${{N}}"
+code=$(curl -sSL -w "%{{http_code}}" -o robot.zip "$ZIP_URL")
+if [ "$code" != "200" ]; then echo "download failed (HTTP $code)"; cat robot.zip; exit 1; fi
+( cd src && unzip -oq ../robot.zip ) && rm robot.zip
+source "/opt/ros/${{ROS_DISTRO:-humble}}/setup.bash"
+echo -e "${{G}}rosdep + colcon build ...${{N}}"
+rosdep install --from-paths src --ignore-src -r -y 2>/dev/null || true
+colcon build --symlink-install
+source install/setup.bash
+echo -e "${{G}}launching display.launch.py ...${{N}}"
+exec ros2 launch "$PKG" display.launch.py
+"""
+
+
 def _export_zip(pkg_dir, robot_name, mesh_fmt="dae", ros_version=1,
                 pkg_name=None, urdf_name=None, colors=None,
                 collision="copy", collision_quality="balanced",
@@ -2008,6 +2035,30 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
                 self.wfile.write(data)
+                return None
+            if path == "/api/launch_it.sh":
+                # one-liner build+launch (robot-compiler style):
+                #   curl -s http://<host>/api/launch_it.sh | bash
+                # downloads the ROS 2 package zip from /api/export/zip, builds it
+                # with colcon and brings up display.launch.py
+                cls = type(self)
+                if not cls.pkg_dir:
+                    return self._send_json({"error": "no package open"}, 400)
+                from sw2robot.exporter.ros_export import ros_pkg_name
+                pkg_name = (query.get("name") or [""])[0].strip() or None
+                pkg = ros_pkg_name(cls.robot_name, pkg_name)
+                host = self.headers.get("Host") or "localhost:8090"
+                zip_q = "ros=2&meshes=dae"
+                if pkg_name:
+                    zip_q += "&name=" + pkg_name
+                zip_url = f"http://{host}/api/export/zip?{zip_q}"
+                script = _LAUNCH_IT_SH.format(pkg=pkg, zip_url=zip_url)
+                body = script.encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/x-shellscript")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
                 return None
             if path == "/api/collision/coacd/init":
                 cls = type(self)
