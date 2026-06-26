@@ -575,15 +575,45 @@ def ros_urdf_stem(pkg, urdf_name=None):
     return stem
 
 
+def ros_mesh_dir(mesh_dir=None):
+    """The package-relative directory the exported meshes go in (and that the
+    URDF's ``package://<pkg>/...`` refs point at): an explicit ``mesh_dir`` or the
+    default ``meshes``.
+
+    The relative path from the package root to the meshes differs between robots
+    (``meshes``, ``urdf/mesh``, ...), so it is settable.  A leading/trailing slash
+    is trimmed and back-slashes are accepted as separators; the path must stay
+    inside the package -- no absolute path and no ``..`` segment -- and each
+    segment may use only letters, digits, ``_``, ``-`` and ``.``."""
+    if not mesh_dir or not mesh_dir.strip():
+        return "meshes"
+    raw = mesh_dir.strip().replace("\\", "/").strip("/")
+    parts = raw.split("/") if raw else []
+    if not parts or any(
+            p in ("", ".", "..") or not re.fullmatch(r"[A-Za-z0-9_.-]+", p)
+            for p in parts):
+        raise ValueError(
+            f"invalid mesh directory {mesh_dir!r}: use a package-relative path "
+            "of letters, digits, '_', '-', '.' separated by '/' (e.g. 'meshes' "
+            "or 'urdf/mesh')")
+    return "/".join(parts)
+
+
 def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
                           ctx_fmt=_CTX_FMT, ros_version=1, pkg_name=None,
                           urdf_name=None, colors=None, collision="copy",
-                          collision_quality="balanced", merge_fixed=False):
+                          collision_quality="balanced", merge_fixed=False,
+                          mesh_dir=None):
     """``pkg_dir`` (a built package) -> ``[(arcname, bytes), ...]`` for a portable
     ROS package, all behind ``package://`` URLs.  The package is named
     ``pkg_name`` if given (validated, see :func:`ros_pkg_name`), else
     ``<robot_name>_description``.  The URDF inside is named ``urdf_name`` if
     given, else the package name (so ``<pkg>/urdf/<pkg>.urdf`` by default).
+
+    ``mesh_dir`` is the package-relative directory the meshes go in and that the
+    URDF's ``package://<pkg>/...`` refs point at (validated, see
+    :func:`ros_mesh_dir`); it defaults to ``meshes`` but may be set to match a
+    robot whose mesh layout differs (e.g. ``urdf/mesh``).
 
     ``ctx_fmt`` maps each URDF context to a mesh format; the default emits
     ``<visual>`` as colour ``.dae`` and ``<collision>`` as plain ``.stl`` (the
@@ -628,6 +658,7 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
     coacd_cache_dir = os.path.join(pkg_dir, "meshes", ".coacd_cache")
     pkg = ros_pkg_name(robot_name, pkg_name)
     urdf_stem = ros_urdf_stem(pkg, urdf_name)
+    mesh_rel = ros_mesh_dir(mesh_dir)
     # the opened package's own name(s) -- only package:// refs to one of these
     # are vendored/repointed; refs to other ROS packages are left untouched
     own_pkgs = _own_pkg_names(pkg_dir)
@@ -676,7 +707,7 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
                     dae_dir = os.path.dirname(src)
                     for rel in _dae_sidecar_images(src):
                         img = os.path.normpath(os.path.join(dae_dir, rel))
-                        arc = f"{pkg}/meshes/{rel}"
+                        arc = f"{pkg}/{mesh_rel}/{rel}"
                         if os.path.exists(img) and arc not in used_names:
                             with open(img, "rb") as f:
                                 files.append((arc, f.read()))
@@ -687,7 +718,7 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
             errors.append(f"{base}: {fmt} convert failed ({e!r})")
             return None
         used_names.add(name)
-        files.append((f"{pkg}/meshes/{name}", data))
+        files.append((f"{pkg}/{mesh_rel}/{name}", data))
         done[key] = name
         return name
 
@@ -711,7 +742,7 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
                 j += 1
                 name = f"{base}_collision_{i}_{j}.stl"
             used_names.add(name)
-            files.append((f"{pkg}/meshes/{name}", data))
+            files.append((f"{pkg}/{mesh_rel}/{name}", data))
             names.append(name)
         done[key] = names
         return names
@@ -741,7 +772,7 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
             for k, name in enumerate(names):
                 nb = copy.deepcopy(block)
                 next(nb.iter("mesh")).set(
-                    "filename", f"package://{pkg}/meshes/{name}")
+                    "filename", f"package://{pkg}/{mesh_rel}/{name}")
                 link.insert(idx + k, nb)
 
     for link in root.findall("link"):
@@ -764,7 +795,8 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
                         continue
                     name = _emit(base, src, fmt, link_color or colors.get(base))
                     if name is not None:
-                        mesh.set("filename", f"package://{pkg}/meshes/{name}")
+                        mesh.set("filename",
+                                 f"package://{pkg}/{mesh_rel}/{name}")
 
     if errors:
         raise RuntimeError("ROS description export failed: " + "; ".join(errors))
@@ -803,21 +835,22 @@ def write_ros_description_package(pkg_dir, robot_name, dest_dir,
                                   pkg_name=None, urdf_name=None, colors=None,
                                   collision="copy",
                                   collision_quality="balanced",
-                                  merge_fixed=False):
+                                  merge_fixed=False, mesh_dir=None):
     """Write the ROS package under ``dest_dir`` and return its directory path.
     The package is named ``pkg_name`` if given, else ``<robot_name>_description``;
     the URDF inside is named ``urdf_name`` if given, else the package name.
     ``ros_version`` (1 = catkin, 2 = ament_cmake), ``colors`` (per-link colour
     overrides), ``collision`` / ``collision_quality`` (CoACD collision-mesh
-    decomposition) and ``merge_fixed`` (lump fixed-joint children into parents)
-    are passed through to :func:`build_ros_description`."""
+    decomposition), ``merge_fixed`` (lump fixed-joint children into parents) and
+    ``mesh_dir`` (package-relative mesh directory, default ``meshes``) are passed
+    through to :func:`build_ros_description`."""
     pkg = ros_pkg_name(robot_name, pkg_name)
     files = build_ros_description(pkg_dir, robot_name, email=email,
                                   ros_version=ros_version, pkg_name=pkg,
                                   urdf_name=urdf_name, colors=colors,
                                   collision=collision,
                                   collision_quality=collision_quality,
-                                  merge_fixed=merge_fixed)
+                                  merge_fixed=merge_fixed, mesh_dir=mesh_dir)
     root = os.path.abspath(dest_dir)
     for arc, data in files:
         dst = os.path.join(root, *arc.split("/"))

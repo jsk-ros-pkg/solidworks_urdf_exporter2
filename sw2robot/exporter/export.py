@@ -160,7 +160,7 @@ def extract(assembly_path, out_dir=None, robot_name=None, visible=False,
 def build(pkg_dir, config_path=None, base_hint=None, exclude=None,
           ros_pkg=False, density=None, ros_version=1, ros_pkg_name=None,
           ros_urdf_name=None, collision="copy", collision_quality="balanced",
-          merge_fixed=False):
+          merge_fixed=False, ros_mesh_dir=None):
     _tolerant_console()
     graph = GraphState.load(os.path.join(pkg_dir, GRAPH_FILE))
     robot_name = graph.robot_name
@@ -203,7 +203,7 @@ def build(pkg_dir, config_path=None, base_hint=None, exclude=None,
             ros_version=ros_version, pkg_name=ros_pkg_name,
             urdf_name=ros_urdf_name, colors=colors,
             collision=collision, collision_quality=collision_quality,
-            merge_fixed=merge_fixed)
+            merge_fixed=merge_fixed, mesh_dir=ros_mesh_dir)
 
     print(f"\nDONE. Package: {pkg_dir}")
     print(f"  URDF:   {urdf_path}")
@@ -220,13 +220,14 @@ def build(pkg_dir, config_path=None, base_hint=None, exclude=None,
 def export(assembly_path, out_dir=None, robot_name=None, visible=False,
            config_path=None, base_hint=None, exclude=None, ros_pkg=False,
            ros_version=1, ros_pkg_name=None, ros_urdf_name=None,
-           collision="copy", collision_quality="balanced", merge_fixed=False):
+           collision="copy", collision_quality="balanced", merge_fixed=False,
+           ros_mesh_dir=None):
     pkg_dir = extract(assembly_path, out_dir, robot_name, visible)
     return build(pkg_dir, config_path=config_path, base_hint=base_hint,
                  exclude=exclude, ros_pkg=ros_pkg, ros_version=ros_version,
                  ros_pkg_name=ros_pkg_name, ros_urdf_name=ros_urdf_name,
                  collision=collision, collision_quality=collision_quality,
-                 merge_fixed=merge_fixed)
+                 merge_fixed=merge_fixed, ros_mesh_dir=ros_mesh_dir)
 
 
 def _exclude_list(s):
@@ -257,6 +258,10 @@ def main():
     ap.add_argument("--ros-urdf-name", default=None,
                     help="stem for the URDF file inside the --ros-pkg package "
                          "(default: the package name)")
+    ap.add_argument("--ros-mesh-dir", default=None,
+                    help="package-relative directory the --ros-pkg meshes go in "
+                         "and that the URDF's package:// refs point at (default: "
+                         "'meshes'); e.g. 'urdf/mesh' for a different layout")
     ap.add_argument("--collision", choices=("copy", "coacd"), default="copy",
                     help="--ros-pkg <collision> geometry: 'copy' (default) "
                          "reuses the visual mesh as one STL; 'coacd' runs "
@@ -279,7 +284,7 @@ def main():
            ros_version=2 if args.ros2 else 1,
            ros_pkg_name=args.ros_pkg_name, ros_urdf_name=args.ros_urdf_name,
            collision=args.collision, collision_quality=args.collision_quality,
-           merge_fixed=args.merge_fixed)
+           merge_fixed=args.merge_fixed, ros_mesh_dir=args.ros_mesh_dir)
 
 
 if __name__ == "__main__":

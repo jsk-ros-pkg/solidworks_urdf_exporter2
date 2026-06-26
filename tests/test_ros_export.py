@@ -188,6 +188,46 @@ def test_build_ros_description_layout(tmp_path):
             assert len(m.faces) > 0
 
 
+def test_build_ros_description_custom_mesh_dir(tmp_path):
+    """``mesh_dir`` moves the emitted meshes (and repoints the URDF's
+    package:// refs) to a custom package-relative directory."""
+    import xml.etree.ElementTree as ET
+
+    from sw2robot.exporter.ros_export import build_ros_description
+
+    pkg_dir = _make_pkg(tmp_path, robot="fing")
+    files = dict(build_ros_description(pkg_dir, "fing", mesh_dir="urdf/mesh"))
+    arcs = set(files)
+
+    # meshes ship under the custom dir, NOT the default meshes/
+    assert "fing_description/urdf/mesh/part.dae" in arcs
+    assert "fing_description/urdf/mesh/part.stl" in arcs
+    assert not any(a.startswith("fing_description/meshes/") for a in arcs)
+
+    urdf = files["fing_description/urdf/fing_description.urdf"].decode()
+    link = ET.fromstring(urdf).find("link")
+    assert (link.find("visual").find(".//mesh").get("filename")
+            == "package://fing_description/urdf/mesh/part.dae")
+    assert (link.find("collision").find(".//mesh").get("filename")
+            == "package://fing_description/urdf/mesh/part.stl")
+
+
+def test_ros_mesh_dir_default_and_validation():
+    from sw2robot.exporter.ros_export import ros_mesh_dir
+
+    # default + blank fall back to 'meshes'
+    assert ros_mesh_dir() == "meshes"
+    assert ros_mesh_dir("") == "meshes"
+    assert ros_mesh_dir("   ") == "meshes"
+    # trims surrounding slashes, normalises back-slashes, keeps subdirs
+    assert ros_mesh_dir("/urdf/mesh/") == "urdf/mesh"
+    assert ros_mesh_dir("urdf\\mesh") == "urdf/mesh"
+    # an escaping / absolute / malformed path is rejected
+    for bad in ("../evil", "urdf/../mesh", "a//b", "me sh", "/", ".."):
+        with pytest.raises(ValueError):
+            ros_mesh_dir(bad)
+
+
 def test_build_ros2_description_layout(tmp_path):
     """ros_version=2 emits an ament_cmake manifest + launch + rviz, on top of
     the same package:// URDF and converted meshes."""

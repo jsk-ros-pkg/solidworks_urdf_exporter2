@@ -517,7 +517,7 @@ def _read_root_pose(txt):
 def _export_zip(pkg_dir, robot_name, mesh_fmt="dae", ros_version=1,
                 pkg_name=None, urdf_name=None, colors=None,
                 collision="copy", collision_quality="balanced",
-                merge_fixed=False):
+                merge_fixed=False, mesh_dir=None):
     """ZIP a portable ROS package (package:// URLs), named ``pkg_name`` if given
     else ``<robot_name>_description``; the URDF inside is named ``urdf_name`` if
     given, else the package name.
@@ -553,6 +553,7 @@ def _export_zip(pkg_dir, robot_name, mesh_fmt="dae", ros_version=1,
                                                collision=collision,
                                                collision_quality=collision_quality,
                                                merge_fixed=merge_fixed,
+                                               mesh_dir=mesh_dir,
                                                **kwargs):
             z.writestr(arc, data)
     return pkg, buf.getvalue()
@@ -1956,6 +1957,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 merge_fixed = (query.get("mergefixed") or ["0"])[0] == "1"
                 pkg_name = (query.get("name") or [""])[0].strip() or None
                 urdf_name = (query.get("urdf") or [""])[0].strip() or None
+                mesh_dir = (query.get("meshdir") or [""])[0].strip() or None
                 # the ROS exporter hardcodes the urdf/<robot_name>.urdf + meshes/
                 # layout; in URDF-input mode the opened file may sit elsewhere, so
                 # fail clearly instead of with a confusing missing-file 500
@@ -1981,7 +1983,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                                                 colors=colors,
                                                 collision=collision,
                                                 collision_quality=cquality,
-                                                merge_fixed=merge_fixed)
+                                                merge_fixed=merge_fixed,
+                                                mesh_dir=mesh_dir)
                 except ValueError as e:
                     return self._send_json({"error": str(e)}, 400)
                 fname = (f"{cls.robot_name}_glb.zip" if fmt == "glb"

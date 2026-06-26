@@ -664,6 +664,17 @@ Leave empty to match the package name (e.g. bambulab_description.urdf)."
                       border:1px solid #2d4a35;border-radius:3px;padding:2px 5px;
                       font-size:11px" placeholder="robot_description">
       </div>
+      <div style="display:flex;gap:4px;align-items:center;margin-bottom:4px">
+        <span style="color:#8a93a3;min-width:54px" data-i18n="ui.expmeshdir">mesh dir</span>
+        <input id="expmeshdir" type="text" spellcheck="false"
+               data-i18n-title="t.expmeshdir"
+               title="package-relative directory the meshes go in, and that the
+URDF's package:// refs point at (default 'meshes'). Set it to match a robot whose
+mesh layout differs, e.g. 'urdf/mesh'. A '/' makes subdirectories."
+               style="flex:1;min-width:0;background:#15171a;color:#cfe3ff;
+                      border:1px solid #2d4a35;border-radius:3px;padding:2px 5px;
+                      font-size:11px" placeholder="meshes">
+      </div>
       <div style="display:flex;gap:6px;align-items:center;margin-bottom:4px;flex-wrap:wrap">
         <label style="display:flex;gap:4px;align-items:center;color:#8a93a3;cursor:pointer"
                data-i18n-title="t.coacd"
@@ -1289,6 +1300,9 @@ skrobot / native-mesh consumers (not RViz-loadable)">⬇ glb</button></a>
     'ui.expurdfname': { en: 'URDF', ja: 'URDF名' },
     't.expurdfname': { en: 'file name (stem) of the URDF inside the package. Leave empty to match the package name (e.g. bambulab_description.urdf).',
                        ja: 'パッケージ内 URDF のファイル名（拡張子なし）。空欄ならパッケージ名と同じ（例: bambulab_description.urdf）。' },
+    'ui.expmeshdir': { en: 'mesh dir', ja: 'メッシュ' },
+    't.expmeshdir': { en: "package-relative directory the meshes go in, and that the URDF's package:// refs point at (default 'meshes'). Set it to match a robot whose mesh layout differs, e.g. 'urdf/mesh'. A '/' makes subdirectories.",
+                      ja: 'メッシュを置くパッケージ相対ディレクトリ。URDF の package:// 参照もここを指します（既定: meshes）。メッシュ配置がロボットによって異なる場合に設定（例: urdf/mesh）。/ でサブディレクトリ。' },
     't.expdae': { en: 'portable ROS 1 (catkin) package (<name>_description): package:// URLs, visual = colour COLLADA .dae, collision = .stl (loads in RViz/Gazebo)',
                   ja: 'ポータブルな ROS 1 (catkin) パッケージ (<name>_description): package:// URL、visual = カラー COLLADA .dae、collision = .stl（RViz/Gazebo で読込可）' },
     'ui.expdae': { en: '⬇ ROS1 package', ja: '⬇ ROS1 パッケージ' },
@@ -4116,6 +4130,7 @@ autolimitsBtn.addEventListener('click', async () => {
 // them.  Empty URDF name -> the URDF inside is named after the package.
 const exppkg = document.getElementById('exppkg');
 const expurdf = document.getElementById('expurdf');
+const expmeshdir = document.getElementById('expmeshdir');
 const expLinks = ['expdae', 'expros2', 'expglb']
   .map(id => document.getElementById(id)).filter(Boolean);
 function exportDefaultName() {
@@ -4147,6 +4162,13 @@ expurdf?.addEventListener('input', () => {
   const clean = expurdf.value
     .replace(/[^A-Za-z0-9_.-]/g, '_').replace(/^[^A-Za-z0-9]+/, '');
   if (expurdf.value !== clean) { expurdf.value = clean; }
+});
+// the mesh dir is a package-relative path: letters/digits/_/-/. segments joined
+// by '/'; drop other chars and any leading slash (must stay inside the package)
+expmeshdir?.addEventListener('input', () => {
+  const clean = expmeshdir.value
+    .replace(/[^A-Za-z0-9_./-]/g, '_').replace(/^\/+/, '');
+  if (expmeshdir.value !== clean) { expmeshdir.value = clean; }
 });
 // building a ROS package converts every mesh (3dxml -> dae/stl) and can take a
 // few seconds, during which a plain <a download> gives NO feedback.  Drive it
@@ -4366,15 +4388,18 @@ mergeViewBtn?.addEventListener('click', () => {
 });
 expLinks.forEach(a => a.addEventListener('click', async ev => {
   ev.preventDefault();
-  const base = a.getAttribute('href').split('&name=')[0].split('&urdf=')[0];
+  const base = a.getAttribute('href')
+    .split('&name=')[0].split('&urdf=')[0].split('&meshdir=')[0];
   const name = (exppkg?.value || '').trim();
   const urdf = (expurdf?.value || '').trim();
+  const meshdir = (expmeshdir?.value || '').trim().replace(/^\/+|\/+$/g, '');
   // coacd + merge-fixed apply to the ROS (.dae) packages, not the uniform glb
   const coacd = a.id !== 'expglb' && !!coacdBox?.checked;
   const mergeFixed = a.id !== 'expglb' && !!mergeFixedBox?.checked;
   const url = base
     + (name ? `&name=${encodeURIComponent(name)}` : '')
     + (urdf ? `&urdf=${encodeURIComponent(urdf)}` : '')
+    + (meshdir ? `&meshdir=${encodeURIComponent(meshdir)}` : '')
     + (coacd ? `&collision=coacd&cquality=${cqualitySel?.value || 'balanced'}` : '')
     + (mergeFixed ? '&mergefixed=1' : '');
   const what = a.id === 'expglb' ? 'glb'
