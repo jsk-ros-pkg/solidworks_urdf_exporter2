@@ -1695,6 +1695,306 @@ def _auto_mimic(comps, adjacency, parent_of, edge_info):
                              f"(dual rack on {link_of.get(common, common)})")
 
 
+def _circle_isect(c0, r0, c1, r1, branch):
+    """One intersection of circles (c0,r0)/(c1,r1) in the plane, or None.
+
+    ``branch`` (+1/-1) picks which of the two; the caller fixes it once to the
+    assembled pose so the four-bar tracks the same configuration as it sweeps."""
+    d = np.linalg.norm(c1 - c0)
+    if d < 1e-12 or d > r0 + r1 or d < abs(r0 - r1):
+        return None
+    a = (r0 * r0 - r1 * r1 + d * d) / (2 * d)
+    h2 = r0 * r0 - a * a
+    if h2 < 0:
+        return None
+    m = c0 + a * (c1 - c0) / d
+    perp = np.array([-(c1 - c0)[1], (c1 - c0)[0]]) / d
+    return m + branch * np.sqrt(h2) * perp
+
+
+def _auto_loop_mimic(comps, adjacency, parent_of, edge_info, base):
+    """Couple the passive joints of a closed-loop *planar four-bar* to its driver.
+
+    A SolidWorks closed linkage (a needle-holder pantograph, a parallel-jaw
+    gripper, ...) is fully constrained: four revolute hinges about parallel axes
+    around one loop, so only ONE joint is really free.  The spanning tree keeps
+    three of the four hinges as independent revolute joints and drops the fourth
+    as a loop closure; with no coupling those three move independently and the
+    linkage flies apart.  Detect the four-bar, keep the most crank-like grounded
+    hinge as the driver, and ``<mimic>`` the other two tree hinges to it with the
+    multiplier read off the linkage geometry.
+
+    The ratio is exact only for a parallelogram, but a general four-bar's
+    velocity ratio is near-constant over a wide travel, so a least-squares
+    linear fit over a +-25 deg sweep tracks it closely -- far better than the
+    frozen/free joints we would emit otherwise."""
+    link_of = {c.name: c.link_name for c in comps}
+
+    # rigid groups: union components joined by a FIXED tree edge, so a hinge
+    # whose far link is bolted to the base reads as a hinge to GROUND.
+    uf = {c.name: c.name for c in comps}
+
+    def find(x):
+        while uf[x] != x:
+            uf[x] = uf[uf[x]]
+            x = uf[x]
+        return x
+
+    movable_tree = {}
+    for child, par in parent_of.items():
+        info = edge_info.get((child, par), {})
+        if info.get("type") in _MOVABLE_TYPES and info.get("axis") is not None:
+            movable_tree[(child, par)] = info
+        else:
+            uf[find(child)] = find(par)
+
+    tree_pairs = {frozenset((c, p)) for c, p in parent_of.items()}
+
+    def root_path(n):
+        out = [n]
+        while n in parent_of:
+            n = parent_of[n]
+            out.append(n)
+        return out
+
+    for key, rec in adjacency.items():
+        if key in tree_pairs:
+            continue
+        jt, ax, _note = classify_edge_auto(rec)
+        if jt not in _MOVABLE_TYPES or ax is None:
+            continue                          # only a movable loop closure
+        a, b = tuple(key)
+        if a not in parent_of or b not in parent_of:
+            continue
+        # fundamental cycle: tree paths to the root, cut at their LCA
+        pa, pb = root_path(a), root_path(b)
+        sb = set(pb)
+        lca = next((x for x in pa if x in sb), None)
+        if lca is None:
+            continue
+        # the loop's GROUND bar is the rigid group where its two branches rejoin
+        # the tree toward the root (the LCA) -- NOT necessarily the URDF root, so
+        # the four-bar is still found when the part is rooted elsewhere (e.g. at
+        # a module-mount connector reached through an extra joint)
+        ground = find(lca)
+        ring = pa[:pa.index(lca) + 1] + list(reversed(pb[:pb.index(lca)]))
+        # the four real hinges around the loop, in ring order
+        hinges = []
+        for u, v in zip(ring, ring[1:] + ring[:1]):
+            if (u, v) in movable_tree:
+                info, tedge = movable_tree[(u, v)], (u, v)
+            elif (v, u) in movable_tree:
+                info, tedge = movable_tree[(v, u)], (v, u)
+            elif frozenset((u, v)) == key:
+                info, tedge = {"axis": ax}, None      # the dropped closure
+            else:
+                continue                              # fixed edge -> collapses
+            pt, d = info["axis"]
+            hinges.append({"pt": np.asarray(pt, float),
+                           "d": np.asarray(d, float),
+                           "tedge": tedge, "gu": find(u), "gv": find(v)})
+        groups = []
+        for n in ring:
+            g = find(n)
+            if not groups or groups[-1] != g:
+                groups.append(g)
+        if groups and groups[0] == groups[-1]:
+            groups.pop()
+        # one 1-DOF loop = 4 distinct rigid groups, 4 hinges (3 tree + closure)
+        if len(groups) != 4 or len(hinges) != 4:
+            continue
+        if sum(1 for h in hinges if h["tedge"] is None) != 1:
+            continue
+        if ground not in groups:
+            continue                          # a free-floating loop -- skip
+        # all hinge axes must be parallel (a planar single-DOF linkage)
+        n_hat = hinges[0]["d"] / (np.linalg.norm(hinges[0]["d"]) or 1.0)
+        if any(abs(abs(h["d"] @ n_hat /
+                       (np.linalg.norm(h["d"]) or 1.0)) - 1.0) > 1e-3
+               for h in hinges):
+            continue
+        # planar basis perpendicular to the common axis; project pivots to 2D
+        e1, e2 = _perp_basis(n_hat)
+        for h in hinges:
+            h["p2"] = np.array([h["pt"] @ e1, h["pt"] @ e2])
+        ground_h = [h for h in hinges if ground in (h["gu"], h["gv"])]
+        if len(ground_h) != 2:
+            continue                          # ground must be one contiguous bar
+        drivers = [h for h in ground_h if h["tedge"] is not None]
+        if not drivers:
+            continue                          # both ground pivots dropped (rare)
+
+        def depth(h):
+            return len(root_path(h["tedge"][0]))
+
+        def moving_group(h):
+            return h["gu"] if h["gv"] == ground else h["gv"]
+
+        def moving_bar(h):
+            gm = moving_group(h)
+            h2 = next((x for x in hinges
+                       if x is not h and gm in (x["gu"], x["gv"])), None)
+            return (np.linalg.norm(h["p2"] - h2["p2"])
+                    if h2 is not None else float("inf"))
+        # driver = the most crank-like grounded hinge: the shorter its moving
+        # bar, the more it swings per unit linkage travel, so it is the natural
+        # input (and the best-conditioned to drive).  Ties by depth then name.
+        driver = min(drivers, key=lambda h: (round(moving_bar(h), 9), depth(h),
+                                             f"{link_of[h['tedge'][1]]}__"
+                                             f"{link_of[h['tedge'][0]]}"))
+        other_ground = next(h for h in ground_h if h is not driver)
+        g_in = moving_group(driver)
+        g_out = moving_group(other_ground)
+        g_cpl = next((g for g in groups
+                      if g not in (ground, g_in, g_out)), None)
+        if g_cpl is None or g_in == g_out:
+            continue
+        # the two non-ground hinges: one input<->coupler, one coupler<->output
+        h_ic = next((h for h in hinges
+                     if {h["gu"], h["gv"]} == {g_in, g_cpl}), None)
+        h_oc = next((h for h in hinges
+                     if {h["gu"], h["gv"]} == {g_out, g_cpl}), None)
+        if h_ic is None or h_oc is None:
+            continue
+
+        Pd, Pe = driver["p2"], other_ground["p2"]
+        Pi, Po = h_ic["p2"], h_oc["p2"]
+        L_in = np.linalg.norm(Pi - Pd)
+        L_cpl = np.linalg.norm(Po - Pi)
+        L_out = np.linalg.norm(Po - Pe)
+        if min(L_in, L_cpl, L_out) < 1e-6:
+            continue
+        phi0 = np.arctan2(*(Pi - Pd)[::-1])
+        branch = None
+        for br in (+1, -1):
+            test = _circle_isect(Pi, L_cpl, Pe, L_out, br)
+            if test is not None and np.linalg.norm(test - Po) < 1e-6:
+                branch = br
+                break
+        if branch is None:
+            continue
+
+        in0 = np.arctan2((Pi - Pd)[1], (Pi - Pd)[0])
+        cpl0 = np.arctan2((Po - Pi)[1], (Po - Pi)[0])
+        out0 = np.arctan2((Po - Pe)[1], (Po - Pe)[0])
+
+        def solve(dphi):
+            """Group rotations {ground:0, in, coupler, out} at driver += dphi."""
+            Pi_ = Pd + L_in * np.array([np.cos(phi0 + dphi),
+                                        np.sin(phi0 + dphi)])
+            Po_ = _circle_isect(Pi_, L_cpl, Pe, L_out, branch)
+            if Po_ is None:
+                return None
+            d_in = np.arctan2((Pi_ - Pd)[1], (Pi_ - Pd)[0]) - in0
+            d_cpl = np.arctan2((Po_ - Pi_)[1], (Po_ - Pi_)[0]) - cpl0
+            d_out = np.arctan2((Po_ - Pe)[1], (Po_ - Pe)[0]) - out0
+            return {ground: 0.0, g_in: d_in, g_cpl: d_cpl, g_out: d_out}
+
+        def jval(h, dth):
+            c, p = h["tedge"]
+            s = 1.0 if (h["d"] @ n_hat) >= 0 else -1.0
+            return s * (dth[find(c)] - dth[find(p)])
+
+        # The loop itself bounds how far the driver can turn: a non-Grashof
+        # four-bar binds at a TOGGLE (coupler & output go collinear) where
+        # solve() has no solution.  Walk out from the home pose in each
+        # direction until it binds -> the reachable driver arc.  This is the
+        # real servo travel; the default +-pi is physically unreachable.
+        sdrv = 1.0 if (driver["d"] @ n_hat) >= 0 else -1.0
+        followers = [h for h in (h_ic, h_oc, other_ground)
+                     if h is not driver and h["tedge"] is not None]
+        step = np.radians(0.5)
+        d0, d1 = solve(0.0), solve(step)
+        if d0 is None or d1 is None or not followers:
+            continue
+
+        def frate(da, db):
+            return max((abs(jval(f, da) - jval(f, db)) / step
+                        for f in followers), default=0.0)
+        # near a toggle the follower velocity ratio diverges; bound the usable
+        # arc to where it stays well-conditioned (<= 4x the home gearing) so the
+        # driver gets a real, drivable limit and the coupling fit stays accurate
+        rate_cap = max(4.0 * frate(d1, d0), 3.0)
+
+        def reach(direction):
+            prev, d, last = d0, 0.0, 0.0
+            while d < np.radians(178):
+                d += step
+                cur = solve(direction * d)
+                if cur is None or frate(cur, prev) > rate_cap:
+                    break
+                last, prev = direction * d, cur
+            return last
+        hi_phi, lo_phi = reach(+1), reach(-1)
+        # One toggle can be far (the input rocker can swing most of a turn the
+        # "long way", which collisions we don't model would block anyway, and
+        # over which the linear/cubic coupling is meaningless).  Take the NEAREST
+        # toggle on either side and use it symmetrically: a safe arc that clears
+        # both locks and keeps the coupling fit accurate.
+        # also cap at 60 deg: a change-point linkage (parallelogram) keeps one
+        # clean assembly branch only over a limited swing before the circle
+        # solve flips to the other branch and the fit would be corrupted; 60 deg
+        # is a safe, well-conditioned default (a CAD limit-mate can widen it)
+        tight = min(hi_phi, -lo_phi, np.radians(60.0))
+        tight -= min(np.radians(3.0), 0.08 * tight)    # margin off the toggle
+        if tight < np.radians(1):
+            continue                       # locked / degenerate -- not drivable
+
+        mname = (f"{link_of[driver['tedge'][1]]}__"
+                 f"{link_of[driver['tedge'][0]]}")
+        di = edge_info[driver["tedge"]]
+        # driver value q = sdrv * dphi.  Intersect the linkage arc with any
+        # existing range (a SolidWorks limit-mate servo stop) so a real, tighter
+        # CAD limit still wins.
+        geo_lo, geo_hi = -tight, tight
+        d_lo = geo_lo if di.get("lower") is None else max(geo_lo, di["lower"])
+        d_hi = geo_hi if di.get("upper") is None else min(geo_hi, di["upper"])
+        if d_hi - d_lo < np.radians(1):      # CAD limit disjoint -- keep linkage
+            d_lo, d_hi = geo_lo, geo_hi
+        di["lower"], di["upper"] = round(d_lo, 6), round(d_hi, 6)
+
+        # sample the coupling over the REACHABLE range -> the poly fits the real
+        # travel and each follower's limit is its actual swing (not mult*pi)
+        qs = np.linspace(d_lo, d_hi, 25)
+        dths = [(q, solve(q / sdrv)) for q in qs]
+        dths = [(q, d) for q, d in dths if d is not None]
+        if len(dths) < 4:
+            continue
+        qa = np.array([q for q, _ in dths])
+        n_set = 0
+        for follower in (h_ic, h_oc, other_ground):
+            if follower is driver or follower["tedge"] is None:
+                continue
+            fi = edge_info[follower["tedge"]]
+            if fi.get("mimic"):
+                continue
+            qf = np.array([jval(follower, d) for _, d in dths])
+            den = float(qa @ qa)
+            if den < 1e-12:
+                continue
+            mult = float(qa @ qf) / den
+            # a cubic captures the four-bar's nonlinearity that the linear URDF
+            # <mimic> cannot (a consumer can drive the follower by this poly for
+            # an exact loop); highest-degree coeff first, numpy.polyval order
+            deg = min(3, len(dths) - 1)
+            poly = [round(float(c), 8) for c in np.polyfit(qa, qf, deg)]
+            fi["mimic"] = {"joint": mname, "multiplier": round(mult, 6),
+                           "offset": 0.0, "poly": poly}
+            # the follower's real limit is the span it actually sweeps over the
+            # driver's reachable arc
+            fi["lower"], fi["upper"] = (round(float(qf.min()), 6),
+                                        round(float(qf.max()), 6))
+            note = fi.get("note") or "geo:"
+            fi["note"] = note + (f"; mimic {mname} x{round(mult, 3)} "
+                                 f"(four-bar loop closure)")
+            n_set += 1
+        if n_set:
+            print(f"      four-bar loop: driver {link_of[driver['tedge'][1]]}"
+                  f"->{link_of[driver['tedge'][0]]} "
+                  f"range [{round(np.degrees(d_lo))},{round(np.degrees(d_hi))}] deg"
+                  f", {n_set} mimic follower(s)")
+
+
 def _config_parent_map(comps, adjacency, base, directed):
     """Build parent_of + edge_info from an explicit directed joint list.
 
@@ -1888,6 +2188,7 @@ def build_tree(comps, adjacency, base, directed=None, root_rpy=None,
     else:
         parent_of, edge_info = _auto_parent_map(comps, adjacency, base)
         _auto_mimic(comps, adjacency, parent_of, edge_info)
+        _auto_loop_mimic(comps, adjacency, parent_of, edge_info, base)
     return _finalize_tree(comps, adjacency, base, parent_of, edge_info,
                           root_rpy=root_rpy, root_z_offset=root_z_offset,
                           root_xyz=root_xyz)

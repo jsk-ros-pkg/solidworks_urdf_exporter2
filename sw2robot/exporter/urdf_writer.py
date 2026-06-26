@@ -402,8 +402,15 @@ Visualization Manager:
     - Class: rviz_default_plugins/RobotModel
       Enabled: true
       Name: RobotModel
+      Visual Enabled: true
+      Collision Enabled: false
+      Description Source: Topic
       Description Topic:
         Value: /robot_description
+        Depth: 5
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Durability Policy: Transient Local
     - Class: rviz_default_plugins/TF
       Enabled: true
       Name: TF
@@ -418,6 +425,164 @@ Visualization Manager:
       Class: rviz_default_plugins/Orbit
       Name: Current View
 """
+
+# --- ROS 2 closed-loop (four-bar) variants ----------------------------------
+# A package with a detected kinematic loop ships three extra pieces: the cubic
+# coupling config, a relay node that applies it, and a launch file wired
+# GUI -> relay -> robot_state_publisher so the loop tracks faithfully in RViz.
+# (robot_state_publisher honours a URDF <mimic> only LINEARLY, which a general
+# four-bar's follower angle is not.)
+PACKAGE_XML_ROS2_COUPLED = """<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>{name}</name>
+  <version>0.0.1</version>
+  <description>URDF generated from SolidWorks assembly {name}</description>
+  <maintainer email="{email}">auto</maintainer>
+  <license>TODO</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>joint_state_publisher_gui</exec_depend>
+  <exec_depend>rviz2</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
+"""
+
+CMAKELISTS_ROS2_COUPLED = """cmake_minimum_required(VERSION 3.8)
+project({name})
+find_package(ament_cmake REQUIRED)
+install(DIRECTORY urdf meshes launch rviz config
+  DESTINATION share/${{PROJECT_NAME}})
+install(PROGRAMS scripts/loop_coupling_relay.py
+  DESTINATION lib/${{PROJECT_NAME}})
+ament_package()
+"""
+
+# {name} = package name, {robot} = urdf file stem.  Sliders drive the
+# independent joints; <mimic> followers are dependent, so the GUI shows no
+# slider for them.  The GUI publishes on joint_states_source; the relay
+# overrides the loop followers with their exact cubic coupling and republishes
+# on joint_states, which robot_state_publisher consumes.
+DISPLAY_LAUNCH_ROS2_COUPLED = '''import os
+
+from ament_index_python.packages import get_package_share_directory
+from launch import LaunchDescription
+from launch_ros.actions import Node
+
+
+def generate_launch_description():
+    pkg = get_package_share_directory("{name}")
+    urdf = os.path.join(pkg, "urdf", "{robot}.urdf")
+    with open(urdf) as f:
+        robot_description = f.read()
+    rviz = os.path.join(pkg, "rviz", "{robot}.rviz")
+    couplings = os.path.join(pkg, "config", "loop_couplings.yaml")
+    return LaunchDescription([
+        Node(
+            package="robot_state_publisher",
+            executable="robot_state_publisher",
+            output="screen",
+            parameters=[{{"robot_description": robot_description}}],
+        ),
+        Node(
+            package="joint_state_publisher_gui",
+            executable="joint_state_publisher_gui",
+            output="screen",
+            remappings=[("joint_states", "joint_states_source")],
+        ),
+        Node(
+            package="{name}",
+            executable="loop_coupling_relay.py",
+            output="screen",
+            parameters=[{{"config_file": couplings}}],
+        ),
+        Node(
+            package="rviz2",
+            executable="rviz2",
+            output="screen",
+            arguments=["-d", rviz],
+        ),
+    ])
+'''
+
+# A standalone rclpy node (no {{}} .format here -- shipped verbatim).
+LOOP_COUPLING_RELAY_PY = '''#!/usr/bin/env python3
+"""Apply the exact (nonlinear) coupling of a closed-loop linkage's followers.
+
+robot_state_publisher / joint_state_publisher honour a URDF <mimic> only
+LINEARLY (multiplier*q + offset).  A four-bar's follower angle is a nonlinear
+function of its driver, so this node republishes /joint_states with each loop
+follower recomputed from the cubic polynomial in config/loop_couplings.yaml.
+Wire it between the joint-state source and robot_state_publisher.
+"""
+import rclpy
+import yaml
+from rclpy.node import Node
+from sensor_msgs.msg import JointState
+
+
+def _polyval(coeffs, x):
+    # Horner, highest-degree coefficient first (numpy.polyval order)
+    acc = 0.0
+    for c in coeffs:
+        acc = acc * x + c
+    return acc
+
+
+class LoopCouplingRelay(Node):
+    def __init__(self):
+        super().__init__("loop_coupling_relay")
+        self.declare_parameter("config_file", "")
+        path = self.get_parameter("config_file").value
+        couplings = []
+        if path:
+            with open(path) as f:
+                couplings = (yaml.safe_load(f) or {}).get("couplings", []) or []
+        self._couplings = couplings
+        if not couplings:
+            self.get_logger().warn("no couplings loaded; relaying unchanged")
+        self._pub = self.create_publisher(JointState, "joint_states", 10)
+        self.create_subscription(JointState, "joint_states_source",
+                                 self._cb, 10)
+
+    def _cb(self, msg):
+        pos = dict(zip(msg.name, msg.position))
+        for c in self._couplings:
+            drv = c.get("driver")
+            if drv not in pos:
+                continue
+            q = pos[drv]
+            for f in c.get("followers", []):
+                pos[f["joint"]] = _polyval(f.get("poly", []), q)
+        out = JointState()
+        out.header = msg.header
+        out.name = list(pos.keys())
+        out.position = [float(pos[n]) for n in out.name]
+        self._pub.publish(out)
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = LoopCouplingRelay()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.try_shutdown()
+
+
+if __name__ == "__main__":
+    main()
+'''
 
 
 def write_ros_package(model, pkg_dir, email="auto@example.com"):

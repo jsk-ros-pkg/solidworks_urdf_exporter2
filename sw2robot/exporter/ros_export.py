@@ -33,11 +33,37 @@ import xml.etree.ElementTree as ET
 from .urdf_writer import (
     CMAKELISTS,
     CMAKELISTS_ROS2,
+    CMAKELISTS_ROS2_COUPLED,
     DISPLAY_LAUNCH_ROS2,
+    DISPLAY_LAUNCH_ROS2_COUPLED,
+    LOOP_COUPLING_RELAY_PY,
     PACKAGE_XML,
     PACKAGE_XML_ROS2,
+    PACKAGE_XML_ROS2_COUPLED,
     RVIZ_CONFIG_ROS2,
 )
+
+
+def _loop_couplings_yaml(couplings):
+    """Serialise the closed-loop coupling list to the relay node's config YAML.
+
+    Hand-formatted (not via the yaml dumper) so the polynomial coefficients
+    stay readable and the file carries an explaining header."""
+    lines = [
+        "# Closed-loop (four-bar) joint couplings for loop_coupling_relay.",
+        "# Each follower angle = polyval(poly, driver_angle) (highest-degree",
+        "# coefficient first); this is the exact coupling the linear URDF",
+        "# <mimic> can only approximate.",
+        "couplings:",
+    ]
+    for c in couplings:
+        lines.append(f"  - driver: {c['driver']}")
+        lines.append("    followers:")
+        for f in c["followers"]:
+            poly = ", ".join(repr(float(x)) for x in f["poly"])
+            lines.append(f"      - joint: {f['joint']}")
+            lines.append(f"        poly: [{poly}]")
+    return "\n".join(lines) + "\n"
 
 # extensions we convert; anything else (already .dae/.stl, abs URLs) is left alone
 # source mesh formats we can load + reconvert: CAD output (.3dxml mm, .glb m)
@@ -415,9 +441,16 @@ def _collada_meshes(mesh):
     else:
         return [mesh]
 
-    face_colors = np.asarray(face_colors, dtype=np.uint8)
+    face_colors = np.array(face_colors, dtype=np.uint8)   # copy: clamped below
     if len(face_colors) != len(mesh.faces):
         return [mesh]
+    # A pure-black COLLADA material (diffuse 0,0,0) renders as a RED fallback in
+    # RViz2/Ogre instead of black; lift near-black faces to a dark grey so black
+    # CAD parts stay (almost) black rather than flashing red.  Alpha and any
+    # genuinely coloured face are left untouched.
+    if face_colors.shape[1] >= 3:
+        black = (face_colors[:, :3] < 12).all(axis=1)
+        face_colors[black, :3] = 12
     unique, inverse = np.unique(face_colors, axis=0, return_inverse=True)
     if len(unique) <= 1:
         mesh.visual.face_colors = np.tile(unique[0], (len(mesh.faces), 1))
@@ -603,7 +636,7 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
                           ctx_fmt=_CTX_FMT, ros_version=1, pkg_name=None,
                           urdf_name=None, colors=None, collision="copy",
                           collision_quality="balanced", merge_fixed=False,
-                          mesh_dir=None):
+                          mesh_dir=None, loop_couplings=None):
     """``pkg_dir`` (a built package) -> ``[(arcname, bytes), ...]`` for a portable
     ROS package, all behind ``package://`` URLs.  The package is named
     ``pkg_name`` if given (validated, see :func:`ros_pkg_name`), else
@@ -638,6 +671,13 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
     ``launch/display.launch.py`` + ``rviz/<urdf>.rviz`` so the package runs with
     ``ros2 launch <name> display.launch.py``.
 
+    ``loop_couplings`` (ROS 2 only) is an optional ``[{driver, followers:[{joint,
+    poly}]}]`` list describing closed-loop (four-bar) couplings: when present the
+    package additionally ships ``config/loop_couplings.yaml``, a
+    ``loop_coupling_relay`` node, and a launch wired GUI -> relay ->
+    robot_state_publisher so the loop follows its exact (cubic) coupling -- the
+    linear URDF ``<mimic>`` alone tracks a general four-bar only approximately.
+
     Reads the on-disk ``urdf/<robot_name>.urdf`` (which already carries the
     editor's applied edits).  A missing/unconvertible mesh aborts the export
     before any entries are emitted, so a half-rewritten package never ships."""
@@ -656,6 +696,18 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
                 "CoACD collision decomposition needs the optional 'coacd' "
                 "package -- install it with: pip install coacd")
     coacd_cache_dir = os.path.join(pkg_dir, "meshes", ".coacd_cache")
+    if loop_couplings is None:
+        # the editor's ZIP export calls us directly (no model); pick up the
+        # closed-loop couplings build() persisted beside the package so the ZIP
+        # ships the relay node + cubic config too
+        side = os.path.join(pkg_dir, "loop_couplings.yaml")
+        if os.path.isfile(side):
+            try:
+                import yaml
+                with open(side, encoding="utf-8") as f:
+                    loop_couplings = (yaml.safe_load(f) or {}).get("couplings")
+            except Exception:
+                loop_couplings = None
     pkg = ros_pkg_name(robot_name, pkg_name)
     urdf_stem = ros_urdf_stem(pkg, urdf_name)
     mesh_rel = ros_mesh_dir(mesh_dir)
@@ -811,17 +863,27 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
         first_link = root.find("link")
         fixed_frame = (first_link.get("name") if first_link is not None
                        else "base_link") or "base_link"
+        # a detected kinematic loop ships a relay node + cubic config + a launch
+        # wired GUI -> relay -> robot_state_publisher (linear <mimic> alone can't
+        # track a four-bar); a plain robot keeps the simpler GUI -> RSP launch
+        coupled = bool(loop_couplings)
+        pkg_xml = PACKAGE_XML_ROS2_COUPLED if coupled else PACKAGE_XML_ROS2
+        cmake = CMAKELISTS_ROS2_COUPLED if coupled else CMAKELISTS_ROS2
+        launch = DISPLAY_LAUNCH_ROS2_COUPLED if coupled else DISPLAY_LAUNCH_ROS2
         files.append((f"{pkg}/package.xml",
-                      PACKAGE_XML_ROS2.format(name=pkg, email=email)
-                      .encode("utf-8")))
+                      pkg_xml.format(name=pkg, email=email).encode("utf-8")))
         files.append((f"{pkg}/CMakeLists.txt",
-                      CMAKELISTS_ROS2.format(name=pkg).encode("utf-8")))
+                      cmake.format(name=pkg).encode("utf-8")))
         files.append((f"{pkg}/launch/display.launch.py",
-                      DISPLAY_LAUNCH_ROS2.format(name=pkg, robot=urdf_stem)
-                      .encode("utf-8")))
+                      launch.format(name=pkg, robot=urdf_stem).encode("utf-8")))
         files.append((f"{pkg}/rviz/{urdf_stem}.rviz",
                       RVIZ_CONFIG_ROS2.format(fixed_frame=fixed_frame)
                       .encode("utf-8")))
+        if coupled:
+            files.append((f"{pkg}/config/loop_couplings.yaml",
+                          _loop_couplings_yaml(loop_couplings).encode("utf-8")))
+            files.append((f"{pkg}/scripts/loop_coupling_relay.py",
+                          LOOP_COUPLING_RELAY_PY.encode("utf-8")))
     else:
         files.append((f"{pkg}/package.xml",
                       PACKAGE_XML.format(name=pkg, email=email).encode("utf-8")))
@@ -835,14 +897,16 @@ def write_ros_description_package(pkg_dir, robot_name, dest_dir,
                                   pkg_name=None, urdf_name=None, colors=None,
                                   collision="copy",
                                   collision_quality="balanced",
-                                  merge_fixed=False, mesh_dir=None):
+                                  merge_fixed=False, mesh_dir=None,
+                                  loop_couplings=None):
     """Write the ROS package under ``dest_dir`` and return its directory path.
     The package is named ``pkg_name`` if given, else ``<robot_name>_description``;
     the URDF inside is named ``urdf_name`` if given, else the package name.
     ``ros_version`` (1 = catkin, 2 = ament_cmake), ``colors`` (per-link colour
     overrides), ``collision`` / ``collision_quality`` (CoACD collision-mesh
-    decomposition), ``merge_fixed`` (lump fixed-joint children into parents) and
-    ``mesh_dir`` (package-relative mesh directory, default ``meshes``) are passed
+    decomposition), ``merge_fixed`` (lump fixed-joint children into parents),
+    ``mesh_dir`` (package-relative mesh directory, default ``meshes``) and
+    ``loop_couplings`` (ROS 2 closed-loop relay node + config) are passed
     through to :func:`build_ros_description`."""
     pkg = ros_pkg_name(robot_name, pkg_name)
     files = build_ros_description(pkg_dir, robot_name, email=email,
@@ -850,11 +914,18 @@ def write_ros_description_package(pkg_dir, robot_name, dest_dir,
                                   urdf_name=urdf_name, colors=colors,
                                   collision=collision,
                                   collision_quality=collision_quality,
-                                  merge_fixed=merge_fixed, mesh_dir=mesh_dir)
+                                  merge_fixed=merge_fixed, mesh_dir=mesh_dir,
+                                  loop_couplings=loop_couplings)
     root = os.path.abspath(dest_dir)
     for arc, data in files:
         dst = os.path.join(root, *arc.split("/"))
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         with open(dst, "wb") as f:
             f.write(data)
+        # a node under scripts/ must be executable: ament's install(PROGRAMS)
+        # copies 0755, but `colcon build --symlink-install` SYMLINKS back to
+        # this source file, so a 0644 source leaves a non-executable libexec
+        # entry that `ros2 launch` cannot find
+        if "/scripts/" in arc and arc.endswith(".py"):
+            os.chmod(dst, 0o755)
     return os.path.join(root, pkg)

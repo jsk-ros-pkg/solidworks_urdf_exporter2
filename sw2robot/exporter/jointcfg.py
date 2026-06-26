@@ -78,6 +78,20 @@ def write_template(model, path):
                 and j.lower is not None and j.upper is not None:
             lines.append(f"    lower: {float(j.lower):.5f}")
             lines.append(f"    upper: {float(j.upper):.5f}")
+        # round-trip the mimic coupling: a config rebuild (the editor's path)
+        # takes the directed branch, which does NOT re-run the auto four-bar /
+        # gear detection -- so without this the auto-detected <mimic> (and its
+        # cubic ``poly`` for the ROS 2 loop relay) silently vanishes on the next
+        # build.  Loader: resolve_directed reads this dict back verbatim.
+        m = getattr(j, "mimic", None)
+        if m and m.get("joint"):
+            lines.append("    mimic:")
+            lines.append(f"      joint: {m['joint']}")
+            lines.append(f"      multiplier: {float(m.get('multiplier', 1.0)):g}")
+            lines.append(f"      offset: {float(m.get('offset', 0.0)):g}")
+            if m.get("poly"):
+                poly = ", ".join(repr(float(x)) for x in m["poly"])
+                lines.append(f"      poly: [{poly}]")
     # robot-compiler module interface (root is emitted as base_link by default)
     lines.append("")
     lines.append("# --- robot-compiler module interface (optional) ---")
