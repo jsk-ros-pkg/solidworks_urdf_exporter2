@@ -156,6 +156,28 @@ def extract(assembly_path, out_dir=None, robot_name=None, visible=False,
     return pkg_dir
 
 
+def _loop_couplings(model, joint_overrides):
+    """Closed-loop (four-bar) joints carry a cubic ``poly`` on their mimic so a
+    consumer can drive the follower nonlinearly for an exact loop, which the
+    linear URDF ``<mimic>`` cannot reach.  Collect them, grouped by driver, with
+    the SAME final joint names the URDF writer emits (safe_name + renames), so a
+    relay node's config lines up with the shipped URDF."""
+    from .model import safe_name
+    jo = joint_overrides or {}
+
+    def jn(n):
+        return safe_name(jo.get(n, n))
+
+    by_driver = {}
+    for j in model.joints:
+        m = getattr(j, "mimic", None)
+        if not (m and m.get("poly")):
+            continue
+        by_driver.setdefault(jn(m["joint"]), []).append(
+            {"joint": jn(j.name), "poly": [float(c) for c in m["poly"]]})
+    return [{"driver": d, "followers": f} for d, f in sorted(by_driver.items())]
+
+
 # ---------------------------------------------------------------- build
 def build(pkg_dir, config_path=None, base_hint=None, exclude=None,
           ros_pkg=False, density=None, ros_version=1, ros_pkg_name=None,
@@ -189,6 +211,22 @@ def build(pkg_dir, config_path=None, base_hint=None, exclude=None,
     if not config_path:
         jointcfg.write_template(model, tmpl)
 
+    # Persist any closed-loop (four-bar) couplings beside the package so a LATER
+    # ROS 2 export -- the CLI here OR the editor's ZIP download, which both only
+    # see the on-disk package, not this model -- can ship the relay node + cubic
+    # config.  Refresh every build; drop a stale file once a re-wire removes the
+    # loop.  (The editor re-runs build() on every edit, so this stays current.)
+    joint_overrides = (config.get("joint_names") or {}
+                       if isinstance(config, dict) else {})
+    couplings = _loop_couplings(model, joint_overrides)
+    side = os.path.join(pkg_dir, "loop_couplings.yaml")
+    if couplings:
+        from .ros_export import _loop_couplings_yaml
+        with open(side, "w", encoding="utf-8") as f:
+            f.write(_loop_couplings_yaml(couplings))
+    elif os.path.exists(side):
+        os.remove(side)
+
     desc_dir = None
     if ros_pkg:
         # a standalone package next to pkg_dir (default <robot_name>_description,
@@ -203,7 +241,8 @@ def build(pkg_dir, config_path=None, base_hint=None, exclude=None,
             ros_version=ros_version, pkg_name=ros_pkg_name,
             urdf_name=ros_urdf_name, colors=colors,
             collision=collision, collision_quality=collision_quality,
-            merge_fixed=merge_fixed, mesh_dir=ros_mesh_dir)
+            merge_fixed=merge_fixed, mesh_dir=ros_mesh_dir,
+            loop_couplings=couplings)
 
     print(f"\nDONE. Package: {pkg_dir}")
     print(f"  URDF:   {urdf_path}")

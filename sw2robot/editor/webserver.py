@@ -555,7 +555,16 @@ def _export_zip(pkg_dir, robot_name, mesh_fmt="dae", ros_version=1,
                                                merge_fixed=merge_fixed,
                                                mesh_dir=mesh_dir,
                                                **kwargs):
-            z.writestr(arc, data)
+            # a node under scripts/ must extract executable (0755) so ament's
+            # install(PROGRAMS) + `colcon build --symlink-install` leaves a
+            # runnable libexec entry that `ros2 launch` can find
+            if "/scripts/" in arc and arc.endswith(".py"):
+                zi = zipfile.ZipInfo(arc)
+                zi.external_attr = 0o755 << 16
+                zi.compress_type = zipfile.ZIP_DEFLATED
+                z.writestr(zi, data)
+            else:
+                z.writestr(arc, data)
     return pkg, buf.getvalue()
 
 
@@ -657,7 +666,7 @@ def _remove_yaml_block(txt, mapkey):
                   txt)
 
 
-def _set_mimic_yaml(txt, child, master, multiplier, offset, clear):
+def _set_mimic_yaml(txt, child, master, multiplier, offset, clear, poly=None):
     """Add / replace / remove the ``mimic:`` block of the joints.yaml entry whose
     ``child:`` is the component ``child``.  ``master`` is the driver joint's URDF
     name (stored verbatim -- urdf_writer's name remap is the identity on an
@@ -712,6 +721,9 @@ def _set_mimic_yaml(txt, child, master, multiplier, offset, clear):
                      f"{key_ind}  joint: {master}",
                      f"{key_ind}  multiplier: {float(multiplier):g}",
                      f"{key_ind}  offset: {float(offset):g}"]
+            if poly:
+                pj = ", ".join(repr(float(x)) for x in poly)
+                block.append(f"{key_ind}  poly: [{pj}]")
             ti = next((i for i, x in enumerate(cleaned)
                        if re.match(r"^\s*type:", x)), len(cleaned) - 1)
             cleaned = cleaned[:ti + 1] + block + cleaned[ti + 1:]
@@ -2279,6 +2291,82 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 return self._send_json(
                     {"applied": [c.get("child") for c in applied],
                      "missed": [c.get("child") for c in missed]})
+            if parsed.path == "/api/redetect_couplings":
+                # Re-run the AUTO closed-loop (four-bar) detection on the cached
+                # CAD graph and MERGE the resulting <mimic> couplings into the
+                # existing joints.yaml -- keeping the user's types/renames/base/
+                # limits.  A re-extract reuses the config (directed path) and so
+                # never re-detects; this is the non-destructive way to pick the
+                # couplings up on a package built before the feature existed.
+                cls = type(self)
+                if not cls.pkg_dir:
+                    return self._send_json({"error": "no package open"}, 400)
+                if not _cad_mode(cls.pkg_dir):
+                    return self._send_json(
+                        {"error": "re-detect needs the CAD graph.json "
+                                  "(re-extract this package once)"}, 400)
+                name = os.path.splitext(os.path.basename(cls.urdf_rel))[0]
+                yml = os.path.join(cls.pkg_dir, name + ".joints.yaml")
+                gj = os.path.join(cls.pkg_dir, "graph.json")
+                if not (os.path.exists(yml) and os.path.exists(gj)):
+                    return self._send_json(
+                        {"error": "joints.yaml / graph.json missing -- "
+                                  "re-extract this package once"}, 400)
+                import yaml as _yaml
+
+                from sw2robot.exporter import model as _M
+                from sw2robot.exporter.state import GraphState
+                with open(yml, encoding="utf-8") as f:
+                    txt = f.read()
+                cfg = _yaml.safe_load(txt) or {}
+                # detect on the AUTO tree, but rooted at the user's chosen base
+                # so the joint names line up with their config
+                graph = GraphState.load(gj)
+                comps, adjacency, _gnd = _M.from_graph(
+                    graph, exclude=list(cfg.get("exclude") or []),
+                    expand=cfg.get("expand"), no_expand=cfg.get("no_expand"))
+                base = _M.choose_base(comps, _gnd, cfg.get("base"), adjacency)
+                joints = _M.build_tree(comps, adjacency, base)
+                by_name = {j.name: j for j in joints}
+                applied, missed, drivers = [], [], {}
+                for j in joints:
+                    m = j.mimic
+                    if not (m and m.get("poly")):
+                        continue
+                    txt, ky = _set_mimic_yaml(
+                        txt, j.child, m["joint"], m.get("multiplier", 1.0),
+                        m.get("offset", 0.0), False, poly=m.get("poly"))
+                    # the follower's real swing (the loop constrains it)
+                    if j.lower is not None and j.upper is not None:
+                        txt, _ = _set_joint_limit(txt, j.child, j.lower,
+                                                  j.upper, False)
+                    drivers[m["joint"]] = True
+                    (applied if ky else missed).append(j.child)
+                # the driver's travel is bounded by the four-bar toggle, not the
+                # default +-pi -- push that limit too
+                for dn in drivers:
+                    dj = by_name.get(dn)
+                    if dj is not None and dj.lower is not None \
+                            and dj.upper is not None:
+                        txt, _ = _set_joint_limit(txt, dj.child, dj.lower,
+                                                  dj.upper, False)
+                if not applied:
+                    return self._send_json({"detected": 0, "applied": [],
+                                            "missed": missed})
+                _snapshot(cls.pkg_dir, yml, f"re-detect mimic x{len(applied)}")
+                with open(yml, "w", encoding="utf-8") as f:
+                    f.write(txt)
+                from sw2robot.exporter.export import build
+                try:
+                    build(cls.pkg_dir, config_path=yml)
+                except Exception as e:
+                    return self._send_json(
+                        {"error": f"rebuild failed: {e}"}, 500)
+                print(f"[sw2robot.web] redetect_couplings: {len(applied)} "
+                      f"applied, {len(missed)} not matched")
+                return self._send_json(
+                    {"detected": len(applied) + len(missed),
+                     "applied": applied, "missed": missed})
             if parsed.path == "/api/set_base":
                 cls = type(self)
                 n = int(self.headers.get("Content-Length", 0))

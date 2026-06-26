@@ -729,6 +729,15 @@ package:// URLs, .dae/.stl meshes, plus launch/display.launch.py + rviz config
           <button data-i18n-title="t.expglb" title="uniform .glb meshes (colour kept) for three.js /
 skrobot / native-mesh consumers (not RViz-loadable)">⬇ glb</button></a>
       </div>
+      <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;margin-top:4px">
+        <button id="redetectmimic" data-i18n="ui.redetectmimic"
+                data-i18n-title="t.redetectmimic"
+                title="Re-run the automatic closed-loop (four-bar) detection on the
+cached CAD graph and merge the resulting mimic couplings into this package's
+joints.yaml -- keeping your types/renames/base. Use it to pick up the couplings
+on a package that was extracted before the feature existed (a re-extract reuses
+the config and does NOT re-detect). Needs graph.json (CAD mode).">🔗 re-detect mimic</button>
+      </div>
     </div>
     <div id="hint" data-i18n="ui.hint">left-drag: 視点回転 · right-drag: pan · wheel: zoom ·
       クリックでリンク選択 · 関節はパネルのスライダーで操作
@@ -1244,6 +1253,13 @@ skrobot / native-mesh consumers (not RViz-loadable)">⬇ glb</button></a>
                       ja: '最近のファイル・フルパス貼り付け・右の 🗄' },
     't.selexclude': { en: 'exclude from the URDF (adds to yaml exclude:, Ctrl+Z to undo)',
                       ja: 'URDFから除外する (yaml exclude: に追加、Ctrl+Zで戻る)' },
+    'ui.redetectmimic': { en: '🔗 re-detect mimic', ja: '🔗 mimic再検出' },
+    't.redetectmimic': { en: 'auto-detect closed-loop (four-bar) couplings from the CAD graph and merge them into joints.yaml (keeps your edits)',
+                         ja: 'CADグラフから閉ループ(四節)のmimicを自動検出し、joints.yamlにマージ（編集は保持）' },
+    'redetect.start': { en: 're-detecting closed-loop couplings …', ja: '閉ループmimicを再検出中 …' },
+    'redetect.ok': { en: a => `mimic re-detected ✓ — ${a.n} follower(s) coupled`, ja: a => `mimic再検出 ✓ — ${a.n} 件を連結` },
+    'redetect.none': { en: 'no closed-loop (four-bar) coupling found', ja: '閉ループ(四節)mimicは見つかりませんでした' },
+    'redetect.fail': { en: a => `re-detect failed: ${a.e}`, ja: a => `mimic再検出に失敗: ${a.e}` },
     'ui.selroot': { en: '⌂ make root', ja: '⌂ ルート化' },
     'ui.bulkArrow': { en: '→ bulk set:', ja: '→ 一括設定:' },
     'ui.btFixed': { en: 'fixed', ja: '固定' },
@@ -4545,6 +4561,24 @@ async function reRoot(link) {
     log(t('reroot.fail', { e: e.message ?? e }), 'err');
   }
 }
+
+async function redetectMimic() {
+  if (!currentInfo) { log(t('reroot.needPkg'), 'wrn'); return; }
+  log(t('redetect.start'));
+  try {
+    const resp = await fetch('/api/redetect_couplings', { method: 'POST' });
+    const r = await resp.json();
+    if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
+    if (!r.applied || !r.applied.length) { log(t('redetect.none'), 'wrn'); return; }
+    log(t('redetect.ok', { n: r.applied.length }), 'ok');
+    loadRobot(currentInfo, { keepPose: true, followCamera: true });
+    refreshHistory();
+  } catch (e) {
+    log(t('redetect.fail', { e: e.message ?? e }), 'err');
+  }
+}
+document.getElementById('redetectmimic')
+  ?.addEventListener('click', redetectMimic);
 
 // ---- 3D hover: name the link under the cursor, R = make it root,
 // double-click = jump to its row in the tree -------------------------------
