@@ -200,6 +200,8 @@
   button { background: #3a3f48; color: #ddd; border: 1px solid #555;
            border-radius: 4px; padding: 4px 10px; cursor: pointer; }
   button:hover { background: #474d58; }
+  button.btn-ico { display: inline-flex; align-items: center; gap: 4px; }
+  button.btn-ico .ico { font-size: .9em; line-height: 1; }
   #langbar button.active { background: #3d6fb4; border-color: #7db8ff;
                            color: #fff; }
   #hint { color: #666; font-size: 11px; margin: 8px 0; }
@@ -535,9 +537,10 @@
       <button id="resetview" data-i18n="ui.resetview"
               data-i18n-title="t.resetview"
               title="ビューを最初の状態に戻す (c)">↺ リセット</button>
-      <button id="clearview" data-i18n="ui.clearview"
+      <button id="clearview" class="btn-ico"
               data-i18n-title="t.clearview"
-              title="ビューアを空にする（パッケージは開いたまま）">🗑 クリア</button>
+              title="ビューアを空にする（パッケージは開いたまま）"><span
+              class="ico">🗑</span><span data-i18n="ui.clearview">Clear</span></button>
       <button id="undo" disabled data-i18n-title="hist.undoEmpty"
               title="undo (Ctrl+Z)">↶</button>
       <button id="redo" disabled data-i18n-title="hist.redoEmpty"
@@ -607,6 +610,19 @@
       </div>
     </div>
     <div id="bulk">
+      <div id="jfilterwrap" style="display:flex;gap:4px;align-items:center;
+           width:100%">
+        <input id="jfilter" type="search" spellcheck="false"
+               data-i18n-ph="t.jfilterPh"
+               data-i18n-title="t.jfilter"
+               title="Filter joints/links whose name contains this text"
+               placeholder="Filter joints/links…"
+               style="flex:1;min-width:0;background:#15171a;color:#cfe3ff;
+                      border:1px solid #444;border-radius:3px;padding:2px 6px;
+                      font-size:11px">
+        <span id="jfiltercount" style="color:#8a93a3;font-size:10px;
+              white-space:nowrap"></span>
+      </div>
       <input type="checkbox" id="selall" data-i18n-title="t.selall"
              title="select all">
       <span data-i18n="ui.selectedArrow">selected →</span>
@@ -617,6 +633,11 @@
         <option value="prismatic">prismatic</option>
       </select>
       <button id="bulkset" data-i18n="ui.set">Set</button>
+      <button id="bulkdel" class="btn-ico"
+              data-i18n-title="t.bulkDelete"
+              title="Delete the selected joint/link(s) (and their subtrees)"
+              style="color:#ffb4b4"><span class="ico">🗑</span><span
+              data-i18n="ui.bulkDelete">Delete</span></button>
       <button id="exclchip" style="display:none;font-size:11px"></button>
       <div id="exclpop" style="display:none;position:fixed;z-index:30;
            min-width:200px;max-width:320px;max-height:50vh;overflow:auto;
@@ -1293,7 +1314,7 @@ the config and does NOT re-detect). Needs graph.json (CAD mode).">🔗 re-detect
     't.resetview': { en: 'back to the just-loaded state: neutral pose, default camera, nothing selected, all tools closed (c)',
                      ja: 'ビューを最初の状態へ: 中立姿勢・初期カメラ・選択解除・ツール終了 (c)' },
     'view.reset': { en: 'view reset to the initial state', ja: 'ビューを最初の状態に戻しました' },
-    'ui.clearview': { en: '🗑 Clear', ja: '🗑 クリア' },
+    'ui.clearview': { en: 'Clear', ja: 'クリア' },
     't.clearview': { en: 'empty the viewer (the package stays open — reopen it from 🗄)',
                      ja: 'ビューアを空にする（パッケージは開いたまま。🗄 から再表示できます）' },
     'view.cleared': { en: 'viewer cleared', ja: 'ビューアを空にしました' },
@@ -1313,8 +1334,21 @@ the config and does NOT re-detect). Needs graph.json (CAD mode).">🔗 re-detect
     'ui.rootframe': { en: 'root frame (rotate about current axes / set numbers)',
                       ja: 'root frame (rotate about current axes / set numbers)' },
     'ui.enterApply': { en: '(Enter applies)', ja: '(Enter で即適用)' },
-    't.selall': { en: 'select all', ja: 'すべて選択' },
+    't.selall': { en: 'select all (matching the filter)', ja: '(絞り込み結果を)すべて選択' },
     'ui.selectedArrow': { en: 'selected →', ja: '選択 →' },
+    't.jfilter': { en: 'show only joints whose link/joint name contains this text',
+                   ja: 'リンク名・関節名にこの文字を含む関節だけ表示' },
+    't.jfilterPh': { en: 'Filter joints/links…', ja: '関節/リンクを絞り込み…' },
+    'jfilter.count': { en: a => `${a.n} / ${a.total} shown`,
+                       ja: a => `${a.n} / ${a.total} 件表示` },
+    'ui.bulkDelete': { en: 'Delete', ja: '削除' },
+    't.bulkDelete': { en: 'delete the selected links (and their subtrees)',
+                      ja: '選択したリンク(とその子孫)を削除' },
+    'bulk.delConfirm': { en: a => `Delete ${a.n} selected link(s) and their subtrees?`,
+                         ja: a => `選択した ${a.n} 件のリンク(とその子孫)を削除しますか？` },
+    'bulk.delNone': { en: 'no joints selected (use the checkboxes / select-all)',
+                      ja: '関節が選択されていません(チェックボックス/すべて選択を使用)' },
+    'bulk.deleting': { en: a => `deleting ${a.n} link(s) …`, ja: a => `${a.n} 件のリンクを削除中 …` },
     'ui.set': { en: 'Set', ja: '適用' },
     'export.bar': { en: a => `exporting ${a.what} package …`,
                     ja: a => `${a.what} パッケージを書き出し中 …` },
@@ -1847,6 +1881,10 @@ viewer.loadMeshFunc = (path, manager, done) => {
 // ---- joint rows: slider (movable) + type select + bulk checkbox ---------
 const fmt = v => (Math.abs(v) < 1e-10 ? 0 : v).toFixed(2);
 const rows = new Map();        // joint name -> row record
+let jointFilter = '';          // substring filter: when set, the tree collapses
+                               // to a FLAT list of joints whose link/joint name
+                               // matches -- so select-all / Set / Delete scope
+                               // to exactly the matches (see buildJointRows)
 const playRows = new Map();    // joint name -> "move" mode slider record
 let playMode = false;          // movable-joints-only panel active
 
@@ -2032,12 +2070,14 @@ function buildJointRows(robot) {
     (a, b) => linkOf(a, 'child').localeCompare(linkOf(b, 'child'))));
   const roots = Object.keys(robot.links)
     .filter(n => !childLinks.has(n));
-  let movable = 0;
+  // total movable joints in the robot -- counted over the whole model so the
+  // status summary stays accurate regardless of collapse / filter view state.
+  const movable = Object.values(robot.joints)
+    .filter(j => j.jointType !== 'fixed').length;
 
-  function jointRow(j, depth) {
+  function jointRow(j, depth, flat) {
     const isMimic = !!j.mimicJoint;
     const isMov = j.jointType !== 'fixed';
-    if (isMov) { movable += 1; }
     const parent = linkOf(j, 'parent');
     const child = linkOf(j, 'child');
     const kids = byParent.get(child) ?? [];
@@ -2085,7 +2125,7 @@ function buildJointRows(robot) {
         }).join('') + `</div>` : '';
     row.innerHTML =
       `<div class="row1">` +
-      `<span class="caret">${kids.length
+      `<span class="caret">${(!flat && kids.length)
         ? (collapsed.has(child) ? '▸' : '▾') : '·'}</span>` +
       `<input type="checkbox" class="pick">` +
       `<span class="jname" title="${t('row.jnameTitle',
@@ -2160,7 +2200,7 @@ function buildJointRows(robot) {
     rows.set(j.name, rec);
     jointsEl.appendChild(row);
     const caret = row.querySelector('.caret');
-    if (kids.length) {
+    if (!flat && kids.length) {
       caret.style.cursor = 'pointer';
       caret.addEventListener('click', () => {
         collapsed.has(child) ? collapsed.delete(child)
@@ -2168,11 +2208,29 @@ function buildJointRows(robot) {
         buildJointRows(robot);            // re-render with new fold state
       });
     }
-    if (!collapsed.has(child)) {
+    if (!flat && !collapsed.has(child)) {
       for (const k of kids) { jointRow(k, depth + 1); }
     }
   }
 
+  // filtered mode: drop the tree + root heads, render a FLAT list of just the
+  // joints whose child-link or joint name matches the substring.  `rows` then
+  // holds exactly the matches, so select-all / Set / Delete scope to them.
+  const q = jointFilter.trim().toLowerCase();
+  const countEl = document.getElementById('jfiltercount');
+  if (q) {
+    const matches = Object.values(robot.joints)
+      .filter(j => linkOf(j, 'child').toLowerCase().includes(q)
+                || j.name.toLowerCase().includes(q))
+      .sort((a, b) => linkOf(a, 'child').localeCompare(linkOf(b, 'child')));
+    for (const j of matches) { jointRow(j, 0, true); }
+    if (countEl) {
+      countEl.textContent = t('jfilter.count',
+        { n: matches.length, total: Object.keys(robot.joints).length });
+    }
+    return movable;
+  }
+  if (countEl) { countEl.textContent = ''; }
   for (const rootName of roots.sort()) {
     const head = document.createElement('div');
     head.className = 'joint root';
@@ -3858,6 +3916,26 @@ viewer.addEventListener('joint-mouseout',
   e => { if (poseDrag) { highlightJoint(e.detail, false); }
          else { showJointGlyph(e.detail, false); viewer.redraw(); } });
 
+// joint filter: narrow the tree to a flat list of name-matching joints, so the
+// select-all + Set/Delete below act on exactly those (e.g. all "flange" joints).
+const _jfilterEl = document.getElementById('jfilter');
+_jfilterEl.addEventListener('input', () => {
+  jointFilter = _jfilterEl.value;
+  document.getElementById('selall').checked = false;
+  if (viewer.robot) { buildJointRows(viewer.robot); }
+});
+// Esc clears the filter (without bubbling to the global Escape handler)
+_jfilterEl.addEventListener('keydown', e => {
+  e.stopPropagation();
+  if (e.key === 'Escape' && _jfilterEl.value) {
+    e.preventDefault();
+    _jfilterEl.value = '';
+    jointFilter = '';
+    document.getElementById('selall').checked = false;
+    if (viewer.robot) { buildJointRows(viewer.robot); }
+  }
+});
+
 // bulk select / set
 document.getElementById('selall').addEventListener('change', e => {
   rows.forEach(r => { r.pick.checked = e.target.checked; });
@@ -3876,6 +3954,25 @@ document.getElementById('bulkset').addEventListener('click', () => {
     return;
   }
   applyTypeChanges(changes);             // the whole batch in ONE rebuild
+});
+
+// bulk delete: remove every checked link AND its subtree in ONE rebuild
+// (children would otherwise dangle).  Same exclude path as Del / 🗑 — Ctrl+Z
+// restores.  Pairs with the filter: filter to "flange", select-all, Delete.
+document.getElementById('bulkdel').addEventListener('click', () => {
+  if (!currentInfo) { return; }
+  const picked = [...rows.values()].filter(r => r.pick.checked);
+  if (!picked.length) { log(t('bulk.delNone'), 'wrn'); return; }
+  // expand each picked link to its whole subtree, mapped to component names
+  const links = new Set();
+  for (const r of picked) {
+    for (const n of linkSubtree(r.child)) { links.add(n); }
+  }
+  const comps = [...new Set([...links].map(n => compMeta[n]?.name ?? n))];
+  if (!confirm(t('bulk.delConfirm', { n: picked.length }))) { return; }
+  selectLink(null);
+  setExclude({ names: comps, on: true },
+             t('bulk.deleting', { n: picked.length }));
 });
 
 // set joint type(s).  A fixed<->movable flip NEVER changes topology (same links,
