@@ -536,7 +536,34 @@ echo -e "${{G}}downloading package zip ...${{N}}"
 code=$(curl -sSL -w "%{{http_code}}" -o robot.zip "$ZIP_URL")
 if [ "$code" != "200" ]; then echo -e "${{R}}download failed (HTTP $code)${{N}}"; cat robot.zip; rm -f robot.zip; exit 1; fi
 ( cd src && unzip -oq ../robot.zip ) && rm -f robot.zip
-source "/opt/ros/${{ROS_DISTRO:-humble}}/setup.bash"
+# pick a ROS 2 distro: an already-sourced $ROS_DISTRO wins; else choose by the
+# Ubuntu release (focal->foxy, jammy->humble, noble->jazzy) when that distro is
+# installed, else fall back to whatever is under /opt/ros.  (Hard-coding humble
+# broke `curl | bash` on any non-22.04 box -- no /opt/ros/humble there.)
+ros_setup=""
+if [ -n "$ROS_DISTRO" ] && [ -f "/opt/ros/$ROS_DISTRO/setup.bash" ]; then
+  ros_setup="/opt/ros/$ROS_DISTRO/setup.bash"
+else
+  codename=$(. /etc/os-release 2>/dev/null && echo "$VERSION_CODENAME")
+  case "$codename" in
+    focal) cand=foxy ;;
+    jammy) cand=humble ;;
+    noble) cand=jazzy ;;
+    *)     cand= ;;
+  esac
+  if [ -n "$cand" ] && [ -f "/opt/ros/$cand/setup.bash" ]; then
+    ros_setup="/opt/ros/$cand/setup.bash"
+  else
+    for s in /opt/ros/*/setup.bash; do
+      if [ -f "$s" ]; then ros_setup="$s"; break; fi
+    done
+  fi
+fi
+if [ -z "$ros_setup" ]; then
+  echo -e "${{R}}no ROS 2 found under /opt/ros -- install ROS 2 (or source it) first${{N}}"; exit 1
+fi
+echo -e "${{G}}using ROS: $ros_setup${{N}}"
+source "$ros_setup"
 echo -e "${{G}}rosdep + colcon build ...${{N}}"
 rosdep install --from-paths src --ignore-src -r -y 2>/dev/null || true
 colcon build --symlink-install --packages-select "$PKG"
