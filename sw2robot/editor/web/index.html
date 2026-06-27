@@ -6251,6 +6251,8 @@ function loadbarIndet() {
 }
 // map an extract log line to a short, localised phase label
 function extractPhase(line) {
+  const rp = line.match(/^reading part: (.+)$/);
+  if (rp) return rp[1];                 // show WHICH part is being read
   if (/starting SolidWorks/.test(line)) return t('phase.starting');
   if (/reusing the warm/.test(line))    return t('phase.reuse');
   if (/opening copy|loading the assembly/.test(line)) return t('phase.opening');
