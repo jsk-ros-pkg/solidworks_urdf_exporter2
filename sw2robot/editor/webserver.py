@@ -949,6 +949,8 @@ def _flip_axis_in_urdf(pkg_dir, urdf_rel, joint_name):
     body = re.sub(r'<limit\b[^>]*?>', lim_repl, body)
 
     def mim_repl(mm):                             # follower stays in phase: negate both
+        # this joint is itself a FOLLOWER (q_f' = -q_f for its reversed axis):
+        # q_f = M*q_d + off  ->  q_f' = (-M)*q_d + (-off), so negate both
         seg = mm.group(0)
         for attr in ("multiplier", "offset"):
             a = re.search(rf'\b{attr}="([^"]*)"', seg)
@@ -958,8 +960,25 @@ def _flip_axis_in_urdf(pkg_dir, urdf_rel, joint_name):
         return seg
     body = re.sub(r'<mimic\b[^>]*?>', mim_repl, body)
 
+    full = txt[:m.start()] + head + body + tail + txt[m.end():]
+
+    # this joint may also be the DRIVER that OTHER joints mimic -- their
+    # <mimic joint="this"> tags live in THEIR blocks, not here, so flipping this
+    # joint's axis must negate each follower's multiplier (offset unchanged):
+    # q_f = M*q_d + off, and after q_d -> -q_d', q_f = (-M)*q_d' + off.
+    def drv_repl(mm):
+        seg = mm.group(0)
+        a = re.search(r'\bmultiplier="([^"]*)"', seg)
+        if a:
+            seg = re.sub(r'\bmultiplier="[^"]*"',
+                         f'multiplier="{_fmt_num(-float(a.group(1)))}"', seg)
+        return seg
+    full = re.sub(
+        r'<mimic\b[^>]*\bjoint="' + re.escape(joint_name) + r'"[^>]*>',
+        drv_repl, full)
+
     with open(path, "w", encoding="utf-8") as f:
-        f.write(txt[:m.start()] + head + body + tail + txt[m.end():])
+        f.write(full)
     return na
 
 
