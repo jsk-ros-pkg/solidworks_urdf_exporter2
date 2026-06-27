@@ -313,7 +313,10 @@ def _top_level(full_name):
     return full_name.split("/")[0] if full_name else full_name
 
 
-def extract_components(doc, exclude=None):
+def extract_components(doc, exclude=None, progress=None):
+    """``progress(link_name)`` -- if given -- is called as each component is
+    about to be read (its material/mass-property lookup is the per-part cost),
+    so a UI can show WHICH part the (multi-minute) load is on, not just a stage."""
     exclude = [e.lower() for e in (exclude or [])]
     raw = list(safe_call(doc, "GetComponents", True) or [])
     comps = []
@@ -392,6 +395,8 @@ def extract_components(doc, exclude=None):
             i += 1
             ln = f"{base}_{i}"
         used.add(ln)
+        if progress:
+            progress(ln)
         material = density = None
         sw = None
         if path and not is_asm:
@@ -2307,13 +2312,15 @@ def build_tree(comps, adjacency, base, directed=None, root_rpy=None,
 # Extraction (SolidWorks, slow) <-> serializable GraphState
 # ====================================================================
 
-def extract_graph(doc, robot_name, source_assembly):
+def extract_graph(doc, robot_name, source_assembly, progress=None):
     """SolidWorks -> internal (comps, adjacency, ground).
 
     Extracts ALL (non-suppressed) components and their mate graph.  Exclusion
     of parts is a BUILD-time decision, so nothing is excluded here.  Mesh files
-    are filled in later (by mesh.export_meshes) before serializing."""
-    comps = extract_components(doc)
+    are filled in later (by mesh.export_meshes) before serializing.
+    ``progress(link_name)`` is forwarded per component (see
+    :func:`extract_components`)."""
+    comps = extract_components(doc, progress=progress)
     adjacency, ground = build_mate_graph(doc, comps)
     mated = set()
     for key in adjacency:
@@ -2507,13 +2514,15 @@ def capture_deep_worlds(doc):
     return out, hidden
 
 
-def extract_subgraphs(doc, comps, sw=None):
+def extract_subgraphs(doc, comps, sw=None, progress=None):
     """{part_path: (comps, adjacency, ground)} for every unique sub-assembly
     appearing in ``comps``, RECURSIVELY (each sub-assembly's own internals in
     its own local frame).  Prefers the in-memory doc the parent resolved;
     falls back to opening a throwaway copy.  Yields the open ModelDoc to the
     optional ``on_doc(path, md, subcomps)`` hook... (kept simple: caller may
-    re-open for meshes via the returned part paths)."""
+    re-open for meshes via the returned part paths).  ``progress(link_name)`` is
+    forwarded per child component (see :func:`extract_components`) so the load
+    indicator shows which part is being read."""
     live = {}
     for c in list(safe_call(doc, "GetComponents", True) or []):
         ct = as_iface(c, "IComponent2")
@@ -2540,7 +2549,7 @@ def extract_subgraphs(doc, comps, sw=None):
             print(f"      WARN: no document for sub-assembly "
                   f"{os.path.basename(path)}; internals not extracted")
             continue
-        subcomps = extract_components(md)
+        subcomps = extract_components(md, progress=progress)
         subadj, subground = build_mate_graph(md, subcomps)
         out[path] = (subcomps, subadj, subground)
         print(f"      sub-assembly {os.path.basename(path)}: "

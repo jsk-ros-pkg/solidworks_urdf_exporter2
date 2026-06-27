@@ -634,7 +634,11 @@ def test_working_package_is_not_modified(tmp_path):
 
     assert (tmp_path / "urdf" / "r.urdf").read_text(encoding="utf-8") == src_urdf
     assert '../meshes/part.3dxml' in src_urdf
-    assert sorted(os.listdir(tmp_path / "meshes")) == before   # no .dae written
+    # the source meshes are untouched -- no converted .dae/.stl leaks into the
+    # working package (a hidden .mesh_cache/.coacd_cache dir is fine: it speeds a
+    # re-export and is never shipped, like the CoACD cache)
+    after = [n for n in os.listdir(tmp_path / "meshes") if not n.startswith(".")]
+    assert sorted(after) == before
 
 
 def test_texture_glb_colours_become_collada_materials(tmp_path):

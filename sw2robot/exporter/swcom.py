@@ -366,6 +366,7 @@ class SolidWorks:
             self.visible = True
             self._open_docs = []
             self._tempdirs = []
+            self._sibling_dirs = {}      # src dir -> temp dir holding its siblings
             if not self._responds():     # attached app is the USER's: don't quit
                 raise SolidWorksUnavailable(
                     "the running SolidWorks is not responding (license "
@@ -414,6 +415,7 @@ class SolidWorks:
         self.visible = visible
         self._open_docs = []
         self._tempdirs = []
+        self._sibling_dirs = {}          # src dir -> temp dir holding its siblings
         # A SolidWorks that launched but can't acquire a license comes back as
         # a COM object that fails every real call.  Catch a wholly unresponsive
         # instance here -- with a clear license warning -- and tear it down, so
@@ -481,8 +483,17 @@ class SolidWorks:
             # up as a single component).  Register the original's folder family
             # as document search paths so rule (2) replaces rule (4).
             self._register_search_folders(path)
-            tmpdir = tempfile.mkdtemp(prefix="sw2urdf_")
-            self._tempdirs.append(tmpdir)
+            # Reuse ONE temp dir per source folder: assemblies that share a folder
+            # (the common case -- a module's sub-assemblies all sit beside it)
+            # then co-locate their sibling CAD files ONCE instead of re-copying
+            # the whole folder (38 files here) on every open_copy.
+            src_dir = os.path.dirname(path)
+            tmpdir = self._sibling_dirs.get(src_dir)
+            first_for_dir = tmpdir is None
+            if first_for_dir:
+                tmpdir = tempfile.mkdtemp(prefix="sw2urdf_")
+                self._tempdirs.append(tmpdir)
+                self._sibling_dirs[src_dir] = tmpdir
             # Open the copy under a UNIQUE title so it never clashes with the
             # SAME assembly already open in the reused session -- OpenDoc6
             # otherwise fails with swFileWithSameTitleAlreadyOpen (65536).
@@ -490,17 +501,19 @@ class SolidWorks:
             # below), so renaming the top assembly is safe.
             stem, ext = os.path.splitext(os.path.basename(path))
             tmp = os.path.join(tmpdir, f"{stem}_{os.path.basename(tmpdir)}{ext}")
-            shutil.copy2(path, tmp)
-            # Co-locate the assembly's sibling CAD files in the SAME temp dir so
-            # SolidWorks' "same folder as the assembly" rule resolves them by
-            # name.  The search-folder registration above does NOT always
-            # override the absolute paths a downloaded (Pack-and-Go) assembly
-            # bakes in -- those then open with every component unresolved even
-            # though the parts sit right next to the .SLDASM.  A flat copy fixes
-            # that; deep sub-folder layouts fall back to the search folders.
-            if doc_type_for(path) == SW_DOC_ASSEMBLY:
+            if not os.path.exists(tmp):
+                shutil.copy2(path, tmp)
+            # Co-locate the source folder's sibling CAD files in the SAME temp dir
+            # so SolidWorks' "same folder as the assembly" rule resolves them by
+            # name -- ONCE per folder (the folder's other sub-assemblies reuse
+            # this same temp dir).  The search-folder registration above does NOT
+            # always override the absolute paths a downloaded (Pack-and-Go)
+            # assembly bakes in -- those then open with every component unresolved
+            # even though the parts sit right next to the .SLDASM.  A flat copy
+            # fixes that; deep sub-folder layouts fall back to the search folders.
+            if first_for_dir and doc_type_for(path) == SW_DOC_ASSEMBLY:
                 try:
-                    siblings = os.listdir(os.path.dirname(path))
+                    siblings = os.listdir(src_dir)
                 except OSError:
                     siblings = []
                 n_sib = 0
@@ -508,7 +521,7 @@ class SolidWorks:
                     if fn.startswith("~$") or not fn.lower().endswith(
                             (".sldprt", ".sldasm", ".slddrw")):
                         continue                # lock files / non-CAD
-                    s = os.path.join(os.path.dirname(path), fn)
+                    s = os.path.join(src_dir, fn)
                     d = os.path.join(tmpdir, fn)
                     if os.path.isfile(s) and not os.path.exists(d):
                         try:

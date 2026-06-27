@@ -58,14 +58,17 @@ def _pkg_paths(assembly_path, out_dir, robot_name):
 
 
 # ---------------------------------------------------------------- extract
-def _extract_into(sw, assembly_path, pkg_dir, meshes_dir, robot_name, _say):
-    """Extraction body against an already-running SolidWorks session."""
+def _extract_into(sw, assembly_path, pkg_dir, meshes_dir, robot_name, _say,
+                  _part=None):
+    """Extraction body against an already-running SolidWorks session.  ``_part``
+    (optional) reports the part currently being read, for the load indicator."""
     _say(f"opening copy of {os.path.basename(assembly_path)} "
          f"(loading the assembly) ...")
     doc = sw.open_copy(assembly_path)
 
     _say("reading components + mates ...")
-    comps, adjacency, ground = extract_graph(doc, robot_name, assembly_path)
+    comps, adjacency, ground = extract_graph(doc, robot_name, assembly_path,
+                                             progress=_part)
     _say(f"found {len(comps)} components, {len(adjacency)} mate pairs")
     if not comps:
         sw.close_doc(doc)
@@ -85,7 +88,7 @@ def _extract_into(sw, assembly_path, pkg_dir, meshes_dir, robot_name, _say):
         _say(f"found {len(limit_joints)} limit-mate joint(s)")
 
     _say("reading sub-assembly internals ...")
-    subgraphs = extract_subgraphs(doc, comps, sw=sw)
+    subgraphs = extract_subgraphs(doc, comps, sw=sw, progress=_part)
     deep_worlds, hidden = capture_deep_worlds(doc)
 
     by_path = {}
@@ -140,17 +143,33 @@ def extract(assembly_path, out_dir=None, robot_name=None, visible=False,
         if progress:
             progress(msg + stamp)
 
+    # per-part read progress -- a transient "now reading <part>" for the load
+    # indicator.  THROTTLED (200+ parts would otherwise flood the log) and routed
+    # straight to ``progress`` (not _say): no console line, no timing stamp, and
+    # tagged 'reading part:' so the UI shows the name without a stage banner.
+    part_state = {"last": 0.0}
+
+    def _part(name):
+        if not progress:
+            return
+        now = _time.time()
+        if now - part_state["last"] < 0.2:
+            return
+        part_state["last"] = now
+        progress(f"reading part: {name}")
+
     assembly_path = os.path.abspath(assembly_path)
     robot_name, pkg_dir = _pkg_paths(assembly_path, out_dir, robot_name)
     meshes_dir = os.path.join(pkg_dir, "meshes")
     os.makedirs(meshes_dir, exist_ok=True)
 
     if sw is not None:
-        _extract_into(sw, assembly_path, pkg_dir, meshes_dir, robot_name, _say)
+        _extract_into(sw, assembly_path, pkg_dir, meshes_dir, robot_name, _say,
+                      _part)
     else:
         with SolidWorks(visible=visible) as sw_own:
             _extract_into(sw_own, assembly_path, pkg_dir, meshes_dir,
-                          robot_name, _say)
+                          robot_name, _say, _part)
 
     print(f"  graph: {os.path.join(pkg_dir, GRAPH_FILE)}")
     return pkg_dir

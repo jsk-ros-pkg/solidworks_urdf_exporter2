@@ -129,31 +129,36 @@ def _baked(mesh, transform):
     return mesh
 
 
-def _mesh_to_dae_bytes(src, color=None, transform=None):
+def _mesh_to_dae_bytes(src, color=None, transform=None, mesh=None):
     """COLLADA (.dae) bytes in metres, with colours baked into materials.
     ``color`` (``'#RRGGBB'``) overrides the mesh's own colours; ``transform``
-    (4x4) is baked into the vertices so the URDF origin can be zeroed."""
-    meshes = _collada_meshes(
-        _apply_uniform_color(_baked(_load_mesh_metres(src), transform), color))
+    (4x4) is baked into the vertices so the URDF origin can be zeroed.  ``mesh``
+    (a preloaded, OWNED-and-mutable trimesh) skips the per-call ``trimesh.load``
+    so one source loaded once can feed several conversions."""
+    m = mesh if mesh is not None else _load_mesh_metres(src)
+    meshes = _collada_meshes(_apply_uniform_color(_baked(m, transform), color))
     if len(meshes) == 1:
         return meshes[0].export(file_type="dae")
     from trimesh.exchange.dae import export_collada
     return export_collada(meshes)
 
 
-def _mesh_to_stl_bytes(src, color=None, transform=None):
+def _mesh_to_stl_bytes(src, color=None, transform=None, mesh=None):
     """STL bytes in metres (colour is dropped -- collision geometry needs none,
     so ``color`` is accepted for a uniform converter signature but ignored).
-    ``transform`` (4x4) is baked into the vertices."""
-    return _baked(_load_mesh_metres(src), transform).export(file_type="stl")
+    ``transform`` (4x4) is baked into the vertices.  ``mesh`` (preloaded) skips
+    the per-call ``trimesh.load``."""
+    m = mesh if mesh is not None else _load_mesh_metres(src)
+    return _baked(m, transform).export(file_type="stl")
 
 
-def _mesh_to_glb_bytes(src, color=None, transform=None):
+def _mesh_to_glb_bytes(src, color=None, transform=None, mesh=None):
     """GLB bytes in metres, keeping the original material/texture (for
     three.js / skrobot consumers, not RViz).  ``color`` (``'#RRGGBB'``)
-    overrides the mesh's own colours; ``transform`` (4x4) is baked in."""
-    return _apply_uniform_color(
-        _baked(_load_mesh_metres(src), transform), color).export(
+    overrides the mesh's own colours; ``transform`` (4x4) is baked in.  ``mesh``
+    (preloaded) skips the per-call ``trimesh.load``."""
+    m = mesh if mesh is not None else _load_mesh_metres(src)
+    return _apply_uniform_color(_baked(m, transform), color).export(
         file_type="glb")
 
 
@@ -164,6 +169,140 @@ _CONVERT = {"dae": _mesh_to_dae_bytes, "stl": _mesh_to_stl_bytes,
 _CTX_FMT = (("visual", "dae"), ("collision", "stl"))
 # a uniform GLB variant (both contexts) for native-mesh / three.js consumers
 GLB_CTX_FMT = (("visual", "glb"), ("collision", "glb"))
+
+
+# ----------------------------------------------------------- mesh cache + reuse
+# The slow part of an export is per-source mesh work: trimesh's load (a 3DXML is
+# a zipped XML the loader parses) plus the format conversion.  Two things speed
+# it up, both here: (1) load each source ONCE and reuse it (a 'copy()' costs ~ms
+# vs the ~100-200ms load -- the same source feeds the size measurement, the
+# visual .dae and the collision .stl); (2) disk-cache the converted bytes + the
+# geometry measurements keyed by source CONTENT, so a re-export (ros.zip then
+# ros2.zip, or the same model again) skips trimesh entirely.
+#
+# NB the mesh path is deliberately SERIAL: trimesh's 3DXML loader and the
+# COLLADA exporter are pure-Python (GIL-bound), so a thread pool over them only
+# oversubscribes and runs ~2x SLOWER (measured).  CoACD below is different (a
+# compiled lib that releases the GIL) and IS parallelised.
+
+def _pool_workers(n_items, max_workers=None):
+    """Worker count for a CoACD pool over ``n_items``: ``cpu_count - 2`` (capped
+    at 8, floored at 1), never more than the work available."""
+    cap = max_workers or min(8, max(1, (os.cpu_count() or 2) - 2))
+    return max(1, min(cap, n_items))
+
+
+def _parallel(func, items, max_workers=None):
+    """``[func(x) for x in items]`` but concurrent (thread pool) -- only for
+    GIL-releasing work (CoACD).  Order is preserved.  ``func`` MUST NOT raise
+    (catch + return a sentinel) -- a raised exception aborts the batch."""
+    items = list(items)
+    if len(items) <= 1:
+        return [func(x) for x in items]
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=_pool_workers(len(items),
+                                                      max_workers)) as ex:
+        return list(ex.map(func, items))
+
+
+def _atomic_write(path, data):
+    """Write ``data`` (bytes) to ``path`` via a unique temp + ``os.replace`` so a
+    concurrent writer (another export hitting the same cache key) can't see a
+    half-written file or race on the temp name."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
+    with open(tmp, "wb") as f:
+        f.write(data)
+    os.replace(tmp, path)
+
+
+# bump when the converted-bytes / measurement cache layout changes (stale caches
+# under a previous version are then ignored rather than mis-read)
+_MESH_CACHE_VERSION = 1
+
+
+class _MeshCache:
+    """Per-export mesh cache: load each source's trimesh ONCE (the dominant
+    cost), hand out cheap mutable copies for conversion, and disk-cache both the
+    converted bytes and the geometry measurements (keyed by source CONTENT) under
+    ``cache_dir`` so a re-export of an unchanged model needs no trimesh at all.
+    Used serially within one export (the mesh path is GIL-bound, see above)."""
+
+    def __init__(self, cache_dir):
+        self._cache_dir = cache_dir
+        self._meshes = {}          # abspath -> trimesh (in-memory, load-once)
+        self._shas = {}            # abspath -> source content sha1 (read-once)
+
+    def sha(self, src):
+        """The source file's content sha1 (memoised) -- the disk-cache key, so an
+        edited mesh invalidates its cache while a moved/renamed one still hits."""
+        key = os.path.abspath(src)
+        h = self._shas.get(key)
+        if h is None:
+            with open(src, "rb") as f:
+                h = hashlib.sha1(f.read()).hexdigest()
+            self._shas[key] = h
+        return h
+
+    def _ensure(self, src):
+        key = os.path.abspath(src)
+        m = self._meshes.get(key)
+        if m is None:
+            m = self._meshes[key] = _load_mesh_metres(src)
+        return m
+
+    def copy(self, src):
+        """An independent, mutable copy of the source mesh (each conversion bakes
+        a different colour/transform, so they cannot share one object)."""
+        return self._ensure(src).copy()
+
+    def measure(self, src):
+        """``(size, centroid)`` -- ``size`` = bounding-box diagonal in metres,
+        ``centroid`` a 3-vector -- disk-cached by source content so a re-export's
+        origin baking needs no trimesh load.  ``None`` if the mesh won't load."""
+        import numpy as np
+        path = os.path.join(
+            self._cache_dir, f"{self.sha(src)}.measure{_MESH_CACHE_VERSION}.json")
+        try:
+            with open(path) as f:
+                d = json.load(f)
+            return float(d[0]), np.asarray(d[1:4], float)
+        except (OSError, ValueError, IndexError, TypeError):
+            pass
+        try:
+            m = self._ensure(src)
+        except Exception:
+            return None
+        size = float(np.linalg.norm(m.extents))
+        centroid = np.asarray(m.centroid, float)
+        try:
+            _atomic_write(path,
+                          json.dumps([size, *centroid.tolist()]).encode("utf-8"))
+        except OSError:
+            pass
+        return size, centroid
+
+    def convert(self, src, fmt, color, transform):
+        """Converted mesh bytes (``_CONVERT[fmt]``), disk-cached by source content
+        + conversion params so a re-export skips the trimesh re-conversion."""
+        tkey = None if transform is None else tuple(
+            round(float(x), 7) for x in transform.flatten())
+        h = hashlib.sha1(self.sha(src).encode())
+        h.update(json.dumps([fmt, color, tkey, _MESH_CACHE_VERSION],
+                            sort_keys=True).encode())
+        path = os.path.join(self._cache_dir, f"{h.hexdigest()[:16]}.{fmt}")
+        try:
+            with open(path, "rb") as f:
+                return f.read()
+        except OSError:
+            pass
+        data = _CONVERT[fmt](src, color=color, transform=transform,
+                             mesh=self.copy(src))
+        try:
+            _atomic_write(path, data)
+        except OSError:
+            pass
+        return data
 
 
 # ----------------------------------------------------- CoACD collision meshes
@@ -328,11 +467,10 @@ def _set_origin_el(el, M):
     o.set("rpy", " ".join(_fmt_num(v) for v in rpy))
 
 
-def _tf_marker_scale(root, pkg_dir, own_pkgs):
+def _tf_marker_scale(root, pkg_dir, own_pkgs, cache):
     """TF axis ("Marker Scale") sized to the model: the median visual-mesh
     diagonal (a typical part's size), floored at 0.02 m and capped at 1.0, so
     RViz triads match the parts instead of dwarfing a small robot."""
-    import numpy as np
     sizes = []
     for link in root.findall("link"):
         vis = link.find("visual")
@@ -343,19 +481,16 @@ def _tf_marker_scale(root, pkg_dir, own_pkgs):
                                     own_pkgs=own_pkgs)
         if src is None:
             continue
-        try:
-            d = float(np.linalg.norm(_load_mesh_metres(src).extents))
-            if d > 0.0:
-                sizes.append(d)
-        except Exception:
-            continue
+        res = cache.measure(src)
+        if res is not None and res[0] > 0.0:
+            sizes.append(res[0])
     if not sizes:
         return 1.0
     sizes.sort()
     return round(min(1.0, max(0.02, sizes[len(sizes) // 2])), 4)
 
 
-def _bake_origins(root, pkg_dir, own_pkgs):
+def _bake_origins(root, pkg_dir, own_pkgs, cache):
     """Normalise link origins for the portable package (MuJoCo-friendly):
 
     * bake every ``<visual>``/``<collision>`` ``<origin>`` into its mesh and set
@@ -395,13 +530,12 @@ def _bake_origins(root, pkg_dir, own_pkgs):
                 _b, src, _e = _resolve_mesh(pkg_dir, me.get("filename"),
                                             own_pkgs=own_pkgs)
                 if src is not None:
-                    try:                       # load the mesh once: size + centroid
-                        m = _load_mesh_metres(src)
-                        sizes.append(float(np.linalg.norm(m.extents)))
+                    res = cache.measure(src)   # size + centroid, once (disk-cached)
+                    if res is not None:
+                        size, centroid = res
+                        sizes.append(size)
                         if fixed:              # centroid in link frame
-                            d = (v_mat @ np.append(m.centroid, 1.0))[:3]
-                    except Exception:
-                        d = np.zeros(3)
+                            d = (v_mat @ np.append(centroid, 1.0))[:3]
         moved = float(np.linalg.norm(d)) > 1e-9
         t_neg = np.eye(4)
         t_neg[:3, 3] = -d
@@ -764,6 +898,21 @@ def ros_mesh_dir(mesh_dir=None):
     return "/".join(parts)
 
 
+def _iter_sources(root, pkg_dir, own_pkgs, contexts):
+    """Yield the resolved source-mesh path for every convertible ``<mesh>`` under
+    the given URDF ``contexts`` (``'visual'`` / ``'collision'``) -- used to warm
+    the mesh cache (load + measure + convert) in parallel before the serial
+    passes.  External/missing refs are skipped (they have no local source)."""
+    for link in root.findall("link"):
+        for ctx in contexts:
+            for block in link.findall(ctx):
+                for mesh in block.iter("mesh"):
+                    _b, src, _e = _resolve_mesh(pkg_dir, mesh.get("filename"),
+                                                own_pkgs=own_pkgs)
+                    if src is not None:
+                        yield src
+
+
 def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
                           ctx_fmt=_CTX_FMT, ros_version=1, pkg_name=None,
                           urdf_name=None, colors=None, collision="copy",
@@ -863,69 +1012,30 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
         from .merge import merge_fixed_links
         merge_fixed_links(root)
     colors = colors or {}
+    # load each source mesh ONCE and reuse it (size measurement + visual .dae +
+    # collision .stl all share one load); disk-cache converted bytes + the size
+    # measurement so a re-export of an unchanged model touches no trimesh at all
+    cache = _MeshCache(os.path.join(pkg_dir, "meshes", ".mesh_cache"))
     # bake visual/collision origins into meshes (-> origin 0 0 0, MuJoCo-ready)
     # and re-centre fixed links on their geometry; {id(mesh_el): 4x4 transform}
     if zero_origins:
-        bake, tf_scale = _bake_origins(root, pkg_dir, own_pkgs)
+        bake, tf_scale = _bake_origins(root, pkg_dir, own_pkgs, cache)
     else:
-        bake, tf_scale = {}, _tf_marker_scale(root, pkg_dir, own_pkgs)
+        bake, tf_scale = {}, _tf_marker_scale(root, pkg_dir, own_pkgs, cache)
 
     files = []
-    # keyed by the SOURCE mesh (+fmt), so one source converted once is reused,
-    # but two DISTINCT sources that happen to share a basename get distinct output
-    # names instead of silently overwriting each other (e.g. a visual part.dae and
-    # a collision part.stl both targeting part.glb).
-    done = {}          # (abs_src, fmt, color) -> output mesh name ('part.glb')
     used_names = set()
     errors = []
-
-    def _emit(base, src, fmt, color, transform=None):
-        # key on colour + bake transform too: the same source reused by two links
-        # with a DIFFERENT colour or a DIFFERENT baked origin must emit distinct
-        # meshes
-        tkey = None if transform is None else tuple(
-            round(float(x), 7) for x in transform.flatten())
-        key = (os.path.abspath(src), fmt, color, tkey)
-        if key in done:
-            return done[key]
-        name, i = f"{base}.{fmt}", 1
-        while name in used_names:              # distinct source, same basename
-            i += 1
-            name = f"{base}_{i}.{fmt}"
-        try:
-            if src.lower().endswith(f".{fmt}") and not color and transform is None:
-                # already the target format, no colour override, no bake: copy
-                # the mesh verbatim (a URDF re-export shipping its own .dae/.stl)
-                # -- avoids a lossy + sometimes-failing trimesh round-trip
-                with open(src, "rb") as f:
-                    data = f.read()
-                if fmt == "dae":             # ship the .dae's sidecar textures too
-                    dae_dir = os.path.dirname(src)
-                    for rel in _dae_sidecar_images(src):
-                        img = os.path.normpath(os.path.join(dae_dir, rel))
-                        arc = f"{pkg}/{mesh_rel}/{rel}"
-                        if os.path.exists(img) and arc not in used_names:
-                            with open(img, "rb") as f:
-                                files.append((arc, f.read()))
-                            used_names.add(arc)
-            else:
-                data = _CONVERT[fmt](src, color=color, transform=transform)
-        except Exception as e:
-            errors.append(f"{base}: {fmt} convert failed ({e!r})")
-            return None
-        used_names.add(name)
-        files.append((f"{pkg}/{mesh_rel}/{name}", data))
-        done[key] = name
-        return name
+    # CoACD parts: keyed by source + quality so a source shared by several links
+    # decomposes once (CoACD itself is also disk-cached under .coacd_cache)
+    coacd_done = {}
 
     def _emit_coacd(base, src):
         # CoACD-decompose a source mesh into convex collision part STLs; returns
         # the list of emitted mesh names (one per convex part), or None on error.
-        # Keyed (in `done`) by source + quality so a mesh shared by several links
-        # decomposes once.
-        key = (os.path.abspath(src), "coacd", collision_quality)
-        if key in done:
-            return done[key]
+        key = (os.path.abspath(src), collision_quality)
+        if key in coacd_done:
+            return coacd_done[key]
         try:
             blobs = _coacd_part_stls(src, collision_quality, coacd_cache_dir)
         except Exception as e:
@@ -940,7 +1050,7 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
             used_names.add(name)
             files.append((f"{pkg}/{mesh_rel}/{name}", data))
             names.append(name)
-        done[key] = names
+        coacd_done[key] = names
         return names
 
     def _expand_collision_coacd(link):
@@ -974,6 +1084,31 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
                     "filename", f"package://{pkg}/{mesh_rel}/{name}")
                 link.insert(idx + k, nb)
 
+    if collision == "coacd":
+        # CoACD is the heaviest per-mesh op; warm its disk cache for every unique
+        # collision source IN PARALLEL (CoACD releases the GIL) so the serial
+        # expansion below is all cache hits
+        def _warm_coacd(src):
+            try:
+                _coacd_part_stls(src, collision_quality, coacd_cache_dir)
+            except Exception:
+                pass                        # the real error resurfaces in _emit_coacd
+        _parallel(_warm_coacd,
+                  set(_iter_sources(root, pkg_dir, own_pkgs, ("collision",))))
+
+    def _verbatim(job):
+        # already the target format, no colour override, no bake: the source is
+        # shipped byte-for-byte (no trimesh round-trip), so it needs no load
+        return (job["src"].lower().endswith(f".{job['fmt']}")
+                and not job["color"] and job["transform"] is None)
+
+    # ---- phase 1: plan conversions, allocating names in tree order -----------
+    # one job per unique (src, fmt, colour, bake) key; mesh elements sharing a key
+    # share its single conversion + output name (so a source reused by N links is
+    # loaded + converted once).  Names are allocated here in deterministic tree
+    # order; phase 2 then produces each job's bytes exactly once.
+    jobs = {}                              # key -> job dict
+    job_order = []                         # keys, first-seen order (file order)
     for link in root.findall("link"):
         # colour overrides are keyed by LINK name in URDF-input mode and by the
         # component/mesh basename in the CAD path -- accept either
@@ -992,11 +1127,55 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
                     if src is None:
                         errors.append(f"no source mesh for '{base}'")
                         continue
-                    name = _emit(base, src, fmt, link_color or colors.get(base),
-                                 transform=bake.get(id(mesh)))
-                    if name is not None:
-                        mesh.set("filename",
-                                 f"package://{pkg}/{mesh_rel}/{name}")
+                    color = link_color or colors.get(base)
+                    transform = bake.get(id(mesh))
+                    tkey = None if transform is None else tuple(
+                        round(float(x), 7) for x in transform.flatten())
+                    key = (os.path.abspath(src), fmt, color, tkey)
+                    job = jobs.get(key)
+                    if job is None:
+                        name, i = f"{base}.{fmt}", 1
+                        while name in used_names:   # distinct source, same basename
+                            i += 1
+                            name = f"{base}_{i}.{fmt}"
+                        used_names.add(name)
+                        job = jobs[key] = {"base": base, "src": src, "fmt": fmt,
+                                           "color": color, "transform": transform,
+                                           "name": name}
+                        job_order.append(key)
+                    mesh.set("filename",
+                             f"package://{pkg}/{mesh_rel}/{job['name']}")
+
+    if errors:
+        raise RuntimeError("ROS description export failed: " + "; ".join(errors))
+
+    # ---- phase 2: produce the mesh bytes (serial; the cache makes it cheap) ---
+    # each unique job converts once; the disk cache makes a re-export near-instant
+    # and the in-memory load-once means visual + collision share a single load
+    for key in job_order:
+        job = jobs[key]
+        src, fmt, color, transform = (job["src"], job["fmt"], job["color"],
+                                      job["transform"])
+        try:
+            if _verbatim(job):
+                # ship the mesh verbatim + any sidecar textures a .dae references
+                with open(src, "rb") as f:
+                    data = f.read()
+                if fmt == "dae":
+                    dae_dir = os.path.dirname(src)
+                    for rel in _dae_sidecar_images(src):
+                        img = os.path.normpath(os.path.join(dae_dir, rel))
+                        arc = f"{pkg}/{mesh_rel}/{rel}"
+                        if os.path.exists(img) and arc not in used_names:
+                            with open(img, "rb") as fh:
+                                files.append((arc, fh.read()))
+                            used_names.add(arc)
+            else:
+                data = cache.convert(src, fmt, color, transform)
+        except Exception as e:
+            errors.append(f"{job['base']}: {fmt} convert failed ({e!r})")
+            continue
+        files.append((f"{pkg}/{mesh_rel}/{job['name']}", data))
 
     if errors:
         raise RuntimeError("ROS description export failed: " + "; ".join(errors))
