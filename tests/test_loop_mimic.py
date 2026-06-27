@@ -338,3 +338,87 @@ def test_four_bar_driver_carries_no_mimic_and_loop_is_open():
     rev = [j for j in model.joints if j.jtype == "revolute"]
     driver = next(j for j in rev if not j.mimic)
     assert driver.mimic is None
+
+
+# --- flipping a joint's axis must keep the mimic coupling consistent ---------
+_MIMIC_URDF = '''<?xml version="1.0"?>
+<robot name="fb">
+  <link name="base_link"/>
+  <link name="L1"/><link name="L2"/><link name="L3"/>
+  <joint name="drv" type="revolute">
+    <parent link="base_link"/><child link="L1"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-0.3" upper="0.45" effort="0" velocity="0"/>
+  </joint>
+  <joint name="f1" type="revolute">
+    <parent link="L1"/><child link="L2"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-0.85" upper="0.88" effort="0" velocity="0"/>
+    <mimic joint="drv" multiplier="1.35269" offset="0.1"/>
+  </joint>
+  <joint name="f2" type="revolute">
+    <parent link="L1"/><child link="L3"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-0.3" upper="0.45" effort="0" velocity="0"/>
+    <mimic joint="drv" multiplier="0.581031" offset="0"/>
+  </joint>
+</robot>
+'''
+
+
+def _mults(txt):
+    import re
+    return {m.group(1): float(m.group(2)) for m in re.finditer(
+        r'<joint name="(f\d)".*?multiplier="([^"]*)".*?offset="([^"]*)"',
+        txt, re.DOTALL)}
+
+
+def _offsets(txt):
+    import re
+    return {m.group(1): float(m.group(2)) for m in re.finditer(
+        r'<joint name="(f\d)".*?offset="([^"]*)"', txt, re.DOTALL)}
+
+
+def _write(tmp_path):
+    (tmp_path / "urdf").mkdir(exist_ok=True)
+    (tmp_path / "urdf" / "fb.urdf").write_text(_MIMIC_URDF, encoding="utf-8")
+    return str(tmp_path)
+
+
+def test_flip_driver_negates_follower_multipliers(tmp_path):
+    """Flipping the DRIVER (master) joint must negate every follower's mimic
+    multiplier (offset unchanged), or the coupled links move the wrong way."""
+    from sw2robot.editor.webserver import _flip_axis_in_urdf
+    pkg = _write(tmp_path)
+    n = _flip_axis_in_urdf(pkg, "urdf/fb.urdf", "drv")
+    assert n == 1
+    txt = (tmp_path / "urdf" / "fb.urdf").read_text(encoding="utf-8")
+    # driver axis negated, limits swapped+negated
+    import re
+    drv = re.search(r'<joint name="drv".*?</joint>', txt, re.DOTALL).group(0)
+    assert 'xyz="0 0 -1"' in drv
+    assert 'lower="-0.45"' in drv and 'upper="0.3"' in drv
+    # followers: multiplier negated, offset kept
+    assert _mults(txt) == {"f1": -1.35269, "f2": -0.581031}
+    assert _offsets(txt) == {"f1": 0.1, "f2": 0.0}
+
+
+def test_flip_driver_is_self_inverse(tmp_path):
+    from sw2robot.editor.webserver import _flip_axis_in_urdf
+    pkg = _write(tmp_path)
+    _flip_axis_in_urdf(pkg, "urdf/fb.urdf", "drv")
+    _flip_axis_in_urdf(pkg, "urdf/fb.urdf", "drv")
+    after = (tmp_path / "urdf" / "fb.urdf").read_text(encoding="utf-8")
+    assert _mults(after) == {"f1": 1.35269, "f2": 0.581031}
+    assert _offsets(after) == {"f1": 0.1, "f2": 0.0}
+
+
+def test_flip_follower_negates_its_own_mimic(tmp_path):
+    """Flipping a FOLLOWER negates its OWN multiplier AND offset (its axis
+    reversed); the driver and the other follower are untouched."""
+    from sw2robot.editor.webserver import _flip_axis_in_urdf
+    pkg = _write(tmp_path)
+    _flip_axis_in_urdf(pkg, "urdf/fb.urdf", "f1")
+    txt = (tmp_path / "urdf" / "fb.urdf").read_text(encoding="utf-8")
+    assert _mults(txt) == {"f1": -1.35269, "f2": 0.581031}   # f2 untouched
+    assert _offsets(txt) == {"f1": -0.1, "f2": 0.0}          # f1 offset negated
