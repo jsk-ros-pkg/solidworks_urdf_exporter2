@@ -43,6 +43,10 @@ from .urdf_writer import (
     RVIZ_CONFIG_ROS2,
 )
 
+# fallback <material> colour for an STL <visual> with no per-link override (STL
+# carries no colour, so without this RViz would show the link in its default grey)
+_DEFAULT_VISUAL_RGBA = (191, 191, 191, 255)   # neutral light grey (~0.75)
+
 
 def _loop_closures_yaml(closures):
     """Serialise the loop-closure config (closures + driven/solved joint split)
@@ -732,6 +736,12 @@ def _collada_meshes(mesh):
     return out
 
 
+def _rgba_attr(rgba):
+    """uint8 ``[r,g,b,a]`` -> a URDF ``<color rgba>`` string of 0..1 floats."""
+    vals = [max(0.0, min(1.0, float(c) / 255.0)) for c in rgba]
+    return " ".join(f"{v:.4g}" for v in vals)
+
+
 def _dae_sidecar_images(dae_path):
     """Relative sidecar image paths a COLLADA ``.dae`` references via
     ``<init_from>`` (textures), so a verbatim copy can ship them too.  Best
@@ -1145,6 +1155,18 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
                         job_order.append(key)
                     mesh.set("filename",
                              f"package://{pkg}/{mesh_rel}/{job['name']}")
+                    # STL carries no colour, so a <visual> STL would render grey
+                    # in RViz.  Emit a URDF <material> instead: the per-link colour
+                    # override if set, else a default colour.  dae/glb keep their
+                    # colour in the mesh and get no <material>.
+                    if ctx == "visual" and fmt == "stl" \
+                            and block.find("material") is None:
+                        rgba = _hex_to_rgba(color)
+                        if rgba is None:
+                            rgba = _DEFAULT_VISUAL_RGBA
+                        mat = ET.SubElement(block, "material")
+                        mat.set("name", f"{base}_material")
+                        ET.SubElement(mat, "color").set("rgba", _rgba_attr(rgba))
 
     if errors:
         raise RuntimeError("ROS description export failed: " + "; ".join(errors))

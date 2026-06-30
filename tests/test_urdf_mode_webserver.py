@@ -413,7 +413,10 @@ def test_reexport_glb_distinct_meshes_same_basename(tmp_path):
         '</link></robot>', encoding="utf-8")
     base, httpd = _start(pkg)
     try:
-        code, data = _get_status(base, "/api/export/zip?ros=1&meshes=glb")
+        # uniform glb (visual + collision) -- collision format now defaults to
+        # stl, so request glb collision explicitly to keep both meshes glb
+        code, data = _get_status(base,
+                                 "/api/export/zip?ros=1&meshes=glb&colfmt=glb")
         assert code == 200, data[:300]
         zf = zipfile.ZipFile(io.BytesIO(data))
         glbs = [n for n in zf.namelist() if n.endswith(".glb")]
@@ -830,6 +833,33 @@ def test_export_zip_bakes_colour_and_restores_pristine(server):
     # legitimately contains the word "material", so match the element, not it.)
     disk = Path(webserver._um["state"].urdf_path).read_text(encoding="utf-8")
     assert "<material" not in disk
+
+
+def test_export_zip_rejects_bad_formats(server):
+    """Invalid visual/collision mesh formats return a clean 400 (not a 500) -- the
+    error message names the offending value."""
+    code, data = _get_status(server, "/api/export/zip?ros=1&meshes=foo")
+    assert code == 400 and b"foo" in data
+    code, data = _get_status(server, "/api/export/zip?ros=1&colfmt=bar")
+    assert code == 400 and b"bar" in data
+
+
+def test_export_zip_stl_visual_emits_material(server):
+    """An STL visual export (via the server) ships .stl visual meshes and carries
+    the per-link colour as a URDF <material> (STL has no colour of its own)."""
+    import io
+    import zipfile
+
+    _post(server, "/api/set_color", {"link": TIP_LINK, "color": "#ff0000"})
+    code, data = _get_status(server,
+                             "/api/export/zip?ros=1&meshes=stl&colfmt=stl")
+    assert code == 200, data[:200]
+    zf = zipfile.ZipFile(io.BytesIO(data))
+    names = zf.namelist()
+    assert any("/meshes/" in n and n.endswith(".stl") for n in names)
+    assert not any(n.endswith((".dae", ".glb")) for n in names)
+    exported = zf.read(next(n for n in names if n.endswith(".urdf"))).decode()
+    assert "<material" in exported and 'rgba="1 0 0 1"' in exported
 
 
 def test_export_materializes_overlay_then_restores(server):
