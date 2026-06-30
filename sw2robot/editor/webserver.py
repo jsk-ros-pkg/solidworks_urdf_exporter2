@@ -2193,7 +2193,13 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                     if not merged:
                         return txt
                     from sw2robot.exporter.merge import merge_fixed_links_text
-                    return merge_fixed_links_text(txt)
+                    from sw2robot.exporter.ros_export import _read_mass_only
+                    # fold the mass-only links too, so the "merge fixed" preview
+                    # matches what the export produces (build_ros_description folds
+                    # them via the same sidecar).  In URDF mode there is no sidecar
+                    # -> empty set -> a no-op (build_urdf already folded them above).
+                    return merge_fixed_links_text(
+                        txt, force_merge=_read_mass_only(cls.pkg_dir))
                 # URDF-input mode: the URDF URL is the overlay-applied URDF,
                 # computed on the fly so the on-disk file stays the pristine base
                 # (decode first -- urdf_rel is decoded, but the URL may carry %20)

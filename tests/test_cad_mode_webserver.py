@@ -177,6 +177,26 @@ def test_mass_only_keeps_stripped_link_in_working_urdf(server):
     assert screw.find("visual") is not None
 
 
+def test_mass_only_folds_in_merged_view_matching_export(server):
+    """CAD mode: the plain editor view keeps the mass-only link (selectable), but
+    the "merge fixed" preview (?merged=1) folds it into its fixed parent -- so the
+    preview matches what the ROS export produces instead of leaving a stray
+    geometry-less link behind."""
+    base, pkg = server
+    code, _ = _post(base, "/api/set_types",
+                    {"changes": [{"child": SCREW_LINK, "type": "mass_only"}]})
+    assert code == 200
+    # plain view: link + its fixed joint kept (so the joint row stays)
+    plain = _served_urdf(base)
+    assert SCREW_LINK in {l.get("name") for l in plain.findall("link")}
+    assert FIXED_JOINT in {j.get("name") for j in plain.findall("joint")}
+    # merged view: the mass-only link folds away (weight lumped into the parent)
+    merged = ET.fromstring(_get(base, _get_json(base, "/api/info")["urdf"]
+                                + "?merged=1"))
+    assert SCREW_LINK not in {l.get("name") for l in merged.findall("link")}
+    assert FIXED_JOINT not in {j.get("name") for j in merged.findall("joint")}
+
+
 def test_set_mimic_reflected_without_rebuild(server):
     base, pkg = server
     # make the fixed joint movable first (set_types still uses build() in CAD --
