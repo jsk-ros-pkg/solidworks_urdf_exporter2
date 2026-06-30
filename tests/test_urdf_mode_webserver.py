@@ -866,7 +866,7 @@ def test_coacd_preview_endpoints(server, monkeypatch):
 
     def fake_preview(pkg_dir, robot_name, quality="balanced", progress=None,
                      urdf_path=None, should_cancel=None, on_start=None,
-                     max_workers=None):
+                     max_workers=None, mode="coacd"):
         pdir = os.path.join(pkg_dir, "meshes", ".coacd_cache", "preview")
         os.makedirs(pdir, exist_ok=True)
         out = {}
@@ -879,18 +879,18 @@ def test_coacd_preview_endpoints(server, monkeypatch):
                 progress(i, len(links), link, rel)
         return out
 
-    monkeypatch.setattr(ros_export, "coacd_preview_glbs", fake_preview)
+    monkeypatch.setattr(ros_export, "collision_preview_glbs", fake_preview)
 
     # bad quality -> 400, no job started
-    code, _ = _get_status(server, "/api/collision/coacd/init?quality=ultra")
+    code, _ = _get_status(server, "/api/collision/preview/init?quality=ultra")
     assert code == 400
 
-    r = _get_json(server, "/api/collision/coacd/init?quality=balanced")
+    r = _get_json(server, "/api/collision/preview/init?quality=balanced")
     assert r.get("running") is True and r.get("quality") == "balanced"
 
     deadline, s = time.time() + 10, {}
     while time.time() < deadline:
-        s = _get_json(server, "/api/collision/coacd/status")
+        s = _get_json(server, "/api/collision/preview/status")
         if not s.get("running"):
             break
         time.sleep(0.05)
@@ -905,6 +905,49 @@ def test_coacd_preview_endpoints(server, monkeypatch):
     assert code == 200 and body.startswith(b"glTF-fake-")
 
 
+def test_collision_preview_hull_mode(server, monkeypatch):
+    """/init?mode=hull starts the same observable job but threads mode='hull'
+    through to the preview generator (no quality needed); a bad mode is 400."""
+    import os
+    import time
+
+    from sw2robot.exporter import ros_export
+
+    seen = {}
+
+    def fake_preview(pkg_dir, robot_name, quality="balanced", progress=None,
+                     urdf_path=None, should_cancel=None, on_start=None,
+                     max_workers=None, mode="coacd"):
+        seen["mode"] = mode
+        pdir = os.path.join(pkg_dir, "meshes", ".coacd_cache", "preview")
+        os.makedirs(pdir, exist_ok=True)
+        link = TIP_LINK
+        with open(os.path.join(pdir, link + ".glb"), "wb") as f:
+            f.write(b"glTF-fake-" + link.encode())
+        if progress:
+            progress(1, 1, link, f"meshes/.coacd_cache/preview/{link}.glb")
+        return {link: f"meshes/.coacd_cache/preview/{link}.glb"}
+
+    monkeypatch.setattr(ros_export, "collision_preview_glbs", fake_preview)
+
+    # bad mode -> 400, no job started
+    code, _ = _get_status(server, "/api/collision/preview/init?mode=bogus")
+    assert code == 400
+
+    r = _get_json(server, "/api/collision/preview/init?mode=hull")
+    assert r.get("running") is True and r.get("mode") == "hull"
+
+    deadline, s = time.time() + 10, {}
+    while time.time() < deadline:
+        s = _get_json(server, "/api/collision/preview/status")
+        if not s.get("running"):
+            break
+        time.sleep(0.05)
+    assert s.get("running") is False and s.get("error") is None
+    assert s.get("mode") == "hull"           # echoed in the job status
+    assert seen.get("mode") == "hull"        # and threaded to the generator
+
+
 def test_coacd_cancel_stops_at_link_boundary(server, monkeypatch):
     """/cancel stops the job at the next link boundary, leaving it not-running,
     flagged cancelled, with fewer than all links done."""
@@ -917,7 +960,7 @@ def test_coacd_cancel_stops_at_link_boundary(server, monkeypatch):
 
     def slow_preview(pkg_dir, robot_name, quality="balanced", progress=None,
                      urdf_path=None, should_cancel=None, on_start=None,
-                     max_workers=None):
+                     max_workers=None, mode="coacd"):
         pdir = os.path.join(pkg_dir, "meshes", ".coacd_cache", "preview")
         os.makedirs(pdir, exist_ok=True)
         out = {}
@@ -936,16 +979,16 @@ def test_coacd_cancel_stops_at_link_boundary(server, monkeypatch):
                 progress(i + 1, total, link, rel)
         return out
 
-    monkeypatch.setattr(ros_export, "coacd_preview_glbs", slow_preview)
+    monkeypatch.setattr(ros_export, "collision_preview_glbs", slow_preview)
 
     assert _get_json(
-        server, "/api/collision/coacd/init?quality=balanced")["running"] is True
+        server, "/api/collision/preview/init?quality=balanced")["running"] is True
     time.sleep(0.4)                          # let a couple links finish
-    assert _get_json(server, "/api/collision/coacd/cancel")["cancelling"] is True
+    assert _get_json(server, "/api/collision/preview/cancel")["cancelling"] is True
 
     deadline, s = time.time() + 10, {}
     while time.time() < deadline:
-        s = _get_json(server, "/api/collision/coacd/status")
+        s = _get_json(server, "/api/collision/preview/status")
         if not s.get("running"):
             break
         time.sleep(0.05)

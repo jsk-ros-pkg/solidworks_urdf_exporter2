@@ -697,22 +697,28 @@ mesh layout differs, e.g. 'urdf/mesh'. A '/' makes subdirectories."
                       font-size:11px" placeholder="meshes">
       </div>
       <div style="display:flex;gap:6px;align-items:center;margin-bottom:4px;flex-wrap:wrap">
-        <label style="display:flex;gap:4px;align-items:center;color:#8a93a3;cursor:pointer"
-               data-i18n-title="t.coacd"
-               title="Replace <collision> meshes with CoACD convex parts (what physics
-engines want). Slower: tens of seconds per link, but cached after the first run.
-Applies to the ROS1/ROS2 packages (not glb); needs the 'coacd' package server-side.">
-          <input id="coacd" type="checkbox">
-          <span data-i18n="ui.coacd">CoACD collision</span>
+        <label style="display:flex;gap:4px;align-items:center;color:#8a93a3"
+               data-i18n-title="t.collmode"
+               title="How <collision> geometry is produced for the ROS1/ROS2 packages:
+'visual mesh' reuses the visual mesh; 'convex hull' uses one convex hull per
+link; 'CoACD' decomposes each link into many convex parts.">
+          <span data-i18n="ui.collmode">collision</span>
+          <select id="collmode"
+                  style="background:#15171a;color:#cfe3ff;border:1px solid #2d4a35;
+                         border-radius:3px;padding:2px 4px;font-size:11px">
+            <option value="copy" data-i18n="ui.collcopy">Visual mesh</option>
+            <option value="hull" data-i18n="ui.collhull">Convex hull</option>
+            <option value="coacd" data-i18n="ui.collcoacd">CoACD (convex parts)</option>
+          </select>
         </label>
         <select id="cquality"
                 style="background:#15171a;color:#cfe3ff;border:1px solid #2d4a35;
                        border-radius:3px;padding:2px 4px;font-size:11px">
-          <option value="balanced" data-i18n="ui.cqbalanced">balanced</option>
-          <option value="fine" data-i18n="ui.cqfine">fine</option>
+          <option value="balanced" data-i18n="ui.cqbalanced">Balanced</option>
+          <option value="fine" data-i18n="ui.cqfine">Fine</option>
         </select>
       </div>
-      <div style="display:flex;gap:6px;align-items:center;margin-bottom:4px;flex-wrap:wrap">
+      <div id="collgenrow" style="display:flex;gap:6px;align-items:center;margin-bottom:4px;flex-wrap:wrap">
         <button id="coacdgen" data-i18n="ui.coacdgen" data-i18n-title="t.coacdgen"
                 title="Run CoACD now and preview each link's convex collision parts
 in the viewer as they finish. Caches the result, so a later CoACD export is instant.">
@@ -1373,11 +1379,16 @@ the config and does NOT re-detect). Needs graph.json (CAD mode).">🔗 re-detect
     'ui.expros2': { en: '⬇ ROS2 package', ja: '⬇ ROS2 パッケージ' },
     't.expglb': { en: 'uniform .glb meshes (colour kept) for three.js / skrobot / native-mesh consumers (not RViz-loadable)',
                   ja: '均一な .glb メッシュ（色は保持）three.js / skrobot / ネイティブメッシュ向け（RVizでは読込不可）' },
+    'ui.collmode': { en: 'collision', ja: '衝突形状' },
+    't.collmode': { en: "How <collision> geometry is produced for the ROS1/ROS2 packages: 'visual mesh' reuses the visual mesh as-is; 'convex hull' uses a single convex hull per link (simple, good for path planning); 'CoACD' decomposes each link into many convex parts (best for physics, slower — server needs the coacd package). Generate previews the hull/CoACD result in the viewer.",
+                    ja: 'ROS1/ROS2 パッケージの <collision> ジオメトリの生成方法: 「ビジュアルメッシュ」はメッシュをそのまま使用、「凸包」はリンクごとに単一の凸包（シンプル、経路計画向け）、「CoACD」は各リンクを多数の凸パーツに分解（物理向け・低速、サーバーに coacd パッケージが必要）。「生成」でビューアにプレビューします。' },
+    'ui.collcopy': { en: 'Visual mesh', ja: 'ビジュアルメッシュ' },
+    'ui.collhull': { en: 'Convex hull', ja: '凸包' },
+    'ui.collcoacd': { en: 'CoACD (convex parts)', ja: 'CoACD（凸パーツ）' },
+    'coll.hullword': { en: 'convex-hull', ja: '凸包' },
     'ui.coacd': { en: 'CoACD collision', ja: 'CoACD 衝突形状' },
-    't.coacd': { en: 'Replace <collision> meshes with CoACD convex parts (what physics engines want). Slower: tens of seconds per link, but cached after the first run. Applies to the ROS1/ROS2 packages (not glb); needs the coacd package server-side.',
-                 ja: '<collision> メッシュを CoACD の凸パーツ群に置き換えます（物理エンジン向け）。1リンクあたり数十秒と遅いですが、初回以降はキャッシュされます。ROS1/ROS2 パッケージのみ（glb は対象外）。サーバー側に coacd パッケージが必要です。' },
-    'ui.cqbalanced': { en: 'balanced', ja: 'バランス' },
-    'ui.cqfine': { en: 'fine', ja: '高精細' },
+    'ui.cqbalanced': { en: 'Balanced', ja: 'バランス' },
+    'ui.cqfine': { en: 'Fine', ja: '高精細' },
     'ui.coacdgen': { en: '⚙ Generate collision', ja: '⚙ 衝突形状を生成' },
     't.coacdgen': { en: "Run CoACD now and preview each link's convex collision parts in the viewer as they finish. Caches the result, so a later CoACD export is instant.",
                     ja: 'いま CoACD を実行し、各リンクの凸collisionパーツを完成した順にビューアでプレビューします。結果はキャッシュされ、後の CoACD エクスポートは瞬時です。' },
@@ -1398,18 +1409,18 @@ the config and does NOT re-detect). Needs graph.json (CAD mode).">🔗 re-detect
     't.coacdshow': { en: 'Overlay the generated convex collision parts (semi-transparent, colour-coded) on top of the visual meshes.',
                      ja: '生成した凸collisionパーツ（半透明・色分け）を visual メッシュの上に重ねて表示します。' },
     'coacd.start': { en: 'starting …', ja: '開始中 …' },
-    'coacd.started': { en: a => `CoACD collision generation started (${a.q})`,
-                       ja: a => `CoACD 衝突形状の生成を開始しました（${a.q}）` },
-    'coacd.prog': { en: a => `CoACD: ${a.done}/${a.total} links${a.link ? ' · ' + a.link : ''} …`,
-                    ja: a => `CoACD: ${a.done}/${a.total} リンク${a.link ? ' · ' + a.link : ''} …` },
-    'coacd.working': { en: a => `CoACD ${a.done}/${a.total} · decomposing ${a.link} … (tens of seconds)`,
-                       ja: a => `CoACD ${a.done}/${a.total} · ${a.link} を分解中 …（数十秒）` },
-    'coacd.link': { en: a => `CoACD ${a.done}/${a.total} · ${a.link} ✓`,
-                    ja: a => `CoACD ${a.done}/${a.total} · ${a.link} ✓` },
+    'coacd.started': { en: a => `${a.what || 'CoACD'} collision generation started${a.q ? ' (' + a.q + ')' : ''}`,
+                       ja: a => `${a.what || 'CoACD'} 衝突形状の生成を開始しました${a.q ? '（' + a.q + '）' : ''}` },
+    'coacd.prog': { en: a => `${a.what || 'CoACD'}: ${a.done}/${a.total} links${a.link ? ' · ' + a.link : ''} …`,
+                    ja: a => `${a.what || 'CoACD'}: ${a.done}/${a.total} リンク${a.link ? ' · ' + a.link : ''} …` },
+    'coacd.working': { en: a => `${a.what || 'CoACD'} ${a.done}/${a.total} · decomposing ${a.link} … (tens of seconds)`,
+                       ja: a => `${a.what || 'CoACD'} ${a.done}/${a.total} · ${a.link} を分解中 …（数十秒）` },
+    'coacd.link': { en: a => `${a.what || 'CoACD'} ${a.done}/${a.total} · ${a.link} ✓`,
+                    ja: a => `${a.what || 'CoACD'} ${a.done}/${a.total} · ${a.link} ✓` },
     'coacd.done': { en: a => `✓ collision ready (${a.n} links)`,
                     ja: a => `✓ 衝突形状ができました（${a.n} リンク）` },
-    'coacd.applied': { en: '↪ using CoACD parts for live collision + URDF/ROS export',
-                       ja: '↪ ライブ衝突判定とURDF/ROSエクスポートにCoACDパーツを使用します' },
+    'coacd.applied': { en: a => `↪ using ${a.what || 'CoACD'} parts for live collision + URDF/ROS export`,
+                       ja: a => `↪ ライブ衝突判定とURDF/ROSエクスポートに ${a.what || 'CoACD'} パーツを使用します` },
     'ui.coacdstop': { en: '■ stop', ja: '■ 停止' },
     'coacd.stopping': { en: 'stopping after the current link …',
                         ja: '現在のリンクを終えたら停止します …' },
@@ -3106,7 +3117,7 @@ function applyCollision(links, pairs) {
     if (!collisionLinks.has(n)) { _tintLink(n, 'col'); }
   }
   collisionLinks = links;
-  coacdRevealColliding(links);   // show colliding links' collision mesh even
+  collPreviewRevealColliding(links);   // show colliding links' collision mesh even
                                  // when the CoACD overlay is globally hidden
   if (pairs.length) {
     // "this angle collides": name the joint being moved + its angle
@@ -4299,77 +4310,101 @@ expmeshdir?.addEventListener('input', () => {
 // few seconds, during which a plain <a download> gives NO feedback.  Drive it
 // over fetch instead: show an "exporting ..." loadbar, then hand the finished
 // blob to a throwaway download link.
-// CoACD convex-decomposition of <collision> meshes: opt-in, ROS packages only
-// (the glb export keeps its uniform-mesh layout).
-const coacdBox = document.getElementById('coacd');
+// Collision geometry for the ROS packages: 'copy' (visual mesh), 'hull'  or '
+// coacd' (convex decomposition into many parts).
+const collModeSel = document.getElementById('collmode');
+const collGenRow = document.getElementById('collgenrow');
 const cqualitySel = document.getElementById('cquality');
 const mergeFixedBox = document.getElementById('mergefixed');
+
+// quality only applies to CoACD; the Generate/preview row only to hull+coacd
+function updateCollUI() {
+  const mode = collModeSel?.value || 'copy';
+  if (cqualitySel) { cqualitySel.style.display = mode === 'coacd' ? '' : 'none'; }
+  if (collGenRow) { collGenRow.style.display = mode === 'copy' ? 'none' : 'flex'; }
+}
+collModeSel?.addEventListener('change', () => {
+  updateCollUI();
+  // a generate job still in flight belongs to the PREVIOUS mode -- abandon it,
+  // else its completion would finalize against the old mode and silently revert
+  // this deliberate switch (re-applying the old parts to live + export).
+  if (collPreviewPoll) { collPreviewAbort(); }
+  // any generated preview belongs to the PREVIOUS mode, so switching type drops
+  // it: nothing is shown until a preview is made for the newly-selected type
+  // (copy has none; hull/coacd must be (re)generated).
+  collPreviewClearOverlay();
+  collPreviewFinalized = false;
+  setCollisionShown(false);
+});
+updateCollUI();
 
 // ---- CoACD collision preview: generate per-link convex parts in the
 // background, popping each link's mesh into the viewer as it lands, and a toggle
 // to overlay them (semi-transparent) on the visual meshes.
-const coacdGenBtn = document.getElementById('coacdgen');
-const coacdShow = document.getElementById('coacdshow');
-const coacdProg = document.getElementById('coacdprog');
-const coacdStat = document.getElementById('coacdstat');       // top banner
-const coacdStatText = document.getElementById('coacdstattext');
-const coacdStopBtn = document.getElementById('coacdstop');
-const coacdBar = document.getElementById('coacdbar');         // determinate fill
+const collPreviewGenBtn = document.getElementById('coacdgen');
+const collPreviewShow = document.getElementById('coacdshow');
+const collPreviewProg = document.getElementById('coacdprog');
+const collPreviewStat = document.getElementById('coacdstat');       // top banner
+const collPreviewStatText = document.getElementById('coacdstattext');
+const collPreviewStopBtn = document.getElementById('coacdstop');
+const collPreviewBar = document.getElementById('coacdbar');         // determinate fill
 
 // blink the links currently being decomposed (several run in parallel), so it
 // is obvious which parts are still computing -- toggle their hover tint on one
 // shared timer
-let coacdBlinkSet = new Set(), coacdBlinkTimer = null, coacdBlinkOn = false;
-function coacdSetBlink(links) {
+let collPreviewBlinkSet = new Set(), collPreviewBlinkTimer = null, collPreviewBlinkOn = false;
+function collPreviewSetBlink(links) {
   const next = new Set(links || []);
-  for (const l of coacdBlinkSet) {            // restore links no longer running
+  for (const l of collPreviewBlinkSet) {            // restore links no longer running
     if (!next.has(l)) { try { highlightLink(l, false); } catch (_e) { /* gone */ } }
   }
-  coacdBlinkSet = next;
+  collPreviewBlinkSet = next;
   if (next.size === 0) {
-    if (coacdBlinkTimer) { clearInterval(coacdBlinkTimer); coacdBlinkTimer = null; }
-    coacdBlinkOn = false;
+    if (collPreviewBlinkTimer) { clearInterval(collPreviewBlinkTimer); collPreviewBlinkTimer = null; }
+    collPreviewBlinkOn = false;
     return;
   }
-  if (!coacdBlinkTimer) {
-    coacdBlinkTimer = setInterval(() => {
-      coacdBlinkOn = !coacdBlinkOn;
-      for (const l of coacdBlinkSet) {
+  if (!collPreviewBlinkTimer) {
+    collPreviewBlinkTimer = setInterval(() => {
+      collPreviewBlinkOn = !collPreviewBlinkOn;
+      for (const l of collPreviewBlinkSet) {
         if (viewer.robot?.links?.[l]) {
-          try { highlightLink(l, coacdBlinkOn); } catch (_e) { /* gone */ }
+          try { highlightLink(l, collPreviewBlinkOn); } catch (_e) { /* gone */ }
         }
       }
     }, 500);
   }
 }
-const coacdGroups = {};        // link name -> THREE.Object3D attached to the link
-let coacdPoll = null;
-let coacdFinalized = false;    // ran the post-generation hookup (export + collision)
-let coacdLastCurrent = null;   // last link the server reported as in-progress
-const coacdLogged = new Set(); // links already logged as ready (avoid repeats)
+const collPreviewGroups = {};        // link name -> THREE.Object3D attached to the link
+let collPreviewPoll = null;
+let collPreviewFinalized = false;    // ran the post-generation hookup (export + collision)
+let collPreviewLastCurrent = null;   // last link the server reported as in-progress
+const collPreviewLogged = new Set(); // links already logged as ready (avoid repeats)
 
-function coacdClearOverlay() {
-  for (const [link, grp] of Object.entries(coacdGroups)) {
+function collPreviewClearOverlay() {
+  for (const [link, grp] of Object.entries(collPreviewGroups)) {
     grp.parent?.remove(grp);
     grp.traverse(o => { o.geometry?.dispose?.(); o.material?.dispose?.(); });
-    delete coacdGroups[link];
+    delete collPreviewGroups[link];
   }
 }
-function coacdSetShown(on) {
-  for (const grp of Object.values(coacdGroups)) { grp.visible = on; }
+function collPreviewSetShown(on) {
+  for (const grp of Object.values(collPreviewGroups)) { grp.visible = on; }
+  viewer.redraw();          // on-demand renderer: toggling must trigger a frame
 }
 // When the overlay is globally HIDDEN, still reveal the collision mesh of any
 // link that is currently self-colliding -- so even with "coll" off you can see
 // WHICH part hit and where.  When the overlay is shown globally, the toggle
 // owns visibility and this is a no-op.
-function coacdRevealColliding(links) {
+function collPreviewRevealColliding(links) {
   if (!collViewBtn || collViewBtn.classList.contains('active')) { return; }
-  for (const [link, grp] of Object.entries(coacdGroups)) {
+  for (const [link, grp] of Object.entries(collPreviewGroups)) {
     grp.visible = !!(links && links.has && links.has(link));
   }
+  viewer.redraw();
 }
-function coacdLoadLink(link, url) {
-  if (coacdGroups[link]) { return; }          // already loaded this link
+function collPreviewLoadLink(link, url) {
+  if (collPreviewGroups[link]) { return; }          // already loaded this link
   const target = viewer.robot?.links?.[link];
   if (!target || !GLTFLoader) { return; }
   new GLTFLoader().load(url, g => {
@@ -4384,106 +4419,124 @@ function coacdLoadLink(link, url) {
         m.depthWrite = false; m.vertexColors = true;
       }
     });
-    grp.visible = !!coacdShow?.checked;
-    coacdGroups[link] = grp;
+    grp.visible = !!collPreviewShow?.checked;
+    collPreviewGroups[link] = grp;
     target.add(grp);
   }, null, () => { /* a link mesh failing to load is non-fatal */ });
 }
-async function coacdTick() {
+async function collPreviewTick() {
   let s;
-  try { s = await (await fetch('/api/collision/coacd/status')).json(); }
+  try { s = await (await fetch('/api/collision/preview/status')).json(); }
   catch (_e) { return; }
+  const what = s.mode === 'hull' ? t('coll.hullword') : 'CoACD';
   // pop each newly-finished link into the viewer + log it once
   for (const [link, url] of Object.entries(s.parts || {})) {
-    coacdLoadLink(link, url);
-    if (!coacdLogged.has(link)) {
-      coacdLogged.add(link);
-      log(t('coacd.link', { done: coacdLogged.size, total: s.total || 0, link }),
+    collPreviewLoadLink(link, url);
+    if (!collPreviewLogged.has(link)) {
+      collPreviewLogged.add(link);
+      log(t('coacd.link', { done: collPreviewLogged.size, total: s.total || 0, link, what }),
           'ok');
     }
   }
   const total = s.total || 0, done = s.done || 0;
   // also surface the link currently being decomposed (the slow step), so a
   // multi-minute link does not look frozen
-  if (s.running && s.current && s.current !== coacdLastCurrent
-      && !coacdLogged.has(s.current)) {
-    coacdLastCurrent = s.current;
-    log(t('coacd.working', { done, total, link: s.current }));
+  if (s.running && s.current && s.current !== collPreviewLastCurrent
+      && !collPreviewLogged.has(s.current)) {
+    collPreviewLastCurrent = s.current;
+    log(t('coacd.working', { done, total, link: s.current, what }));
   }
   // links the SERVER produced parts for (authoritative: the overlay GLBs load
-  // asynchronously, so coacdGroups may still be empty right when the job ends)
+  // asynchronously, so collPreviewGroups may still be empty right when the job ends)
   const produced = Object.keys(s.parts || {}).length;
-  if (coacdBar) {                              // determinate progress fill
-    coacdBar.style.width = total ? Math.round(done / total * 100) + '%' : '0%';
+  if (collPreviewBar) {                              // determinate progress fill
+    collPreviewBar.style.width = total ? Math.round(done / total * 100) + '%' : '0%';
   }
   // blink ALL links currently being decomposed (they run in parallel)
   const inflight = s.running ? (s.inflight || []) : [];
-  coacdSetBlink(inflight);
+  collPreviewSetBlink(inflight);
   if (s.error) {
-    coacdProg.textContent = '';
+    collPreviewProg.textContent = '';
     log(t('coacd.fail', { e: s.error }), 'err');
   } else if (s.running) {
     const label = inflight.length
       ? inflight.slice(0, 2).join(', ')
         + (inflight.length > 2 ? ` +${inflight.length - 2}` : '')
       : (s.current || '');
-    const msg = t('coacd.prog', { done, total, link: label });
-    coacdProg.textContent = msg;
-    if (coacdStatText) { coacdStatText.textContent = msg; }   // top banner
-    coacdStat?.classList.add('on');
+    const msg = t('coacd.prog', { done, total, link: label, what });
+    collPreviewProg.textContent = msg;
+    if (collPreviewStatText) { collPreviewStatText.textContent = msg; }   // top banner
+    collPreviewStat?.classList.add('on');
   } else if (s.cancelled) {
-    coacdProg.textContent = t('coacd.cancelled', { n: produced });
+    collPreviewProg.textContent = t('coacd.cancelled', { n: produced });
     log(t('coacd.cancelled', { n: produced }), 'warn');
   } else {
-    coacdProg.textContent = t('coacd.done', { n: produced });
+    collPreviewProg.textContent = t('coacd.done', { n: produced });
     log(t('coacd.done', { n: produced }), 'ok');
   }
   if (!s.running) {
-    coacdStat?.classList.remove('on');
-    clearInterval(coacdPoll); coacdPoll = null;
-    if (coacdGenBtn) { coacdGenBtn.disabled = false; }
-    if (coacdStopBtn) { coacdStopBtn.disabled = false; }
-    if (produced > 0 && !coacdFinalized) {
-      coacdFinalized = true;
-      // 1) the URDF/ROS export should now ship these convex parts as <collision>
-      if (coacdBox && !coacdBox.checked) { coacdBox.checked = true; }
+    collPreviewStat?.classList.remove('on');
+    clearInterval(collPreviewPoll); collPreviewPoll = null;
+    if (collPreviewGenBtn) { collPreviewGenBtn.disabled = false; }
+    if (collPreviewStopBtn) { collPreviewStopBtn.disabled = false; }
+    if (produced > 0 && !collPreviewFinalized) {
+      collPreviewFinalized = true;
+      // 1) the URDF/ROS export should now ship these parts as <collision>:
+      //    point the mode selector at whatever we just generated
+      if (collModeSel && s.mode) { collModeSel.value = s.mode; updateCollUI(); }
       // 2) rebuild the live self-collision model so the red highlight uses the
-      //    CoACD parts (the server dropped the old one when the job finished)
+      //    generated parts (the server dropped the old one when the job finished)
       initCollision();
-      log(t('coacd.applied'), 'ok');
+      log(t('coacd.applied', { what }), 'ok');
     }
   }
 }
-coacdStopBtn?.addEventListener('click', async () => {
-  coacdStopBtn.disabled = true;
-  if (coacdStatText) { coacdStatText.textContent = t('coacd.stopping'); }
+collPreviewStopBtn?.addEventListener('click', async () => {
+  collPreviewStopBtn.disabled = true;
+  if (collPreviewStatText) { collPreviewStatText.textContent = t('coacd.stopping'); }
   log(t('coacd.stopping'));
-  try { await fetch('/api/collision/coacd/cancel'); } catch (_e) { /* ignore */ }
+  try { await fetch('/api/collision/preview/cancel'); } catch (_e) { /* ignore */ }
 });
-coacdGenBtn?.addEventListener('click', async () => {
-  if (coacdPoll) { return; }
-  coacdClearOverlay();
-  coacdLogged.clear(); coacdLastCurrent = null;
-  coacdFinalized = false;
+// Abandon the in-flight generate job (the user switched collision mode mid-run).
+// Stop polling FIRST so the now-cancelled job's completion can't reach the
+// finalize block and revert the selector to the old mode; then tell the server
+// to stop and reset the gen UI.  Unlike Stop, this discards the partial result.
+function collPreviewAbort() {
+  if (collPreviewPoll) { clearInterval(collPreviewPoll); collPreviewPoll = null; }
+  collPreviewSetBlink([]);                         // stop the per-link blink timer
+  try { fetch('/api/collision/preview/cancel'); } catch (_e) { /* ignore */ }
+  collPreviewStat?.classList.remove('on');         // hide the "computing" banner
+  if (collPreviewProg) { collPreviewProg.textContent = ''; }
+  if (collPreviewGenBtn) { collPreviewGenBtn.disabled = false; }
+  if (collPreviewStopBtn) { collPreviewStopBtn.disabled = false; }
+}
+collPreviewGenBtn?.addEventListener('click', async () => {
+  if (collPreviewPoll) { return; }
+  collPreviewClearOverlay();
+  collPreviewLogged.clear(); collPreviewLastCurrent = null;
+  collPreviewFinalized = false;
   setCollisionShown(true);                       // watch it build by default
-  coacdGenBtn.disabled = true;
-  if (coacdStopBtn) { coacdStopBtn.disabled = false; }
-  coacdProg.textContent = t('coacd.start');
-  if (coacdStatText) { coacdStatText.textContent = t('coacd.start'); }
-  if (coacdBar) { coacdBar.style.width = '0%'; }
-  coacdStat?.classList.add('on');                // show "computing" banner now
+  collPreviewGenBtn.disabled = true;
+  if (collPreviewStopBtn) { collPreviewStopBtn.disabled = false; }
+  collPreviewProg.textContent = t('coacd.start');
+  if (collPreviewStatText) { collPreviewStatText.textContent = t('coacd.start'); }
+  if (collPreviewBar) { collPreviewBar.style.width = '0%'; }
+  collPreviewStat?.classList.add('on');                // show "computing" banner now
+  const mode = collModeSel?.value || 'coacd';
   const q = cqualitySel?.value || 'balanced';
+  const what = mode === 'hull' ? t('coll.hullword') : 'CoACD';
   try {
     const r = await (await fetch(
-      `/api/collision/coacd/init?quality=${encodeURIComponent(q)}`)).json();
+      `/api/collision/preview/init?mode=${encodeURIComponent(mode)}`
+      + `&quality=${encodeURIComponent(q)}`)).json();
     if (r.error) { throw new Error(r.error); }
-    log(t('coacd.started', { q }));
-    coacdPoll = setInterval(coacdTick, 1000);
-    coacdTick();
+    log(t('coacd.started', { q: mode === 'coacd' ? q : '', what }));
+    collPreviewPoll = setInterval(collPreviewTick, 1000);
+    collPreviewTick();
   } catch (e) {
-    coacdGenBtn.disabled = false;
-    coacdProg.textContent = '';
-    coacdStat?.classList.remove('on');
+    collPreviewGenBtn.disabled = false;
+    collPreviewProg.textContent = '';
+    collPreviewStat?.classList.remove('on');
     log(t('coacd.fail', { e: e.message ?? e }), 'err');
   }
 });
@@ -4491,14 +4544,14 @@ coacdGenBtn?.addEventListener('click', async () => {
 // the top-toolbar toggle or the export-panel checkbox (kept in sync)
 const collViewBtn = document.getElementById('collview');
 function setCollisionShown(on) {
-  if (coacdShow) { coacdShow.checked = on; }
+  if (collPreviewShow) { collPreviewShow.checked = on; }
   collViewBtn?.classList.toggle('active', on);
-  coacdSetShown(on);
+  collPreviewSetShown(on);
   // hiding the overlay shouldn't hide a CURRENT collision -- keep colliding
   // links' meshes visible
-  if (!on) { coacdRevealColliding(collisionLinks); }
+  if (!on) { collPreviewRevealColliding(collisionLinks); }
 }
-coacdShow?.addEventListener('change', () => setCollisionShown(coacdShow.checked));
+collPreviewShow?.addEventListener('change', () => setCollisionShown(collPreviewShow.checked));
 collViewBtn?.addEventListener('click',
   () => setCollisionShown(!collViewBtn.classList.contains('active')));
 
@@ -4518,14 +4571,16 @@ expLinks.forEach(a => a.addEventListener('click', async ev => {
   const name = (exppkg?.value || '').trim();
   const urdf = (expurdf?.value || '').trim();
   const meshdir = (expmeshdir?.value || '').trim().replace(/^\/+|\/+$/g, '');
-  // coacd + merge-fixed apply to the ROS (.dae) packages, not the uniform glb
-  const coacd = a.id !== 'expglb' && !!coacdBox?.checked;
+  // collision mode + merge-fixed apply to the ROS (.dae) packages, not the
+  // uniform glb (which keeps copy-style collision)
+  const collMode = a.id !== 'expglb' ? (collModeSel?.value || 'copy') : 'copy';
   const mergeFixed = a.id !== 'expglb' && !!mergeFixedBox?.checked;
   const url = base
     + (name ? `&name=${encodeURIComponent(name)}` : '')
     + (urdf ? `&urdf=${encodeURIComponent(urdf)}` : '')
     + (meshdir ? `&meshdir=${encodeURIComponent(meshdir)}` : '')
-    + (coacd ? `&collision=coacd&cquality=${cqualitySel?.value || 'balanced'}` : '')
+    + (collMode !== 'copy' ? `&collision=${collMode}` : '')
+    + (collMode === 'coacd' ? `&cquality=${cqualitySel?.value || 'balanced'}` : '')
     + (mergeFixed ? '&mergefixed=1' : '');
   const what = a.id === 'expglb' ? 'glb'
     : a.id === 'expros2' ? 'ROS 2' : 'ROS 1';

@@ -198,7 +198,7 @@ def _loop_closures_cfg(model, joint_overrides):
 # ---------------------------------------------------------------- build
 def build(pkg_dir, config_path=None, base_hint=None, exclude=None,
           ros_pkg=False, density=None, ros_version=1, ros_pkg_name=None,
-          ros_urdf_name=None, collision="copy", collision_quality="balanced",
+          ros_urdf_name=None, collision="copy", coacd_quality="balanced",
           merge_fixed=False, ros_mesh_dir=None):
     _tolerant_console()
     graph = GraphState.load(os.path.join(pkg_dir, GRAPH_FILE))
@@ -258,7 +258,7 @@ def build(pkg_dir, config_path=None, base_hint=None, exclude=None,
             pkg_dir, robot_name, os.path.dirname(os.path.abspath(pkg_dir)),
             ros_version=ros_version, pkg_name=ros_pkg_name,
             urdf_name=ros_urdf_name, colors=colors,
-            collision=collision, collision_quality=collision_quality,
+            collision=collision, coacd_quality=coacd_quality,
             merge_fixed=merge_fixed, mesh_dir=ros_mesh_dir,
             loop_closures=closures)
 
@@ -277,13 +277,13 @@ def build(pkg_dir, config_path=None, base_hint=None, exclude=None,
 def export(assembly_path, out_dir=None, robot_name=None, visible=False,
            config_path=None, base_hint=None, exclude=None, ros_pkg=False,
            ros_version=1, ros_pkg_name=None, ros_urdf_name=None,
-           collision="copy", collision_quality="balanced", merge_fixed=False,
+           collision="copy", coacd_quality="balanced", merge_fixed=False,
            ros_mesh_dir=None):
     pkg_dir = extract(assembly_path, out_dir, robot_name, visible)
     return build(pkg_dir, config_path=config_path, base_hint=base_hint,
                  exclude=exclude, ros_pkg=ros_pkg, ros_version=ros_version,
                  ros_pkg_name=ros_pkg_name, ros_urdf_name=ros_urdf_name,
-                 collision=collision, collision_quality=collision_quality,
+                 collision=collision, coacd_quality=coacd_quality,
                  merge_fixed=merge_fixed, ros_mesh_dir=ros_mesh_dir)
 
 
@@ -319,12 +319,14 @@ def main():
                     help="package-relative directory the --ros-pkg meshes go in "
                          "and that the URDF's package:// refs point at (default: "
                          "'meshes'); e.g. 'urdf/mesh' for a different layout")
-    ap.add_argument("--collision", choices=("copy", "coacd"), default="copy",
+    ap.add_argument("--collision", choices=("copy", "hull", "coacd"),
+                    default="copy",
                     help="--ros-pkg <collision> geometry: 'copy' (default) "
-                         "reuses the visual mesh as one STL; 'coacd' runs "
-                         "approximate convex decomposition into convex part "
-                         "STLs (needs: pip install coacd)")
-    ap.add_argument("--collision-quality", choices=("balanced", "fine"),
+                         "reuses the visual mesh as one STL; 'hull' replaces it "
+                         "with a single convex hull STL; 'coacd' runs approximate "
+                         "convex decomposition into convex part STLs (needs: pip "
+                         "install coacd)")
+    ap.add_argument("--coacd-quality", choices=("balanced", "fine"),
                     default="balanced",
                     help="CoACD preset for --collision coacd: 'balanced' "
                          "(default, ~5-6 parts/link, ~8-60s) or 'fine' "
@@ -340,7 +342,7 @@ def main():
            ros_pkg=args.ros_pkg or args.ros2,
            ros_version=2 if args.ros2 else 1,
            ros_pkg_name=args.ros_pkg_name, ros_urdf_name=args.ros_urdf_name,
-           collision=args.collision, collision_quality=args.collision_quality,
+           collision=args.collision, coacd_quality=args.coacd_quality,
            merge_fixed=args.merge_fixed, ros_mesh_dir=args.ros_mesh_dir)
 
 

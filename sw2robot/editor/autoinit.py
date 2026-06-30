@@ -66,7 +66,7 @@ def link_meshes(robot):
     return out
 
 
-def load_coacd_parts(preview_dir, link_names):
+def load_collision_parts(preview_dir, link_names):
     """``{link name -> [convex part trimesh, ...]}`` loaded from the CoACD preview
     GLBs (``<preview_dir>/<safe link>.glb``), each part in the link-local frame
     (the collision ``<origin>`` was baked in at generation).  Links without a

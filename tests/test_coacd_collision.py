@@ -5,7 +5,7 @@ box meshes (trimesh + python-fcl only, no skrobot)."""
 import numpy as np
 import trimesh
 
-from sw2robot.editor.autoinit import SelfCollision, load_coacd_parts
+from sw2robot.editor.autoinit import SelfCollision, load_collision_parts
 
 
 def _box(center):
@@ -41,7 +41,7 @@ class _Robot:
         self.joint_list = []          # no joints -> no adjacency baseline
 
 
-def test_load_coacd_parts_roundtrip(tmp_path):
+def test_load_collision_parts_roundtrip(tmp_path):
     """A preview GLB of N parts loads back as N meshes in the same frame."""
     preview = tmp_path / "preview"
     preview.mkdir()
@@ -50,7 +50,7 @@ def test_load_coacd_parts_roundtrip(tmp_path):
     scene.add_geometry(_box((3, 0, 0)))
     (preview / "my_link.glb").write_bytes(scene.export(file_type="glb"))
 
-    parts = load_coacd_parts(str(preview), ["my_link", "absent_link"])
+    parts = load_collision_parts(str(preview), ["my_link", "absent_link"])
     assert set(parts) == {"my_link"}            # absent link omitted
     assert len(parts["my_link"]) == 2
     # frame preserved: the two boxes still span x in [-0.5, 3.5]
