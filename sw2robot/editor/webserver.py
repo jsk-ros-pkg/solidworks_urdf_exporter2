@@ -2029,15 +2029,16 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 cls = type(self)
                 if not cls.pkg_dir:
                     return self._send_json({"error": "no package open"}, 400)
-                visuaL_fmt = (query.get("meshes") or ["dae"])[0]
-                if visuaL_fmt not in ("dae", "stl", "glb"):
+                visual_fmt = (query.get("meshes") or ["dae"])[0]
+                if visual_fmt not in ("dae", "stl", "glb"):
                     return self._send_json(
-                        {"error": f"unsupported visual mesh format: {fmt}"}, 400)
+                        {"error": f"unsupported visual mesh format: {visual_fmt}"},
+                        400)
                 collision_fmt = (query.get("colfmt") or ["stl"])[0]
                 if collision_fmt not in ("stl", "glb"):
                     return self._send_json(
-                        {"error": f"unsupported collision mesh format: {colfmt}"},
-                        400)
+                        {"error": f"unsupported collision mesh format: "
+                         f"{collision_fmt}"}, 400)
                 ros = (query.get("ros") or ["1"])[0]
                 if ros not in ("1", "2"):
                     return self._send_json(
@@ -2074,7 +2075,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                               if _cad_mode(cls.pkg_dir)
                               else _um_colors(_um["state"]))
                     with _um_materialized(cls.pkg_dir, cls.urdf_rel):
-                        pkg, data = _export_zip(cls.pkg_dir, cls.robot_name, visuaL_fmt,
+                        pkg, data = _export_zip(cls.pkg_dir, cls.robot_name, visual_fmt,
                                                 collision_fmt,
                                                 ros_version=ros_version,
                                                 pkg_name=pkg_name,
@@ -2087,7 +2088,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 except ValueError as e:
                     return self._send_json({"error": str(e)}, 400)
                 fname = (f"{cls.robot_name}_glb.zip"
-                         if visuaL_fmt == "glb" and collision_fmt == "glb"
+                         if visual_fmt == "glb" and collision_fmt == "glb"
                          else f"{pkg}.zip")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/zip")
