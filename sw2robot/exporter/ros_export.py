@@ -423,11 +423,32 @@ def _coacd_part_stls(src, quality, cache_dir):
         return out
 
 
-# a fixed high-contrast palette so adjacent convex parts read apart in the viewer
+def _hull_part_stls(src):
+    """``[stl_bytes]`` -- the source mesh ``src`` reduced to a SINGLE watertight
+    convex hull (one STL in metres). """
+    hull = _load_mesh_metres(src).convex_hull
+    hull.units = "meter"
+    return [hull.export(file_type="stl")]
+
+
+def _collision_part_stls(src, mode, quality, cache_dir):
+    """``[stl_bytes, ...]`` -- the convex collision part(s) for ``src`` per the
+    selected ``mode``: ``"coacd"`` runs CoACD approximate convex decomposition
+    (many parts, slow, disk-cached under ``cache_dir``); ``"hull"`` returns a
+    single convex hull (fast, no optional dep).  The single-vs-many distinction
+    is the only difference downstream consumers see."""
+    if mode == "hull":
+        return _hull_part_stls(src)
+    return _coacd_part_stls(src, quality, cache_dir)
+
+
+# a fixed high-contrast palette so adjacent convex parts read apart in the viewer.
+# NO red/salmon: red is the self-collision highlight colour, so a red preview part
+# (a single-part hull is always palette[0]) would read as a collision.
 _COLLISION_PALETTE = (
-    (228, 26, 28), (55, 126, 184), (77, 175, 74), (152, 78, 163),
-    (255, 127, 0), (210, 210, 40), (166, 86, 40), (247, 129, 191),
-    (102, 194, 165), (252, 141, 98), (141, 160, 203), (153, 153, 153),
+    (55, 126, 184), (77, 175, 74), (152, 78, 163), (255, 127, 0),
+    (210, 210, 40), (166, 86, 40), (247, 129, 191), (102, 194, 165),
+    (141, 160, 203), (153, 153, 153),
 )
 
 
@@ -574,15 +595,18 @@ def _bake_origins(root, pkg_dir, own_pkgs, cache):
 
 def collision_preview_glbs(pkg_dir, robot_name, quality="balanced", progress=None,
                        urdf_path=None, should_cancel=None, on_start=None,
-                       max_workers=None):
-    """Decompose every link's ``<collision>`` mesh with CoACD and write one
-    colour-coded preview GLB per link under ``meshes/.coacd_cache/preview/`` (the
-    convex parts, each part a distinct colour, the collision ``<origin>`` baked
-    in so the GLB sits at the link frame).  Shares the on-disk part cache with
-    the ROS export, so generating the preview also warms a later ``collision=
-    'coacd'`` export.
+                       max_workers=None, mode="coacd"):
+    """Build a colour-coded convex-collision preview GLB per link under
+    ``meshes/.coacd_cache/preview/`` (the convex part(s), each a distinct colour,
+    the collision ``<origin>`` baked in so the GLB sits at the link frame).
 
-    Links are decomposed CONCURRENTLY in a thread pool -- CoACD releases the GIL,
+    ``mode`` selects the geometry: ``"coacd"`` (default) runs CoACD approximate
+    convex decomposition into many parts -- shares the on-disk part cache with
+    the ROS export, so generating the preview also warms a later ``collision=
+    'coacd'`` export; ``"hull"`` produces a single convex hull per link (fast,
+    no optional dependency).
+
+    Links are processed CONCURRENTLY in a thread pool -- CoACD releases the GIL,
     so this scales with cores (measured ~4x on a 12-core box).  ``max_workers``
     defaults to ``cpu_count - 2`` (capped at 8).
 
@@ -603,12 +627,17 @@ def collision_preview_glbs(pkg_dir, robot_name, quality="balanced", progress=Non
     import numpy as np
     import trimesh
 
-    if quality not in _COACD_PRESETS:
-        raise ValueError(f"unsupported collision_quality: {quality!r} "
-                         f"(use one of {sorted(_COACD_PRESETS)})")
-    if not coacd_available():
-        raise ValueError("CoACD collision decomposition needs the optional "
-                         "'coacd' package -- install it with: pip install coacd")
+    if mode == "coacd":
+        if quality not in _COACD_PRESETS:
+            raise ValueError(f"unsupported collision_quality: {quality!r} "
+                             f"(use one of {sorted(_COACD_PRESETS)})")
+        if not coacd_available():
+            raise ValueError(
+                "CoACD collision decomposition needs the optional 'coacd' "
+                "package -- install it with: pip install coacd")
+    elif mode != "hull":
+        raise ValueError(f"unsupported collision mode: {mode!r} "
+                         "(use 'coacd' or 'hull')")
     cache_dir = os.path.join(pkg_dir, "meshes", ".coacd_cache")
     preview_dir = os.path.join(cache_dir, "preview")
     os.makedirs(preview_dir, exist_ok=True)
@@ -658,7 +687,7 @@ def collision_preview_glbs(pkg_dir, robot_name, quality="balanced", progress=Non
         scene = trimesh.Scene()
         part_i = 0
         for src, mat in blocks:
-            for data in _coacd_part_stls(src, quality, cache_dir):
+            for data in _collision_part_stls(src, mode, quality, cache_dir):
                 part = trimesh.load(io.BytesIO(data), file_type="stl")
                 part.apply_transform(mat)
                 rgb = _COLLISION_PALETTE[part_i % len(_COLLISION_PALETTE)]
@@ -941,11 +970,15 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
 
     ``collision`` chooses how ``<collision>`` geometry is produced: ``'copy'``
     (default) reuses the visual mesh as one STL (the current behaviour);
-    ``'coacd'`` runs CoACD approximate convex decomposition, replacing each
-    ``<collision>``'s mesh with a set of convex part STLs (better for physics
-    engines).  ``collision_quality`` (``'balanced'`` | ``'fine'``) picks the
-    CoACD preset.  ``'coacd'`` needs the optional ``coacd`` package; its absence
-    raises a clear error.  Decomposition is cached under ``meshes/.coacd_cache``.
+    ``'hull'`` replaces each ``<collision>``'s mesh with a single convex hull
+    STL (the "simple collision" alternative -- one convex shape per link, what
+    path planning usually wants); ``'coacd'`` runs CoACD approximate convex
+    decomposition, replacing each ``<collision>``'s mesh with a *set* of convex
+    part STLs (better for high-fidelity physics).  ``collision_quality``
+    (``'balanced'`` | ``'fine'``) picks the CoACD preset and is ignored for the
+    other modes.  ``'coacd'`` needs the optional ``coacd`` package; its absence
+    raises a clear error.  ``'hull'`` has no extra dependency.  CoACD
+    decomposition is cached under ``meshes/.coacd_cache``.
 
     ``ros_version`` picks the build system: ``1`` (default) writes a catkin
     ``package.xml`` (format 2) + ``CMakeLists.txt``; ``2`` writes an ament_cmake
@@ -965,9 +998,9 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
     before any entries are emitted, so a half-rewritten package never ships."""
     if ros_version not in (1, 2):
         raise ValueError(f"unsupported ros_version: {ros_version}")
-    if collision not in ("copy", "coacd"):
+    if collision not in ("copy", "hull", "coacd"):
         raise ValueError(f"unsupported collision mode: {collision!r} "
-                         "(use 'copy' or 'coacd')")
+                         "(use 'copy', 'hull' or 'coacd')")
     if collision == "coacd":
         if collision_quality not in _COACD_PRESETS:
             raise ValueError(
@@ -1026,38 +1059,46 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
     files = []
     used_names = set()
     errors = []
-    # CoACD parts: keyed by source + quality so a source shared by several links
-    # decomposes once (CoACD itself is also disk-cached under .coacd_cache)
-    coacd_done = {}
+    # convex collision parts ('coacd' = many, 'hull' = one): keyed by source +
+    # mode + quality so a source shared by several links is built once (CoACD is
+    # also disk-cached under .coacd_cache)
+    coll_done = {}
 
-    def _emit_coacd(base, src):
-        # CoACD-decompose a source mesh into convex collision part STLs; returns
-        # the list of emitted mesh names (one per convex part), or None on error.
-        key = (os.path.abspath(src), collision_quality)
-        if key in coacd_done:
-            return coacd_done[key]
+    def _emit_collision(base, src):
+        # build the convex collision part STL(s) for a source mesh per the
+        # selected `collision` mode; returns the emitted mesh names (one per
+        # part -- a single hull, or N CoACD parts), or None on error.
+        key = (os.path.abspath(src), collision, collision_quality)
+        if key in coll_done:
+            return coll_done[key]
         try:
-            blobs = _coacd_part_stls(src, collision_quality, coacd_cache_dir)
+            blobs = _collision_part_stls(src, collision, collision_quality,
+                                         coacd_cache_dir)
         except Exception as e:
-            errors.append(f"{base}: coacd decompose failed ({e!r})")
+            errors.append(f"{base}: {collision} collision failed ({e!r})")
             return None
         names = []
         for i, data in enumerate(blobs):
-            name, j = f"{base}_collision_{i}.stl", 1
+            # hull is one part per link, so name it for what it is; CoACD parts
+            # keep their indexed names
+            stem = f"{base}_collision_hull" if collision == "hull" \
+                else f"{base}_collision_{i}"
+            name, j = f"{stem}.stl", 1
             while name in used_names:
                 j += 1
-                name = f"{base}_collision_{i}_{j}.stl"
+                name = f"{stem}_{j}.stl"
             used_names.add(name)
             files.append((f"{pkg}/{mesh_rel}/{name}", data))
             names.append(name)
-        coacd_done[key] = names
+        coll_done[key] = names
         return names
 
-    def _expand_collision_coacd(link):
+    def _expand_collision(link):
         # replace each <collision> whose single mesh is a convertible source with
-        # N <collision> blocks (one per convex part), preserving its <origin>.
-        # Blocks we can't decompose (primitive geometry, external/missing mesh,
-        # multi-mesh) are left to the normal per-mesh path below.
+        # the convex collision part(s) (one block per part -- a single hull, or N
+        # CoACD parts), preserving its <origin>.  Blocks we can't convert
+        # (primitive geometry, external/missing mesh, multi-mesh) are left to the
+        # normal per-mesh path below.
         for block in list(link.findall("collision")):
             meshes = list(block.iter("mesh"))
             if len(meshes) != 1:
@@ -1069,7 +1110,7 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
             if src is None:
                 errors.append(f"no source mesh for '{base}'")
                 continue
-            names = _emit_coacd(base, src)
+            names = _emit_collision(base, src)
             if not names:
                 continue
             m_bake = bake.get(id(meshes[0]))
@@ -1078,7 +1119,7 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
             # deep-copy the original block per part so <origin> + formatting carry
             for k, name in enumerate(names):
                 nb = copy.deepcopy(block)
-                if m_bake is not None:         # CoACD parts are in source frame:
+                if m_bake is not None:         # parts are in the source frame:
                     _set_origin_el(nb, m_bake)  # carry the bake transform here
                 next(nb.iter("mesh")).set(
                     "filename", f"package://{pkg}/{mesh_rel}/{name}")
@@ -1087,12 +1128,13 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
     if collision == "coacd":
         # CoACD is the heaviest per-mesh op; warm its disk cache for every unique
         # collision source IN PARALLEL (CoACD releases the GIL) so the serial
-        # expansion below is all cache hits
+        # expansion below is all cache hits.  'hull' is fast and not disk-cached,
+        # so it needs no warming -- _emit_collision builds it inline.
         def _warm_coacd(src):
             try:
                 _coacd_part_stls(src, collision_quality, coacd_cache_dir)
             except Exception:
-                pass                        # the real error resurfaces in _emit_coacd
+                pass                        # the real error resurfaces in _emit_collision
         _parallel(_warm_coacd,
                   set(_iter_sources(root, pkg_dir, own_pkgs, ("collision",))))
 
@@ -1113,11 +1155,11 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
         # colour overrides are keyed by LINK name in URDF-input mode and by the
         # component/mesh basename in the CAD path -- accept either
         link_color = colors.get(link.get("name"))
-        if collision == "coacd":
-            _expand_collision_coacd(link)
+        if collision in ("coacd", "hull"):
+            _expand_collision(link)
         for ctx, fmt in ctx_fmt:
-            if ctx == "collision" and collision == "coacd":
-                continue                   # handled by _expand_collision_coacd
+            if ctx == "collision" and collision in ("coacd", "hull"):
+                continue                   # handled by _expand_collision
             for block in link.findall(ctx):
                 for mesh in block.iter("mesh"):
                     base, src, _ext = _resolve_mesh(pkg_dir, mesh.get("filename"),

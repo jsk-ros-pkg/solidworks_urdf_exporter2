@@ -1487,7 +1487,7 @@ def _build_collision(urdf_path, key, pkg_dir=None):
 # instant.  One job at a time.
 _coll_preview_job = {"running": False, "done": 0, "total": 0, "current": None,
               "inflight": [], "parts": {}, "error": None, "quality": None,
-              "cancel": False, "cancelled": False}
+              "mode": None, "cancel": False, "cancelled": False}
 _coll_preview_lock = threading.Lock()
 
 
@@ -1495,10 +1495,10 @@ def _reset_coll_preview_job():
     with _coll_preview_lock:
         _coll_preview_job.update(running=False, done=0, total=0, current=None,
                           inflight=[], parts={}, error=None, quality=None,
-                          cancel=False, cancelled=False)
+                          mode=None, cancel=False, cancelled=False)
 
 
-def _run_coll_preview_job(pkg_dir, robot_name, urdf_rel, quality):
+def _run_coll_preview_job(pkg_dir, robot_name, urdf_rel, quality, mode="coacd"):
     from sw2robot.exporter.ros_export import collision_preview_glbs
 
     def _on_start(link):                  # a link's decomposition began
@@ -1523,7 +1523,7 @@ def _run_coll_preview_job(pkg_dir, robot_name, urdf_rel, quality):
         # materialise URDF-mode edits to disk for the job (no-op in CAD mode),
         # restoring the pristine base when it ends
         with _um_materialized(pkg_dir, urdf_rel):
-            collision_preview_glbs(pkg_dir, robot_name, quality=quality,
+            collision_preview_glbs(pkg_dir, robot_name, quality=quality, mode=mode,
                                progress=_progress, on_start=_on_start,
                                should_cancel=_should_cancel)
         with _coll_preview_lock:
@@ -2036,7 +2036,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                         {"error": f"unsupported ros version: {ros}"}, 400)
                 ros_version = int(ros)
                 collision = (query.get("collision") or ["copy"])[0]
-                if collision not in ("copy", "coacd"):
+                if collision not in ("copy", "hull", "coacd"):
                     return self._send_json(
                         {"error": f"unsupported collision mode: {collision}"}, 400)
                 cquality = (query.get("cquality") or ["balanced"])[0]
@@ -2115,8 +2115,12 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 cls = type(self)
                 if not cls.pkg_dir:
                     return self._send_json({"error": "no package open"}, 400)
+                mode = (query.get("mode") or ["coacd"])[0]
+                if mode not in ("coacd", "hull"):
+                    return self._send_json(
+                        {"error": f"unsupported collision mode: {mode}"}, 400)
                 quality = (query.get("quality") or ["balanced"])[0]
-                if quality not in ("balanced", "fine"):
+                if mode == "coacd" and quality not in ("balanced", "fine"):
                     return self._send_json(
                         {"error": f"unsupported collision quality: {quality}"},
                         400)
@@ -2134,12 +2138,14 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                         return self._send_json({"error": "already running"}, 409)
                 _reset_coll_preview_job()
                 with _coll_preview_lock:
-                    _coll_preview_job.update(running=True, quality=quality)
+                    _coll_preview_job.update(running=True, quality=quality, mode=mode)
                 threading.Thread(
                     target=_run_coll_preview_job,
-                    args=(cls.pkg_dir, cls.robot_name, cls.urdf_rel, quality),
+                    args=(cls.pkg_dir, cls.robot_name, cls.urdf_rel, quality,
+                          mode),
                     daemon=True).start()
-                return self._send_json({"running": True, "quality": quality})
+                return self._send_json(
+                    {"running": True, "quality": quality, "mode": mode})
             if path == "/api/collision/coacd/cancel":
                 # request stop; the job ends at the next link boundary (CoACD
                 # itself is not interruptible mid-link)

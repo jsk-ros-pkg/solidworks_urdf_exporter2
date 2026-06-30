@@ -319,11 +319,14 @@ def main():
                     help="package-relative directory the --ros-pkg meshes go in "
                          "and that the URDF's package:// refs point at (default: "
                          "'meshes'); e.g. 'urdf/mesh' for a different layout")
-    ap.add_argument("--collision", choices=("copy", "coacd"), default="copy",
+    ap.add_argument("--collision", choices=("copy", "hull", "coacd"),
+                    default="copy",
                     help="--ros-pkg <collision> geometry: 'copy' (default) "
-                         "reuses the visual mesh as one STL; 'coacd' runs "
-                         "approximate convex decomposition into convex part "
-                         "STLs (needs: pip install coacd)")
+                         "reuses the visual mesh as one STL; 'hull' replaces it "
+                         "with a single convex hull STL (simple collision, good "
+                         "for path planning); 'coacd' runs approximate convex "
+                         "decomposition into convex part STLs (needs: pip "
+                         "install coacd)")
     ap.add_argument("--collision-quality", choices=("balanced", "fine"),
                     default="balanced",
                     help="CoACD preset for --collision coacd: 'balanced' "

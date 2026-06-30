@@ -122,6 +122,40 @@ def test_merge_fixed_plus_coacd_compose(tmp_path, monkeypatch):
     assert len(a.findall("visual")) == 2                 # both visuals lumped in
 
 
+def test_collision_hull_single_convex_part(tmp_path):
+    """collision='hull' replaces the link's collision mesh with ONE convex-hull
+    STL (no optional dep, no CoACD), leaving the visual mesh untouched."""
+    import xml.etree.ElementTree as ET
+
+    import trimesh
+
+    from sw2robot.exporter.ros_export import build_ros_description
+
+    pkg_dir = _make_pkg(tmp_path, robot="fing")
+    files = dict(build_ros_description(pkg_dir, "fing", collision="hull"))
+    arcs = set(files)
+
+    # the single hull STL ships; the per-link copy STL does NOT
+    hull_arc = "fing_description/meshes/part_collision_hull.stl"
+    assert hull_arc in arcs
+    assert "fing_description/meshes/part.stl" not in arcs
+    assert "fing_description/meshes/part.dae" in arcs            # visual untouched
+
+    root = ET.fromstring(files["fing_description/urdf/fing_description.urdf"].decode())
+    link = root.find("link")
+    cols = link.findall("collision")
+    assert len(cols) == 1                                        # one hull, not N
+    assert (cols[0].find(".//mesh").get("filename")
+            == "package://fing_description/meshes/part_collision_hull.stl")
+    assert (link.find("visual").find(".//mesh").get("filename")
+            == "package://fing_description/meshes/part.dae")
+
+    # the emitted STL is genuinely a convex hull
+    hull = trimesh.load(io.BytesIO(files[hull_arc]), file_type="stl")
+    assert hull.is_convex
+    assert len(hull.vertices) > 0
+
+
 def test_mesh_to_dae_scale_and_loadable():
     if not os.path.exists(_SAMPLE_MESH):
         pytest.skip("sample .3dxml mesh not present")
