@@ -4325,6 +4325,10 @@ function updateCollUI() {
 }
 collModeSel?.addEventListener('change', () => {
   updateCollUI();
+  // a generate job still in flight belongs to the PREVIOUS mode -- abandon it,
+  // else its completion would finalize against the old mode and silently revert
+  // this deliberate switch (re-applying the old parts to live + export).
+  if (collPreviewPoll) { collPreviewAbort(); }
   // any generated preview belongs to the PREVIOUS mode, so switching type drops
   // it: nothing is shown until a preview is made for the newly-selected type
   // (copy has none; hull/coacd must be (re)generated).
@@ -4493,6 +4497,19 @@ collPreviewStopBtn?.addEventListener('click', async () => {
   log(t('coacd.stopping'));
   try { await fetch('/api/collision/coacd/cancel'); } catch (_e) { /* ignore */ }
 });
+// Abandon the in-flight generate job (the user switched collision mode mid-run).
+// Stop polling FIRST so the now-cancelled job's completion can't reach the
+// finalize block and revert the selector to the old mode; then tell the server
+// to stop and reset the gen UI.  Unlike Stop, this discards the partial result.
+function collPreviewAbort() {
+  if (collPreviewPoll) { clearInterval(collPreviewPoll); collPreviewPoll = null; }
+  collPreviewSetBlink([]);                         // stop the per-link blink timer
+  try { fetch('/api/collision/coacd/cancel'); } catch (_e) { /* ignore */ }
+  collPreviewStat?.classList.remove('on');         // hide the "computing" banner
+  if (collPreviewProg) { collPreviewProg.textContent = ''; }
+  if (collPreviewGenBtn) { collPreviewGenBtn.disabled = false; }
+  if (collPreviewStopBtn) { collPreviewStopBtn.disabled = false; }
+}
 collPreviewGenBtn?.addEventListener('click', async () => {
   if (collPreviewPoll) { return; }
   collPreviewClearOverlay();
