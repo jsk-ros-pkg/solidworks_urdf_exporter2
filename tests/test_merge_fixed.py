@@ -124,10 +124,10 @@ def test_meshless_frame_in_fixed_chain_is_preserved():
     assert frame.find("visual") is None and frame.find("collision") is None
 
 
-# --------------------------------------------------------------- mass-only (#16)
-# A mass-only link has an <inertial> but NO geometry, carries the
-# <!-- sw2robot mass_only --> marker, and must fold into its fixed parent so the
-# weight survives -- unlike a genuine mesh-less coordinate frame, which stays.
+# ----------------------------------------------------------------- mass-only
+# A mass-only link has an <inertial> but NO geometry.  Named in force_merge / only
+# it folds into its fixed parent so the weight survives -- unlike a genuine
+# mesh-less coordinate frame, which (absent from the set) stays.
 
 _MASS_ONLY_URDF = """<?xml version="1.0"?>
 <robot name="m">
@@ -216,3 +216,29 @@ def test_mass_only_fold_via_text_entrypoint():
     root = ET.fromstring(out)
     base = next(ln for ln in root.findall("link") if ln.get("name") == "base")
     assert abs(float(base.find("inertial").find("mass").get("value")) - 5.0) < 1e-9
+
+
+def test_only_folds_just_the_named_link_not_the_whole_fixed_tree():
+    """``only`` folds the mass-only links and leaves every OTHER fixed child in
+    place -- so a mass-only fold never silently enables a full fixed merge."""
+    urdf = """<?xml version="1.0"?>
+<robot name="o">
+  <link name="base"><inertial><mass value="1"/>
+    <inertia ixx="1" ixy="0" ixz="0" iyy="1" iyz="0" izz="1"/></inertial>
+    <visual><geometry><box size="1 1 1"/></geometry></visual></link>
+  <joint name="fix_bracket" type="fixed"><origin xyz="0 0 1" rpy="0 0 0"/>
+    <parent link="base"/><child link="bracket"/></joint>
+  <link name="bracket"><inertial><mass value="1"/>
+    <inertia ixx="1" ixy="0" ixz="0" iyy="1" iyz="0" izz="1"/></inertial>
+    <visual><geometry><box size="1 1 1"/></geometry></visual></link>
+  <joint name="fix_pcb" type="fixed"><origin xyz="1 0 0" rpy="0 0 0"/>
+    <parent link="base"/><child link="pcb"/></joint>
+  <link name="pcb"><inertial><mass value="2"/>
+    <inertia ixx="1" ixy="0" ixz="0" iyy="1" iyz="0" izz="1"/></inertial></link>
+</robot>"""
+    root = ET.fromstring(urdf)
+    n, _ = merge_fixed_links(root, only={"pcb"})
+    assert n == 1
+    links = {ln.get("name") for ln in root.findall("link")}
+    assert "pcb" not in links            # the mass-only link folded
+    assert "bracket" in links            # the ordinary fixed child is untouched

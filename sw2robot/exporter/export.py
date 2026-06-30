@@ -221,8 +221,10 @@ def build(pkg_dir, config_path=None, base_hint=None, exclude=None,
         urdf_kwargs["link_overrides"] = config.get("link_names") or {}
         urdf_kwargs["joint_overrides"] = config.get("joint_names") or {}
     # the working URDF keeps URDF-relative mesh paths (our viewer + skrobot
-    # auto-limits resolve those); the portable ROS variant is a SEPARATE package
-    write_urdf(model, urdf_path, **urdf_kwargs)
+    # auto-limits resolve those); the portable ROS variant is a SEPARATE package.
+    # The working URDF KEEPS each mass-only link (geometry stripped) so it stays
+    # selectable in the editor tree; only the exported package folds it away.
+    mass_only_links = write_urdf(model, urdf_path, **urdf_kwargs)
     write_ros_package(model, pkg_dir)
     tmpl = os.path.join(pkg_dir, robot_name + ".joints.yaml")
     if not config_path:
@@ -244,6 +246,20 @@ def build(pkg_dir, config_path=None, base_hint=None, exclude=None,
             _yaml.safe_dump(closures, f, sort_keys=False, default_flow_style=None)
     elif os.path.exists(cside):
         os.remove(cside)
+
+    # Persist the mass-only link names beside the package, same rationale as the
+    # loop-closure sidecar: the detached ROS export (CLI here OR the editor ZIP)
+    # only sees the on-disk package, so it reads this list to know which
+    # geometry-less links to fold into their fixed parent.  Names are the final
+    # (emitted) URDF link names, so they match the on-disk URDF directly.
+    mside = os.path.join(pkg_dir, "mass_only.yaml")
+    if mass_only_links:
+        with open(mside, "w", encoding="utf-8") as f:
+            f.write("# Mass-only links: weight kept, geometry dropped; folded "
+                    "into their fixed parent on export.\n")
+            _yaml.safe_dump(sorted(mass_only_links), f)
+    elif os.path.exists(mside):
+        os.remove(mside)
 
     desc_dir = None
     if ros_pkg:

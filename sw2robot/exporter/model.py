@@ -189,6 +189,9 @@ class Component:
     # standard hardware (screw/bolt/nut/washer/pin): weld it FIXED to whatever it
     # fastens and never let it be a tree parent -- see is_fastener_part
     is_fastener: bool = False
+    # mass-only: emit <inertial> but no <visual>/<collision>, and lump the
+    # inertial into the fixed parent on export (config `mass_only:` / the editor)
+    mass_only: bool = False
 
 
 @dataclass
@@ -2607,7 +2610,8 @@ def from_graph(graph, exclude=None, expand=None, no_expand=None):
             is_subassembly=cs.is_subassembly, world=cs.world_matrix(),
             fixed=cs.fixed, dof=cs.dof, mesh_file=cs.mesh_file,
             material=cs.material, density=cs.density,
-            sw_mass=cs.sw_mass, sw_com=cs.sw_com, sw_inertia=cs.sw_inertia))
+            sw_mass=cs.sw_mass, sw_com=cs.sw_com, sw_inertia=cs.sw_inertia,
+            mass_only=getattr(cs, "mass_only", False)))
     names = {c.name for c in comps}
     adjacency = {}
     for e in graph.edges:
@@ -2959,6 +2963,19 @@ def build_model(graph, robot_name=None, base_hint=None, config=None,
             else:
                 print(f"      WARN: densities: '{k}' matched no link")
 
+    if config and config.get("mass_only"):
+        # mass-only links: keep the weight, drop the geometry.  Same name
+        # matching as densities (link name or SolidWorks name).  The only-fixed
+        # check happens below, once the tree (and so each part's joint) is known.
+        by_ln = {c.link_name: c for c in comps}
+        by_nm = {c.name: c for c in comps}
+        for k in config["mass_only"]:
+            c = by_ln.get(str(k)) or by_nm.get(str(k))
+            if c is not None:
+                c.mass_only = True
+            else:
+                print(f"      WARN: mass_only: '{k}' matched no link")
+
     directed = None
     root_rpy = None
     ports = []
@@ -2984,6 +3001,19 @@ def build_model(graph, robot_name=None, base_hint=None, config=None,
     npri = sum(1 for j in joints if j.jtype == "prismatic")
     print(f"      joint types: {nrev} revolute, {npri} prismatic, "
           f"{len(joints) - nrev - npri} fixed")
+
+    # mass-only is valid only on a FIXED child (its inertial lumps into the fixed
+    # parent on export); a movable or root link must keep its geometry, so clear
+    # the flag there and say why rather than emit an invisible movable link.
+    if any(c.mass_only for c in comps):
+        parent_jtype = {j.child: j.jtype for j in joints}
+        for c in comps:
+            if c.mass_only and parent_jtype.get(c.link_name) != "fixed":
+                why = ("it is the base link" if c.link_name == base.link_name
+                       else f"its joint is '{parent_jtype.get(c.link_name)}', "
+                            f"not fixed")
+                print(f"      WARN: mass_only ignored for '{c.link_name}': {why}")
+                c.mass_only = False
 
     name2link = {c.name: c.link_name for c in comps}
     detected = []

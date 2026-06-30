@@ -759,6 +759,21 @@ def _dae_sidecar_images(dae_path):
     return out
 
 
+def _read_mass_only(pkg_dir):
+    """The mass-only link names build() persisted beside the package (final URDF
+    link names), or an empty set when there are none / no sidecar."""
+    side = os.path.join(pkg_dir, "mass_only.yaml")
+    if not os.path.isfile(side):
+        return set()
+    try:
+        import yaml
+        with open(side, encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        return set(data or ())
+    except Exception:
+        return set()
+
+
 def _own_pkg_names(pkg_dir):
     """The names by which the opened package may refer to its OWN meshes: the
     ROS manifest ``<name>`` (authoritative) plus the directory basename (a
@@ -1006,11 +1021,18 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
     # findall()/iter() traversals below ignore them.
     _parser = ET.XMLParser(target=ET.TreeBuilder(insert_comments=True))
     root = ET.parse(urdf_path, parser=_parser).getroot()
+    # Mass-only links (weight kept, geometry dropped) are folded into their fixed
+    # parent on every export, independent of merge_fixed; build() persisted their
+    # (final) names beside the package so this detached step knows them.
+    mass_only = _read_mass_only(pkg_dir)
+    from .merge import merge_fixed_links
     if merge_fixed:
-        # lump fixed-joint children with geometry into their parents BEFORE the
-        # mesh conversion / collision loop runs over the (now fewer) links
-        from .merge import merge_fixed_links
-        merge_fixed_links(root)
+        # lump ALL fixed-joint children with geometry into their parents (and the
+        # mass-only ones too) BEFORE the mesh conversion / collision loop runs
+        merge_fixed_links(root, force_merge=mass_only)
+    elif mass_only:
+        # fold ONLY the mass-only links, leaving the rest of the fixed tree intact
+        merge_fixed_links(root, only=mass_only)
     colors = colors or {}
     # load each source mesh ONCE and reuse it (size measurement + visual .dae +
     # collision .stl all share one load); disk-cache converted bytes + the size

@@ -140,15 +140,23 @@ def _combine_inertials(parent_el, child_el, T_pc):
     _write_inertial(parent_el, m, com, inertia)
 
 
-def merge_fixed_links(root, force_merge=None):
+def merge_fixed_links(root, force_merge=None, only=None):
     """Lump fixed-joint children with geometry into their parents, IN PLACE on
     the URDF ``root`` element.  Returns ``(merged_count, root)``.
 
     ``force_merge`` -- child-link names to lump into their fixed parent even
     when they carry no geometry, so a mass-only link's ``<inertial>`` still folds
     into the parent and its weight is preserved.  Geometry-less links NOT named
-    here are coordinate frames and stay untouched."""
+    here are coordinate frames and stay untouched.
+
+    ``only`` -- restrict folding to these child links; every other fixed child
+    is left in place.  Use it to fold just the mass-only links without collapsing
+    the rest of the fixed structure (it implies ``force_merge`` when that is
+    unset, so the named links fold regardless of geometry)."""
+    if only is not None and force_merge is None:
+        force_merge = only
     force_merge = set(force_merge or ())
+    only = None if only is None else set(only)
     # Coordinate frames are the links that have NO geometry of their OWN (snapshot
     # before any merging).  They are preserved: never merged away as a child, and
     # never used as a merge target -- otherwise a frame in a chain like
@@ -170,6 +178,8 @@ def merge_fixed_links(root, force_merge=None):
             if cp[0] is None or cp[1] is None:
                 continue
             pname, cname = cp[0].get("link"), cp[1].get("link")
+            if only is not None and cname not in only:
+                continue                       # fold just the named children
             cl = links.get(cname)
             pl = links.get(pname)
             # a mass-only child (force_merge) folds even with no geometry, so its
@@ -209,14 +219,14 @@ def merge_fixed_links(root, force_merge=None):
     return merged, root
 
 
-def merge_fixed_links_text(urdf_text, force_merge=None):
+def merge_fixed_links_text(urdf_text, force_merge=None, only=None):
     """``urdf_text`` -> merged URDF text (XML declaration preserved).
 
-    ``force_merge`` is forwarded to :func:`merge_fixed_links`.  Comments are kept
-    on the round trip so per-link provenance survives parsing."""
+    ``force_merge`` / ``only`` are forwarded to :func:`merge_fixed_links`.
+    Comments are kept on the round trip so per-link provenance survives parsing."""
     parser = ET.XMLParser(target=ET.TreeBuilder(insert_comments=True))
     root = ET.fromstring(urdf_text, parser=parser)
-    merge_fixed_links(root, force_merge=force_merge)
+    merge_fixed_links(root, force_merge=force_merge, only=only)
     out = ET.tostring(root, encoding="unicode")
     if not out.startswith("<?xml"):
         out = '<?xml version="1.0"?>\n' + out
