@@ -150,7 +150,9 @@ def _report_inertia_problems(bad):
 
 def _link_xml(comp, ros_pkg=None, rn=lambda n: n, mesh_dir=None, density=None):
     lines = [f'  <link name="{rn(comp.link_name)}">']
-    if comp.mesh_file:
+    # a mass-only link keeps its <inertial> but drops all geometry (its weight is
+    # lumped into the fixed parent on export); skip the visual/collision block
+    if comp.mesh_file and not getattr(comp, "mass_only", False):
         mesh_ref = ("package://{}/{}".format(ros_pkg, comp.mesh_file.replace("\\", "/"))
                     if ros_pkg else "../" + comp.mesh_file.replace("\\", "/"))
         vorigin = (f'      <origin xyz="{_fmt(comp.visual_xyz)}" '
@@ -223,7 +225,11 @@ def write_urdf(model, urdf_path, ros_pkg=None, density=None,
     link name / joint name to a user-chosen display name (from the editor's
     rename feature); they are applied before safe_name + collision suffixing, so
     every reference (parent/child/mimic) follows automatically.  The root link
-    keeps using ``root_link_name``."""
+    keeps using ``root_link_name``.
+
+    Returns the set of FINAL (emitted) link names that are mass-only -- the
+    export step folds these into their fixed parent.  write_urdf owns the name
+    sanitising, so it is the authoritative source of those names."""
     os.makedirs(os.path.dirname(urdf_path), exist_ok=True)
     link_overrides = link_overrides or {}
     joint_overrides = joint_overrides or {}
@@ -279,6 +285,7 @@ def write_urdf(model, urdf_path, ros_pkg=None, density=None,
     parts = ['<?xml version="1.0"?>', f'<robot name="{model.name}">']
     methods = {}
     bad_inertia = {}
+    mass_only_links = set()
     for comp in model.components:
         xml, method, problems = _link_xml(comp, ros_pkg, rn, mesh_dir=mesh_dir,
                                           density=density)
@@ -286,6 +293,8 @@ def write_urdf(model, urdf_path, ros_pkg=None, density=None,
         methods[method] = methods.get(method, 0) + 1
         if problems:
             bad_inertia[rn(comp.link_name)] = problems
+        if getattr(comp, "mass_only", False):
+            mass_only_links.add(rn(comp.link_name))
     _report_inertia(methods)
     _report_inertia_problems(bad_inertia)
     for joint in model.joints:
@@ -296,7 +305,7 @@ def write_urdf(model, urdf_path, ros_pkg=None, density=None,
     parts.append("</robot>\n")
     with open(urdf_path, "w", encoding="utf-8") as f:
         f.write("\n".join(parts))
-    return urdf_path
+    return mass_only_links
 
 
 PACKAGE_XML = """<?xml version="1.0"?>

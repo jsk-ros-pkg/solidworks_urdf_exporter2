@@ -245,7 +245,8 @@ def _um_live_urdf(pkg_dir, urdf_rel):
         # atomic replace: an async reader (collision / auto-limits) holding this
         # path must never see a truncated file mid-rewrite.  The temp also starts
         # with '.' so a concurrent _resolve_package never picks it as the URDF.
-        data = core.build_urdf(_um["state"], sanitize=False)
+        data = core.build_urdf(_um["state"], sanitize=False,
+                               fold_mass_only=False)
         fd, tmp = tempfile.mkstemp(dir=os.path.dirname(live_path) or ".",
                                    prefix=".live", suffix=".urdf")
         try:
@@ -342,7 +343,7 @@ def _um_colors(state):
 def _um_components(state):
     """The /api/components payload for URDF mode: links straight from the parsed
     URDF, colours from the overlay (no CAD material/density concept here)."""
-    links, colors = {}, {}
+    links, colors, mass_only = {}, {}, []
     for ln in state.links:
         name = ln["name"]
         le = state.link_edits.get(name)
@@ -351,7 +352,10 @@ def _um_components(state):
                        "override": None, "color": col}
         if col:
             colors[name] = col
-    return {"links": links, "excluded": [], "colors": colors}
+        if le and le.mass_only:
+            mass_only.append(name)
+    return {"links": links, "excluded": [], "colors": colors,
+            "mass_only": mass_only}
 
 
 def _um_set_limits(state, limits):
@@ -379,10 +383,13 @@ def _um_set_types(state, changes):
     for ch in changes:
         child, t = ch.get("child"), ch.get("type")
         j = _um_joint_by_child(state, child)
-        if not j or t not in core.JOINT_TYPES:
+        # "mass_only" is a front-end-only joint type -> fixed joint + the child
+        # link flagged mass-only; any real type clears the flag.
+        if not j or t not in (*core.JOINT_TYPES, "mass_only"):
             missed.append(ch)
             continue
-        core.set_joint_type(state, j, t)
+        core.set_joint_type(state, j, "fixed" if t == "mass_only" else t)
+        core.set_mass_only(state, child, t == "mass_only")
         applied.append(child)
     _um_save(state)
     return {"applied": applied, "missed": missed}
@@ -657,6 +664,43 @@ def _link_names_inverse(yml_txt):
     if base and root_name:
         inv[root_name] = base
     return inv
+
+
+def _set_yaml_list_block(txt, key, add=(), remove=(), clear=False,
+                         append_if_absent=True):
+    """Add/remove entries in a top-level ``key:`` list-of-strings block in a
+    joints.yaml (e.g. ``mass_only:`` / ``exclude:``).  ``clear`` empties the
+    block; ``append_if_absent`` puts a freshly created block at the end of the
+    file (vs the start).  Returns ``(new_text, members)`` where ``members`` is
+    the resulting list of names (block dropped entirely when it ends up empty)."""
+    m = re.search(r"(?m)^" + re.escape(key) + r":\n((?:- .*\n)*)", txt)
+    block = m.group(1) if m else ""
+    if clear:
+        block = ""
+    else:
+        for nm in set(add) | set(remove):       # drop existing entries first
+            block = re.sub(r"(?m)^- " + re.escape(nm) + r"\s*$\n?", "", block)
+        for nm in add:
+            block += f"- {nm}\n"
+    new = f"{key}:\n{block}" if block else ""
+    if m:
+        out = txt[:m.start()] + new + txt[m.end():]
+    elif not new:
+        out = txt                               # nothing to write -> no churn
+    elif append_if_absent:
+        out = (txt if txt.endswith("\n") or not txt else txt + "\n") + new
+    else:
+        out = new + txt
+    members = [ln[2:].strip() for ln in block.splitlines()]
+    return out, members
+
+
+def _set_mass_only_members(txt, add, remove):
+    """Add/remove component names in the joints.yaml ``mass_only:`` list block.
+    Returns the updated text (block dropped entirely when it ends up empty)."""
+    if not add and not remove:
+        return txt
+    return _set_yaml_list_block(txt, "mass_only", add=add, remove=remove)[0]
 
 
 def _read_colors(pkg_dir, urdf_rel):
@@ -1834,9 +1878,14 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 # sub-links like 'linkB_1__part_1' are NOT in `links`, which is
                 # built per top-level component, so the viewer keys colours off
                 # this map directly instead of compMeta)
+                # mass-only links (final URDF link names, so they match the
+                # viewer's link names directly) from the build sidecar
+                from sw2robot.exporter.ros_export import _read_mass_only
                 return self._send_json({"links": links,
                                         "excluded": excluded,
-                                        "colors": colors})
+                                        "colors": colors,
+                                        "mass_only": sorted(
+                                            _read_mass_only(cls.pkg_dir))})
             if path == "/api/fs":
                 # tiny server-side file browser: the OS file dialog cannot
                 # hand a PATH to the page, so the page browses through us
@@ -2164,15 +2213,26 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                     if not merged:
                         return txt
                     from sw2robot.exporter.merge import merge_fixed_links_text
-                    return merge_fixed_links_text(txt)
+                    from sw2robot.exporter.ros_export import _read_mass_only
+                    # fold the mass-only links too, so the "merge fixed" preview
+                    # matches what the export produces (build_ros_description folds
+                    # them via the same sidecar).  In URDF mode there is no sidecar
+                    # -> empty set -> a no-op (build_urdf already folded them above).
+                    return merge_fixed_links_text(
+                        txt, force_merge=_read_mass_only(cls.pkg_dir))
                 # URDF-input mode: the URDF URL is the overlay-applied URDF,
                 # computed on the fly so the on-disk file stays the pristine base
                 # (decode first -- urdf_rel is decoded, but the URL may carry %20)
                 if (is_urdf and _um["state"] is not None
                         and not _cad_mode(cls.pkg_dir)):
                     from . import core
+                    # keep mass-only links in the editor view (geometry stripped,
+                    # link + fixed joint preserved) so their joint row stays and
+                    # the user can toggle the flag back off; the merged view DOES
+                    # fold them, matching what the export produces
                     served = _rewrite_package_urls(
-                        core.build_urdf(_um["state"], sanitize=False),
+                        core.build_urdf(_um["state"], sanitize=False,
+                                        fold_mass_only=merged),
                         cls.urdf_rel, cls.pkg_dir)
                     return self._send_bytes(_maybe_merge(served).encode("utf-8"),
                                             "application/xml")
@@ -2309,17 +2369,23 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                         {"error": f"{name}.joints.yaml not found -- this "
                                   f"package predates config templates; "
                                   f"re-extract it once"}, 400)
+                from . import core
                 with open(yml, encoding="utf-8") as f:
                     txt = f.read()
                 linv = _link_names_inverse(txt)   # display -> component
                 applied, missed = [], []
+                # "mass_only" is a front-end-only joint type: it maps to a fixed
+                # joint PLUS the child component on the `mass_only:` list (weight
+                # kept, geometry dropped).  Picking any real type clears it.
+                accepted = (*core.JOINT_TYPES, "mass_only")
+                mass_add, mass_remove = set(), set()
                 for ch in changes:
                     c, t = ch.get("child"), ch.get("type")
                     c = linv.get(c, c)
-                    if t not in ("fixed", "revolute", "continuous",
-                                 "prismatic") or not c:
+                    if t not in accepted or not c:
                         missed.append(ch)
                         continue
+                    eff = "fixed" if t == "mass_only" else t
                     # match by CHILD only: in a spanning tree each link is
                     # a child exactly once, and the URDF renames the root
                     # link to base_link while the yaml keeps the component
@@ -2327,8 +2393,11 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                     pat = re.compile(
                         r"(- parent:\s*\S+\s*\n\s*child:\s*" + re.escape(c)
                         + r"\s*\n\s*type:\s*)\S+")
-                    txt, k = pat.subn(r"\g<1>" + t, txt)
+                    txt, k = pat.subn(r"\g<1>" + eff, txt)
+                    if k:
+                        (mass_add if t == "mass_only" else mass_remove).add(c)
                     (applied if k else missed).append(ch)
+                txt = _set_mass_only_members(txt, mass_add, mass_remove)
                 if applied:
                     _snapshot(cls.pkg_dir, yml,
                               f"joint type x{len(applied)}")
@@ -2655,19 +2724,11 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                           else (f"exclude {names[0][:30]}"
                                 + (f" +{len(names) - 1}" if len(names) > 1
                                    else "")))
-                m = re.search(r"(?m)^exclude:\n((?:- .*\n)*)", txt)
-                block = m.group(1) if m else ""
-                if body.get("clear"):
-                    block = ""
-                else:
-                    for nm in names:
-                        block = re.sub(r"(?m)^- " + re.escape(nm)
-                                       + r"\s*$\n?", "", block)
-                        if body.get("on", True):
-                            block += f"- {nm}\n"
-                new = f"exclude:\n{block}" if block else ""
-                txt = (txt[:m.start()] + new + txt[m.end():]) if m \
-                    else (new + txt)
+                # a freshly created exclude: block goes at the top of the file
+                txt, excluded = _set_yaml_list_block(
+                    txt, "exclude", clear=body.get("clear", False),
+                    add=names if body.get("on", True) else (),
+                    remove=names, append_if_absent=False)
                 with open(yml, "w", encoding="utf-8") as f:
                     f.write(txt)
                 from sw2robot.exporter.export import build
@@ -2678,8 +2739,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                         {"error": f"rebuild failed: {e}"}, 500)
                 print(f"[sw2robot.web] set_exclude: {names} "
                       f"on={body.get('on', True)} clear={body.get('clear')}")
-                return self._send_json({"excluded": [
-                    ln[2:].strip() for ln in block.splitlines()]})
+                return self._send_json({"excluded": excluded})
             if parsed.path == "/api/set_material":
                 cls = type(self)
                 n = int(self.headers.get("Content-Length", 0))

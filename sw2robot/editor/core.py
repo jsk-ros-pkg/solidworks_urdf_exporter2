@@ -49,6 +49,7 @@ __all__ = [
     "set_inertial",
     "set_joint_type",
     "set_limits",
+    "set_mass_only",
     "set_mimic",
     "set_servo",
     "state_path",
@@ -478,6 +479,17 @@ def set_color(state: RobotCompilerState, link: str, color: str | None) -> None:
     state.link_edit_for(link).color = "#" + h
 
 
+def set_mass_only(state: RobotCompilerState, link: str, on: bool = True) -> None:
+    """Mark a link mass-only: :func:`build_urdf` drops its visual/collision and
+    folds its inertial into the fixed parent (weight kept, geometry gone).
+    ``on=False`` clears it (without leaving a stray overlay entry)."""
+    _require_link(state, link)
+    if on:
+        state.link_edit_for(link).mass_only = True
+    elif link in state.link_edits:
+        state.link_edits[link].mass_only = False
+
+
 def set_inertial(state: RobotCompilerState, link: str,
                  mass: float | None = None,
                  com: list | None = None,
@@ -673,7 +685,8 @@ def _sanitize_urdf_names(root) -> None:
             mim.set("joint", jmap[mim.get("joint")])
 
 
-def build_urdf(state: RobotCompilerState, sanitize: bool = True) -> str:
+def build_urdf(state: RobotCompilerState, sanitize: bool = True,
+               fold_mass_only: bool = True) -> str:
     """The CAD URDF with the interactive overlay baked in -- per-joint (rename,
     limits, mimic, axis flip, joint type) AND per-link (colour, inertial) -- so
     the exported package and configs stay consistent.
@@ -682,7 +695,13 @@ def build_urdf(state: RobotCompilerState, sanitize: bool = True) -> str:
     :func:`_sanitize_urdf_names` last, so a CAD-derived URDF is guaranteed free
     of hyphens and other unsafe characters.  Pass ``sanitize=False`` when editing
     a URDF the user opened directly: its names are already its own contract (the
-    viewer shows them, edits reference them), so they must be preserved verbatim."""
+    viewer shows them, edits reference them), so they must be preserved verbatim.
+
+    ``fold_mass_only`` (default) lumps each mass-only link into its fixed parent
+    -- the export representation.  Pass ``False`` for the editor's served URDF so
+    a mass-only link is kept (geometry stripped, link + fixed joint preserved) and
+    stays selectable in the joint tree; otherwise it folds away and the user has
+    no row left to toggle it back off (mirrors how CAD mode keeps the link)."""
     # Preserve XML comments on the round trip: a CAD-exported URDF carries
     # per-link ``<!-- sw2robot material=... density=... inertia=... -->``
     # provenance, and the user may open / edit / re-export it here.  The default
@@ -762,6 +781,16 @@ def build_urdf(state: RobotCompilerState, sanitize: bool = True) -> str:
 
     # per-link overlay: visual colour + inertial (keyed by the base-URDF name,
     # applied before the name sanitize so references stay consistent)
+    # mass-only is valid only on a fixed child (its inertial lumps into the fixed
+    # parent); honour it only there, so a stray flag can't make a movable link
+    # invisible.  Joint types are final by now (the overlay loop above ran).
+    # only the mass-only path needs the child->joint-type map; skip building it
+    # (a full joint sweep) on the common no-mass-only refresh
+    any_mass_only = any(led.mass_only for led in state.link_edits.values())
+    child_jtype = {je.find("child").get("link"): je.get("type")
+                   for je in root.findall("joint")
+                   if je.find("child") is not None} if any_mass_only else {}
+    mass_only = set()
     for le in root.findall("link"):
         led = state.link_edits.get(le.get("name"))
         if led is None:
@@ -770,6 +799,16 @@ def build_urdf(state: RobotCompilerState, sanitize: bool = True) -> str:
             _apply_color(le, led.color)
         if led.mass is not None or led.com is not None or led.inertia is not None:
             _apply_inertial(le, led.mass, led.com, led.inertia)
+        if led.mass_only and child_jtype.get(le.get("name")) == "fixed":
+            for geo in le.findall("visual") + le.findall("collision"):
+                le.remove(geo)              # weight kept (inertial), geometry gone
+            mass_only.add(le.get("name"))
+
+    # fold the mass-only links into their fixed parent so the weight reaches it
+    # (export only; the editor keeps the stripped link so it stays selectable)
+    if mass_only and fold_mass_only:
+        from sw2robot.exporter.merge import merge_fixed_links
+        merge_fixed_links(root, only=mass_only)
 
     # final guarantee: no hyphens/spaces/etc. in any emitted link or joint name
     if sanitize:

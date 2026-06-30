@@ -512,8 +512,16 @@ def build_gui(server, refresh, handles, watcher, robot,
                 flip = server.gui.add_checkbox("flip axis",
                     initial_value=bool(e and e.flip_axis))
                 reverse = server.gui.add_button("⇅ reverse direction (flip axis + swap limits)")
-                jtype = server.gui.add_dropdown("type", ("(keep)", *core.JOINT_TYPES),
-                    initial_value=(e.jtype if e and e.jtype else "(keep)"))
+                # "mass_only" = fixed joint + the child link flagged mass-only
+                # (weight kept, geometry dropped); reflects the child's current flag
+                child_ln = next((j["childLink"] for j in state.joints
+                                 if j["name"] == jn), None)
+                child_le = state.link_edits.get(child_ln) if child_ln else None
+                child_mo = bool(child_le and child_le.mass_only)
+                jtype = server.gui.add_dropdown(
+                    "type", ("(keep)", *core.JOINT_TYPES, "mass_only"),
+                    initial_value=("mass_only" if child_mo
+                                   else (e.jtype if e and e.jtype else "(keep)")))
         panel["handles"] = [angle, rename, lower, upper, set_lo, set_hi, autofit,
                             effort, velocity, servo_model,
                             servo_id, direction, offset, mimic, mult, moff,
@@ -643,12 +651,17 @@ def build_gui(server, refresh, handles, watcher, robot,
             record()
             if jtype.value == "(keep)":
                 state.edit_for(jn).jtype = None
-            else:
-                try:
+                return
+            try:
+                if jtype.value == "mass_only":
+                    core.set_joint_type(state, jn, "fixed")
+                else:
                     core.set_joint_type(state, jn, jtype.value)
-                    edit_status.content = ""
-                except Exception as ex:
-                    edit_status.content = f"⚠️ type: {ex}"
+                if child_ln:               # mass-only flag follows the choice
+                    core.set_mass_only(state, child_ln, jtype.value == "mass_only")
+                edit_status.content = ""
+            except Exception as ex:
+                edit_status.content = f"⚠️ type: {ex}"
 
         def on_actuator(_):
             record()

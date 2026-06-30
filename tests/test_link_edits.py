@@ -259,6 +259,72 @@ def test_link_edits_survive_json_roundtrip(state, tmp_path):
     assert reloaded.link_edits["tip"].com == [0, 0, 0.1]
 
 
+# --------------------------------------------------------------- mass-only
+_FIXED_CHILD_URDF = """<?xml version="1.0"?>
+<robot name="mo">
+  <link name="base">
+    <visual><geometry><box size="1 1 1"/></geometry></visual>
+    <inertial><origin xyz="0 0 0" rpy="0 0 0"/><mass value="2"/>
+      <inertia ixx="1" ixy="0" ixz="0" iyy="1" iyz="0" izz="1"/></inertial>
+  </link>
+  <link name="pcb">
+    <visual><geometry><box size="0.2 0.2 0.2"/></geometry></visual>
+    <inertial><origin xyz="0 0 0" rpy="0 0 0"/><mass value="3"/>
+      <inertia ixx="2" ixy="0" ixz="0" iyy="2" iyz="0" izz="2"/></inertial>
+  </link>
+  <joint name="fix" type="fixed">
+    <origin xyz="1 0 0" rpy="0 0 0"/>
+    <parent link="base"/><child link="pcb"/>
+  </joint>
+</robot>
+"""
+
+
+def _fixed_child_state(tmp_path):
+    p = tmp_path / "urdf" / "mo.urdf"
+    p.parent.mkdir(parents=True)
+    p.write_text(_FIXED_CHILD_URDF, encoding="utf-8")
+    return c.load_module(str(p))
+
+
+def test_mass_only_folds_fixed_child_into_parent(tmp_path):
+    """A mass-only fixed child is dropped from the built URDF and its weight
+    folds into the parent (m=2+3=5), so the geometry is gone but the mass stays."""
+    st = _fixed_child_state(tmp_path)
+    c.set_mass_only(st, "pcb")
+    out = c.build_urdf(st, sanitize=False)
+    root = ET.fromstring(out)
+    links = {l.get("name") for l in root.findall("link")}
+    assert "pcb" not in links                     # folded away
+    base = next(l for l in root.findall("link") if l.get("name") == "base")
+    assert abs(float(base.find("inertial").find("mass").get("value")) - 5.0) < 1e-9
+    assert "pcb" not in out                        # no dangling references
+
+
+def test_mass_only_ignored_on_movable_child_keeps_geometry(state):
+    """mass-only is valid only on a fixed child: on the revolute 'tip' the flag
+    is ignored, so its geometry is kept (no invisible movable link)."""
+    c.set_mass_only(state, "tip")                  # 'tip' hangs off a revolute joint
+    out = c.build_urdf(state, sanitize=False)
+    tip = _link(out, "tip")
+    assert tip is not None and tip.find("visual") is not None
+
+
+def test_set_mass_only_false_clears(tmp_path):
+    st = _fixed_child_state(tmp_path)
+    c.set_mass_only(st, "pcb")
+    c.set_mass_only(st, "pcb", False)
+    assert st.link_edits["pcb"].mass_only is False
+    assert "pcb" in {l.get("name") for l in ET.fromstring(c.build_urdf(st)).findall("link")}
+
+
+def test_mass_only_flag_survives_json_roundtrip(tmp_path):
+    st = _fixed_child_state(tmp_path)
+    c.set_mass_only(st, "pcb")
+    reloaded = c.load_state(c.save_state(st, tmp_path / "s.json"))
+    assert reloaded.link_edits["pcb"].mass_only is True
+
+
 def test_load_edits_merges_link_overlay(state, tmp_path):
     """A saved sidecar's link_edits must be re-applied on the refresh path
     (load_edits), not just the joint edits -- else colours/inertials vanish on

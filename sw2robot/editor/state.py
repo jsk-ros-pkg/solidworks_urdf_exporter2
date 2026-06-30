@@ -49,6 +49,9 @@ class LinkEdit(BaseModel):
     com: list[float] | None = None     # inertial origin xyz [x, y, z] (None = keep)
     # inertia tensor [ixx, ixy, ixz, iyy, iyz, izz] (None = keep)
     inertia: list[float] | None = None
+    # mass-only: drop this link's visual/collision but keep its inertial, then
+    # fold it into its fixed parent on build -- weight kept, geometry gone
+    mass_only: bool = False
 
 
 class RobotCompilerState(BaseModel):

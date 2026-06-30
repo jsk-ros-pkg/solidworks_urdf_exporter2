@@ -35,6 +35,10 @@ class ComponentState(BaseModel):
     sw_mass: float | None = None              # kg
     sw_com: list[float] | None = None         # centre of mass [x,y,z] (m)
     sw_inertia: list[float] | None = None     # (ixx,ixy,ixz,iyy,iyz,izz) about COM
+    # mass-only: keep the part's weight but drop its visual/collision geometry.
+    # Valid only on a fixed child -- its inertial is lumped into the fixed parent
+    # on export, so the parent's mass/inertia accounts for it without a mesh.
+    mass_only: bool = False
 
     def world_matrix(self):
         return np.array(self.world, float).reshape(4, 4)

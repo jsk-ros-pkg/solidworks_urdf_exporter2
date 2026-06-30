@@ -214,6 +214,33 @@ def test_set_type_then_mimic(server):
     assert mim.get("multiplier") == "0.5" and mim.get("offset") == "0.1"
 
 
+def test_mass_only_keeps_selectable_link_but_folds_in_merged_view(server):
+    # mark the fixed-jointed screw link mass-only (front-end "mass-only" type)
+    code, r = _post(server, "/api/set_types",
+                    {"changes": [{"child": SCREW_LINK, "type": "mass_only"}]})
+    assert code == 200 and r["applied"] == [SCREW_LINK]
+    # /api/components reports it -- the front-end reads this to show the option
+    assert SCREW_LINK in _get_json(server, "/api/components")["mass_only"]
+    # editor view: the link + its fixed joint are KEPT (so the joint row stays and
+    # the user can toggle the flag back off) but with the geometry stripped
+    root = _served_urdf(server)
+    screw = _link(root, SCREW_LINK)
+    assert FIXED_JOINT in {j.get("name") for j in root.findall("joint")}
+    assert screw.find("visual") is None and screw.find("collision") is None
+    # merged view (?merged=1): the link folds into its fixed parent, matching the
+    # export -- weight kept above, geometry gone
+    merged = ET.fromstring(_get(server, _get_json(server, "/api/info")["urdf"]
+                                + "?merged=1"))
+    assert SCREW_LINK not in {l.get("name") for l in merged.findall("link")}
+    assert FIXED_JOINT not in {j.get("name") for j in merged.findall("joint")}
+    # switching back to a real type restores the geometry and clears the flag
+    code, _ = _post(server, "/api/set_types",
+                    {"changes": [{"child": SCREW_LINK, "type": "fixed"}]})
+    assert code == 200
+    assert SCREW_LINK not in _get_json(server, "/api/components")["mass_only"]
+    assert _link(_served_urdf(server), SCREW_LINK).find("visual") is not None
+
+
 def test_flip_axis(server):
     base_axis = _joint(_served_urdf(server), REV_JOINT).find("axis").get("xyz")
     code, r = _post(server, "/api/set_axis", {"joints": [REV_JOINT]})
