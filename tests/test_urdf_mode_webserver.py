@@ -413,7 +413,10 @@ def test_reexport_glb_distinct_meshes_same_basename(tmp_path):
         '</link></robot>', encoding="utf-8")
     base, httpd = _start(pkg)
     try:
-        code, data = _get_status(base, "/api/export/zip?ros=1&meshes=glb")
+        # uniform glb (visual + collision) -- collision format now defaults to
+        # stl, so request glb collision explicitly to keep both meshes glb
+        code, data = _get_status(base,
+                                 "/api/export/zip?ros=1&meshes=glb&colfmt=glb")
         assert code == 200, data[:300]
         zf = zipfile.ZipFile(io.BytesIO(data))
         glbs = [n for n in zf.namelist() if n.endswith(".glb")]

@@ -463,6 +463,65 @@ def test_colour_override_repaints_visual_mesh(tmp_path):
     assert (0.07, 0.53, 1.0) not in plain_triples
 
 
+_STL_CTX = (("visual", "stl"), ("collision", "stl"))
+
+
+def test_stl_visual_emits_material_from_override(tmp_path):
+    """An STL <visual> carries no colour, so the per-link override is emitted as a
+    URDF <material><color> (and the collision is stl too)."""
+    import xml.etree.ElementTree as ET
+
+    from sw2robot.exporter.ros_export import build_ros_description
+
+    pkg_dir = _make_pkg(tmp_path, robot="fing")
+    files = dict(build_ros_description(pkg_dir, "fing", ctx_fmt=_STL_CTX,
+                                       colors={"part": "#1188ff"}))
+    # both contexts are stl
+    assert "fing_description/meshes/part.stl" in files
+    assert not any(a.endswith((".dae", ".glb")) for a in files)
+
+    link = ET.fromstring(
+        files["fing_description/urdf/fing_description.urdf"].decode()).find("link")
+    mat = link.find("visual").find("material")
+    assert mat is not None
+    rgba = [round(float(x), 2) for x in mat.find("color").get("rgba").split()]
+    assert rgba[:3] == [0.07, 0.53, 1.0]                  # #1188ff
+    assert link.find("collision").find("material") is None   # collision: no colour
+
+
+def test_stl_visual_material_default_when_no_override(tmp_path):
+    """With no override, the STL <material> uses the default colour (so the link
+    isn't left RViz-default grey)."""
+    import xml.etree.ElementTree as ET
+
+    from sw2robot.exporter.ros_export import (
+        _DEFAULT_VISUAL_RGBA,
+        _rgba_attr,
+        build_ros_description,
+    )
+
+    pkg_dir = _make_pkg(tmp_path, robot="fing")
+    files = dict(build_ros_description(pkg_dir, "fing", ctx_fmt=_STL_CTX))
+    link = ET.fromstring(
+        files["fing_description/urdf/fing_description.urdf"].decode()).find("link")
+    mat = link.find("visual").find("material")
+    assert mat is not None
+    assert mat.find("color").get("rgba") == _rgba_attr(_DEFAULT_VISUAL_RGBA)
+
+
+def test_dae_visual_emits_no_material(tmp_path):
+    """The default dae visual keeps colour in the mesh -> no URDF <material>."""
+    import xml.etree.ElementTree as ET
+
+    from sw2robot.exporter.ros_export import build_ros_description
+
+    pkg_dir = _make_pkg(tmp_path, robot="fing")
+    files = dict(build_ros_description(pkg_dir, "fing"))   # default dae/stl
+    link = ET.fromstring(
+        files["fing_description/urdf/fing_description.urdf"].decode()).find("link")
+    assert link.find("visual").find("material") is None
+
+
 def _two_unit_boxes():
     """Two trivial convex parts (unit cubes), as CoACD returns ``(verts, faces)``
     pairs -- a stand-in for a real decomposition so tests stay fast + CoACD-free."""

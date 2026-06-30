@@ -734,21 +734,40 @@ colour-coded) on top of the visual meshes.">
           <span data-i18n="ui.mergefixed">merge fixed links</span>
         </label>
       </div>
+      <div style="display:flex;gap:6px;align-items:center;margin-bottom:4px;flex-wrap:wrap">
+        <span style="color:#8a93a3;min-width:54px" data-i18n="ui.expvisfmt">visual</span>
+        <select id="expvisfmt" data-i18n-title="t.expvisfmt"
+                title="visual mesh format. dae = colour COLLADA (RViz/Gazebo).
+stl = plain STL; colour is emitted as a URDF <material> (override, else the mesh's
+own colour). glb = colour kept in the mesh (three.js / native-mesh; not RViz-loadable)."
+                style="background:#15171a;color:#cfe3ff;border:1px solid #2d4a35;
+                       border-radius:3px;padding:2px 4px;font-size:11px">
+          <option value="dae">dae</option>
+          <option value="stl">stl</option>
+          <option value="glb">glb</option>
+        </select>
+        <span style="color:#8a93a3" data-i18n="ui.expcolfmt">collision</span>
+        <select id="expcolfmt" data-i18n-title="t.expcolfmt"
+                title="collision mesh format (independent of visual). stl is the ROS
+convention; glb for native-mesh consumers. (CoACD always emits stl parts.)"
+                style="background:#15171a;color:#cfe3ff;border:1px solid #2d4a35;
+                       border-radius:3px;padding:2px 4px;font-size:11px">
+          <option value="stl">stl</option>
+          <option value="glb">glb</option>
+        </select>
+      </div>
       <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">
-        <a id="expdae" href="/api/export/zip?meshes=dae&ros=1" download>
+        <a id="expdae" href="/api/export/zip?ros=1" download>
           <button data-i18n="ui.expdae" data-i18n-title="t.expdae"
-                  title="portable ROS 1 (catkin) package (<name>_description): package://
-URLs, visual = colour COLLADA .dae, collision = .stl (loads in RViz/Gazebo)">
+                  title="portable ROS 1 (catkin) package (<name>_description):
+package:// URLs, meshes in the chosen format">
             ⬇ ROS1 package</button></a>
-        <a id="expros2" href="/api/export/zip?meshes=dae&ros=2" download>
+        <a id="expros2" href="/api/export/zip?ros=2" download>
           <button data-i18n="ui.expros2" data-i18n-title="t.expros2"
                   title="portable ROS 2 (ament_cmake) package (<name>_description):
-package:// URLs, .dae/.stl meshes, plus launch/display.launch.py + rviz config
-(run: ros2 launch <name>_description display.launch.py)">
+package:// URLs, meshes in the chosen format, plus launch/display.launch.py + rviz
+config (run: ros2 launch <name>_description display.launch.py)">
             ⬇ ROS2 package</button></a>
-        <a id="expglb" href="/api/export/zip?meshes=glb&ros=1" download>
-          <button data-i18n-title="t.expglb" title="uniform .glb meshes (colour kept) for three.js /
-skrobot / native-mesh consumers (not RViz-loadable)">⬇ glb</button></a>
       </div>
       <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;margin-top:4px">
         <button id="redetectmimic" data-i18n="ui.redetectmimic"
@@ -1365,14 +1384,18 @@ the config and does NOT re-detect). Needs graph.json (CAD mode).">🔗 re-detect
     'ui.expmeshdir': { en: 'mesh dir', ja: 'メッシュ' },
     't.expmeshdir': { en: "package-relative directory the meshes go in, and that the URDF's package:// refs point at (default 'meshes'). Set it to match a robot whose mesh layout differs, e.g. 'urdf/mesh'. A '/' makes subdirectories.",
                       ja: 'メッシュを置くパッケージ相対ディレクトリ。URDF の package:// 参照もここを指します（既定: meshes）。メッシュ配置がロボットによって異なる場合に設定（例: urdf/mesh）。/ でサブディレクトリ。' },
-    't.expdae': { en: 'portable ROS 1 (catkin) package (<name>_description): package:// URLs, visual = colour COLLADA .dae, collision = .stl (loads in RViz/Gazebo)',
-                  ja: 'ポータブルな ROS 1 (catkin) パッケージ (<name>_description): package:// URL、visual = カラー COLLADA .dae、collision = .stl（RViz/Gazebo で読込可）' },
+    'ui.expvisfmt': { en: 'visual', ja: 'ビジュアル' },
+    't.expvisfmt': { en: "visual mesh format. dae = colour COLLADA (RViz/Gazebo). stl = plain STL; colour is emitted as a URDF <material> (the override, else the mesh's own colour). glb = colour kept in the mesh (three.js / native-mesh; not RViz-loadable).",
+                     ja: 'ビジュアルメッシュ形式。dae = カラー COLLADA（RViz/Gazebo）。stl = STL；色は URDF <material> として出力（オーバーライド、なければメッシュ自身の色）。glb = 色をメッシュに保持（three.js / ネイティブメッシュ向け、RViz 不可）。' },
+    'ui.expcolfmt': { en: 'collision', ja: 'コリジョン' },
+    't.expcolfmt': { en: 'collision mesh format (independent of visual). stl is the ROS convention; glb for native-mesh consumers. (CoACD always emits stl parts.)',
+                     ja: 'コリジョンメッシュ形式（ビジュアルとは独立）。stl が ROS の慣例。glb はネイティブメッシュ向け。（CoACD は常に stl パーツを出力）。' },
+    't.expdae': { en: 'portable ROS 1 (catkin) package (<name>_description): package:// URLs, meshes in the chosen format (loads in RViz/Gazebo)',
+                  ja: 'ポータブルな ROS 1 (catkin) パッケージ (<name>_description): package:// URL、選択した形式のメッシュ（RViz/Gazebo で読込可）' },
     'ui.expdae': { en: '⬇ ROS1 package', ja: '⬇ ROS1 パッケージ' },
-    't.expros2': { en: 'portable ROS 2 (ament_cmake) package (<name>_description): package:// URLs, .dae/.stl meshes, plus launch/display.launch.py + rviz config (run: ros2 launch <name>_description display.launch.py)',
-                  ja: 'ポータブルな ROS 2 (ament_cmake) パッケージ (<name>_description): package:// URL、.dae/.stl メッシュ、launch/display.launch.py + rviz 設定付き（実行: ros2 launch <name>_description display.launch.py）' },
+    't.expros2': { en: 'portable ROS 2 (ament_cmake) package (<name>_description): package:// URLs, meshes in the chosen format, plus launch/display.launch.py + rviz config (run: ros2 launch <name>_description display.launch.py)',
+                  ja: 'ポータブルな ROS 2 (ament_cmake) パッケージ (<name>_description): package:// URL、選択した形式のメッシュ、launch/display.launch.py + rviz 設定付き（実行: ros2 launch <name>_description display.launch.py）' },
     'ui.expros2': { en: '⬇ ROS2 package', ja: '⬇ ROS2 パッケージ' },
-    't.expglb': { en: 'uniform .glb meshes (colour kept) for three.js / skrobot / native-mesh consumers (not RViz-loadable)',
-                  ja: '均一な .glb メッシュ（色は保持）three.js / skrobot / ネイティブメッシュ向け（RVizでは読込不可）' },
     'ui.coacd': { en: 'CoACD collision', ja: 'CoACD 衝突形状' },
     't.coacd': { en: 'Replace <collision> meshes with CoACD convex parts (what physics engines want). Slower: tens of seconds per link, but cached after the first run. Applies to the ROS1/ROS2 packages (not glb); needs the coacd package server-side.',
                  ja: '<collision> メッシュを CoACD の凸パーツ群に置き換えます（物理エンジン向け）。1リンクあたり数十秒と遅いですが、初回以降はキャッシュされます。ROS1/ROS2 パッケージのみ（glb は対象外）。サーバー側に coacd パッケージが必要です。' },
@@ -4256,8 +4279,10 @@ autolimitsBtn.addEventListener('click', async () => {
 const exppkg = document.getElementById('exppkg');
 const expurdf = document.getElementById('expurdf');
 const expmeshdir = document.getElementById('expmeshdir');
-const expLinks = ['expdae', 'expros2', 'expglb']
+const expLinks = ['expdae', 'expros2']
   .map(id => document.getElementById(id)).filter(Boolean);
+const expVisFmt = document.getElementById('expvisfmt');
+const expColFmt = document.getElementById('expcolfmt');
 function exportDefaultName() {
   // mirror the server: sanitise the assembly name to a valid ROS package name
   // ('Assem1' -> 'assem1_description') so the placeholder matches what ships
@@ -4513,22 +4538,23 @@ mergeViewBtn?.addEventListener('click', () => {
 });
 expLinks.forEach(a => a.addEventListener('click', async ev => {
   ev.preventDefault();
-  const base = a.getAttribute('href')
-    .split('&name=')[0].split('&urdf=')[0].split('&meshdir=')[0];
+  // mesh format is orthogonal to ROS version: the button picks the version,
+  // the selectors pick visual + collision format independently
+  const ros = a.id === 'expros2' ? 2 : 1;
+  const vfmt = expVisFmt?.value || 'dae';
+  const cfmt = expColFmt?.value || 'stl';
   const name = (exppkg?.value || '').trim();
   const urdf = (expurdf?.value || '').trim();
   const meshdir = (expmeshdir?.value || '').trim().replace(/^\/+|\/+$/g, '');
-  // coacd + merge-fixed apply to the ROS (.dae) packages, not the uniform glb
-  const coacd = a.id !== 'expglb' && !!coacdBox?.checked;
-  const mergeFixed = a.id !== 'expglb' && !!mergeFixedBox?.checked;
-  const url = base
+  const coacd = !!coacdBox?.checked;
+  const mergeFixed = !!mergeFixedBox?.checked;
+  const url = `/api/export/zip?ros=${ros}&meshes=${vfmt}&colfmt=${cfmt}`
     + (name ? `&name=${encodeURIComponent(name)}` : '')
     + (urdf ? `&urdf=${encodeURIComponent(urdf)}` : '')
     + (meshdir ? `&meshdir=${encodeURIComponent(meshdir)}` : '')
     + (coacd ? `&collision=coacd&cquality=${cqualitySel?.value || 'balanced'}` : '')
     + (mergeFixed ? '&mergefixed=1' : '');
-  const what = a.id === 'expglb' ? 'glb'
-    : a.id === 'expros2' ? 'ROS 2' : 'ROS 1';
+  const what = ros === 2 ? 'ROS 2' : 'ROS 1';
   showLoadbar(t('export.bar', { what }), { indet: true });
   log(t('export.start', { what }));
   try {

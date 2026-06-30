@@ -573,35 +573,38 @@ exec ros2 launch "$PKG" display.launch.py
 """
 
 
-def _export_zip(pkg_dir, robot_name, mesh_fmt="dae", ros_version=1,
-                pkg_name=None, urdf_name=None, colors=None,
+def _export_zip(pkg_dir, robot_name, visual_fmt="dae", collision_fmt="stl",
+                ros_version=1, pkg_name=None, urdf_name=None, colors=None,
                 collision="copy", collision_quality="balanced",
                 merge_fixed=False, mesh_dir=None):
     """ZIP a portable ROS package (package:// URLs), named ``pkg_name`` if given
     else ``<robot_name>_description``; the URDF inside is named ``urdf_name`` if
     given, else the package name.
 
-    ``mesh_fmt='dae'`` (default): ``<visual>`` as colour COLLADA ``.dae`` +
-    ``<collision>`` as plain ``.stl`` -- the RViz/Gazebo-ready variant.
-    ``mesh_fmt='glb'``: a uniform ``.glb`` package (colour kept) for three.js /
-    skrobot / native-mesh consumers (not RViz-loadable).
+    ``visual_fmt`` (``dae`` default / ``stl`` / ``glb``) and ``collision_fmt``
+    (``stl`` default / ``glb``) pick the mesh format per context, independently.
+    ``dae`` visual keeps colour as COLLADA; ``stl`` visual is colourless, so the
+    per-link colour is emitted as a URDF ``<material>`` instead (RViz-friendly);
+    ``glb`` keeps colour in the mesh (three.js / native-mesh consumers; not
+    RViz-loadable).
 
     ``ros_version`` (1 = catkin, 2 = ament_cmake) selects the build files.
     Returns ``(pkg, bytes)`` so the caller can name the download after the
     actual package."""
-    if mesh_fmt not in ("dae", "glb"):
-        raise ValueError(f"unsupported mesh format: {mesh_fmt}")
+    if visual_fmt not in ("dae", "stl", "glb"):
+        raise ValueError(f"unsupported visual mesh format: {visual_fmt}")
+    if collision_fmt not in ("stl", "glb"):
+        raise ValueError(f"unsupported collision mesh format: {collision_fmt}")
 
     import io as _io
     import zipfile
 
     from sw2robot.exporter.ros_export import (
-        GLB_CTX_FMT,
         build_ros_description,
         ros_pkg_name,
     )
     pkg = ros_pkg_name(robot_name, pkg_name)
-    kwargs = {"ctx_fmt": GLB_CTX_FMT} if mesh_fmt == "glb" else {}
+    ctx_fmt = (("visual", visual_fmt), ("collision", collision_fmt))
     buf = _io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         for arc, data in build_ros_description(pkg_dir, robot_name,
@@ -613,7 +616,7 @@ def _export_zip(pkg_dir, robot_name, mesh_fmt="dae", ros_version=1,
                                                collision_quality=collision_quality,
                                                merge_fixed=merge_fixed,
                                                mesh_dir=mesh_dir,
-                                               **kwargs):
+                                               ctx_fmt=ctx_fmt):
             # a node under scripts/ must extract executable (0755) so ament's
             # install(PROGRAMS) + `colcon build --symlink-install` leaves a
             # runnable libexec entry that `ros2 launch` can find
@@ -2026,10 +2029,15 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 cls = type(self)
                 if not cls.pkg_dir:
                     return self._send_json({"error": "no package open"}, 400)
-                fmt = (query.get("meshes") or ["dae"])[0]
-                if fmt not in ("dae", "glb"):
+                visuaL_fmt = (query.get("meshes") or ["dae"])[0]
+                if visuaL_fmt not in ("dae", "stl", "glb"):
                     return self._send_json(
-                        {"error": f"unsupported mesh format: {fmt}"}, 400)
+                        {"error": f"unsupported visual mesh format: {fmt}"}, 400)
+                collision_fmt = (query.get("colfmt") or ["stl"])[0]
+                if collision_fmt not in ("stl", "glb"):
+                    return self._send_json(
+                        {"error": f"unsupported collision mesh format: {colfmt}"},
+                        400)
                 ros = (query.get("ros") or ["1"])[0]
                 if ros not in ("1", "2"):
                     return self._send_json(
@@ -2066,7 +2074,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                               if _cad_mode(cls.pkg_dir)
                               else _um_colors(_um["state"]))
                     with _um_materialized(cls.pkg_dir, cls.urdf_rel):
-                        pkg, data = _export_zip(cls.pkg_dir, cls.robot_name, fmt,
+                        pkg, data = _export_zip(cls.pkg_dir, cls.robot_name, visuaL_fmt,
+                                                collision_fmt,
                                                 ros_version=ros_version,
                                                 pkg_name=pkg_name,
                                                 urdf_name=urdf_name,
@@ -2077,7 +2086,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                                                 mesh_dir=mesh_dir)
                 except ValueError as e:
                     return self._send_json({"error": str(e)}, 400)
-                fname = (f"{cls.robot_name}_glb.zip" if fmt == "glb"
+                fname = (f"{cls.robot_name}_glb.zip"
+                         if visuaL_fmt == "glb" and collision_fmt == "glb"
                          else f"{pkg}.zip")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/zip")
