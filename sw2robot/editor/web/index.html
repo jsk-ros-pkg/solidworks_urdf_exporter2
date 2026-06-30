@@ -115,6 +115,7 @@
   .joint select.t-continuous, .jpanel select.t-continuous { color: #ffc09d; }
   .joint select.t-prismatic, .jpanel select.t-prismatic   { color: #9dc4ff; }
   .joint select.t-fixed, .jpanel select.t-fixed           { color: #888; }
+  .joint select.t-mass_only, .jpanel select.t-mass_only   { color: #d6b36b; }
   /* "move" mode: hide the editor sections, show only the movable-joint sliders */
   #playpanel { display: none; }
   #panel.playmode #picker, #panel.playmode #toolrow,
@@ -197,6 +198,8 @@
   .rn-input:focus { border-color: #6cf; outline: none; }
   .joint .mimictag { font-size: 10px; padding: 0 4px; border-radius: 3px;
                      background: #3d3556; color: #c5b3ff; }
+  .joint .motag { font-size: 10px; padding: 0 4px; border-radius: 3px;
+                  background: #4a3d22; color: #d6b36b; }
   button { background: #3a3f48; color: #ddd; border: 1px solid #555;
            border-radius: 4px; padding: 4px 10px; cursor: pointer; }
   button:hover { background: #474d58; }
@@ -491,6 +494,7 @@
       <button data-bt="revolute" data-i18n="ui.btRevolute">回転</button>
       <button data-bt="continuous" data-i18n="ui.btContinuous">連続回転</button>
       <button data-bt="prismatic" data-i18n="ui.btPrismatic">直動</button>
+      <button data-bt="mass_only" data-i18n="ui.btMassOnly">質量のみ</button>
       <span style="color:#8a93a3;border-left:1px solid #567;padding-left:8px"
             data-i18n="ui.bulkLook">· 見た目:</span>
       <input id="bulk_color" type="color" value="#3b82f6"
@@ -503,6 +507,10 @@
               title="set material (density) on all selected links"
               style="background:#15171a;color:#ddd;border:1px solid #444;
                      border-radius:3px;font-size:11px;max-width:130px"></select>
+      <button id="bulkbardel" class="btn-ico" data-i18n-title="t.bulkDelete"
+              title="Delete the selected link(s) (and their subtrees)"
+              style="color:#ffb4b4;border-left:1px solid #567;padding-left:8px">
+        <span class="ico">🗑</span><span data-i18n="ui.bulkDelete">Delete</span></button>
       <button id="bulkclose" style="margin-left:4px">✕</button>
     </div>
     <div id="linkinfo"></div>
@@ -631,6 +639,7 @@
         <option value="revolute">revolute</option>
         <option value="continuous">continuous</option>
         <option value="prismatic">prismatic</option>
+        <option value="mass_only">mass-only</option>
       </select>
       <button id="bulkset" data-i18n="ui.set">Set</button>
       <button id="bulkdel" class="btn-ico"
@@ -886,6 +895,8 @@ the config and does NOT re-detect). Needs graph.json (CAD mode).">🔗 re-detect
     'row.jnameTitle': { en: a => `joint: ${a.name}\n${a.parent} → ${a.child}`,
                         ja: a => `関節: ${a.name}\n${a.parent} → ${a.child}` },
     'row.eyeTitle': { en: 'show/hide this link', ja: 'このリンクを表示/非表示' },
+    'row.eyeMassOnly': { en: 'mass-only link: no geometry to show/hide',
+                         ja: '質量のみリンク: 表示/非表示できる形状がありません' },
     'row.mkrootTitle': { en: 'make this link the root (re-roots the tree + rebuilds)',
                          ja: 'このリンクをルートにする（ツリーを再ルート化して再ビルド）' },
     'row.rootLinkTitle': { en: 'root link', ja: 'ルートリンク' },
@@ -1299,6 +1310,7 @@ the config and does NOT re-detect). Needs graph.json (CAD mode).">🔗 re-detect
     'ui.btRevolute': { en: 'revolute', ja: '回転' },
     'ui.btContinuous': { en: 'continuous', ja: '連続回転' },
     'ui.btPrismatic': { en: 'prismatic', ja: '直動' },
+    'ui.btMassOnly': { en: 'mass-only', ja: '質量のみ' },
     'ui.playmode': { en: '▶ play', ja: '▶ 動かす' },
     'ui.mimicapply': { en: 'Apply (Enter)', ja: '適用 (Enter)' },
     'ui.fsbrowse': { en: '🗄 Open…', ja: '🗄 開く…' },
@@ -1727,6 +1739,7 @@ let mergedView = false;        // viewer shows the fixed-joint-lumped URDF
 let compMeta = {};             // link -> {material, density, name, override}
 let linkColors = {};           // URDF/viewer link name -> '#rrggbb' override
 let excludedList = [];         // component names excluded from the URDF
+let massOnlyLinks = new Set(); // links flagged mass-only (weight kept, no mesh)
 
 // ---- operation log + diagnostic dump: every user action is recorded, and
 // window.sw2robot.report() ships the session state to the server, so a "now
@@ -1746,6 +1759,8 @@ async function refreshCompMeta() {
       linkColors = r.colors ?? {};   // keyed by viewer link name (composed too)
       applyPersistedColors();     // meta may arrive after geometry-loaded
       excludedList = r.excluded ?? [];
+      // mass-only links (final URDF link names == the viewer's link names)
+      massOnlyLinks = new Set(r.mass_only ?? []);
       const chip = document.getElementById('exclchip');
       chip.style.display = excludedList.length ? '' : 'none';
       chip.textContent = t('excl.chip', { n: excludedList.length });
@@ -2132,14 +2147,19 @@ function buildJointRows(robot) {
         { name: j.name, parent, child })}">` +
       `${child}</span>` +
       (isMimic ? `<span class="mimictag">mimic</span>` : '') +
-      `<select class="jtypesel t-${j.jointType}">` +
-      ['revolute', 'continuous', 'prismatic', 'fixed'].map(t =>
-        `<option value="${t}" ${t === j.jointType ? 'selected' : ''}>${t}` +
-        `</option>`).join('') +
+      (massOnlyLinks.has(child) ? `<span class="motag">mass</span>` : '') +
+      // a mass-only link reads as 'mass_only' (its joint is fixed underneath);
+      // picking any real type clears the flag, picking mass_only sets it
+      `<select class="jtypesel t-${massOnlyLinks.has(child)
+        ? 'mass_only' : j.jointType}">` +
+      typeOptionsHtml(massOnlyLinks.has(child) ? 'mass_only' : j.jointType) +
       `</select>` +
       `<span class="jval">${isMov ? fmtDisp(Number(j.angle)) : ''}</span>` +
+      // a mass-only link has no geometry, so there is nothing to hide/show
       `<button class="eye${hiddenLinks.has(child) ? ' off' : ''}" ` +
-      `title="${t('row.eyeTitle')}">👁</button>` +
+      (massOnlyLinks.has(child)
+        ? `disabled title="${t('row.eyeMassOnly')}"`
+        : `title="${t('row.eyeTitle')}"`) + `>👁</button>` +
       `<button class="mkroot" title="${t('row.mkrootTitle')}">⌂</button>` +
       `</div>` +
       (isMov && !isMimic
@@ -2164,7 +2184,10 @@ function buildJointRows(robot) {
         previewJoint(j.name, v);
       });
     }
-    const rec = { joint: j, row, parent, child, origType: j.jointType,
+    const rec = { joint: j, row, parent, child,
+                  // origType is the DISPLAYED type so the change handler fires
+                  // correctly when toggling mass-only on/off (its joint is fixed)
+                  origType: massOnlyLinks.has(child) ? 'mass_only' : j.jointType,
                   typeSel: row.querySelector('.jtypesel'),
                   pick: row.querySelector('.pick'),
                   slider, val: row.querySelector('.jval'), fmtDisp };
@@ -3295,6 +3318,13 @@ function showSelectionVisuals(name) {
 // --- in-viewer joint editor: clicking a link surfaces its parent joint so the
 // type and angle can be edited right on the model (no scrolling the sidebar) --
 const JTYPES = ['revolute', 'continuous', 'prismatic', 'fixed'];
+// the type dropdowns also offer "mass-only": a fixed joint whose child link
+// keeps its weight but drops its geometry (value 'mass_only', shown 'mass-only')
+const JTYPES_SEL = [...JTYPES, 'mass_only'];
+const typeLabel = t => (t === 'mass_only' ? 'mass-only' : t);
+const typeOptionsHtml = cur => JTYPES_SEL.map(t =>
+  `<option value="${t}" ${t === cur ? 'selected' : ''}>${typeLabel(t)}</option>`)
+  .join('');
 
 function _jointUnit(jtype) {
   const pris = jtype === 'prismatic';
@@ -3331,9 +3361,8 @@ function jointPanelHtml(j, parentLink, childLink) {
   const snaps = [...new Set(cand
     .filter(v => v >= dLo - 1e-6 && v <= dHi + 1e-6)
     .map(v => Math.round(v * 10) / 10))].sort((a, b) => a - b);
-  const typeOpts = JTYPES.map(t =>
-    `<option value="${t}" ${t === j.jointType ? 'selected' : ''}>${t}</option>`)
-    .join('');
+  const curType = massOnlyLinks.has(childLink) ? 'mass_only' : j.jointType;
+  const typeOpts = typeOptionsHtml(curType);
   let body = '';
   if (movable && !mimic) {
     // continuous has no endpoints; revolute/prismatic get editable lo/hi that
@@ -3403,7 +3432,7 @@ function jointPanelHtml(j, parentLink, childLink) {
         `data-old="${j.name}">${j.name}</span></div>` +
       `<div class="jp-row">` +
         `<span class="jp-lbl">${t('jp.lblType')}</span>` +
-        `<select class="jp-type t-${j.jointType}">${typeOpts}</select>` +
+        `<select class="jp-type t-${curType}">${typeOpts}</select>` +
       `</div>` + body +
     `</div>`);
 }
@@ -4041,7 +4070,7 @@ function refreshAfterTypeChange() {
 // overlapping /api/set_types calls would race the shared joints.yaml + build()
 let typePersistChain = Promise.resolve();
 
-async function persistTypeChanges(changes) {
+async function persistTypeChanges(changes, { reload = false } = {}) {
   try {
     const resp = await fetch('/api/set_types', {
       method: 'POST',
@@ -4056,6 +4085,12 @@ async function persistTypeChanges(changes) {
       log(t('types.noneMatched'), 'err');
     } else {
       log(t('types.saved', { n: r.applied.length }), 'ok');
+      // a mass-only toggle changes geometry (strip/restore + fold), so the
+      // optimistic patch was skipped -- reload to show the new link set
+      if (reload && currentInfo) {
+        await refreshCompMeta();
+        loadRobot(currentInfo, { keepPose: true });
+      }
       return;
     }
     // anything the optimistic view changed but the file did NOT accept -> resync
@@ -4071,6 +4106,16 @@ function applyTypeChanges(changes) {
   if (!changes.length || !currentInfo || !viewer.robot) {
     reselectAfterLoad = null;
     return false;
+  }
+  // mass-only toggles (to OR away from) change the built link set -- geometry is
+  // stripped and the link folds into its parent -- which the optimistic in-place
+  // patch can't represent.  Persist and reload the whole batch instead.
+  if (changes.some(ch => ch.type === 'mass_only' || massOnlyLinks.has(ch.child))) {
+    reselectAfterLoad = null;
+    log(t('types.applied', { n: changes.length }));
+    typePersistChain = typePersistChain
+      .then(() => persistTypeChanges(changes, { reload: true }));
+    return true;
   }
   // 1. optimistic in-place patch (instant)
   const patched = [];
@@ -5458,6 +5503,20 @@ function clearBoxSelection() {
 }
 document.getElementById('bulkclose').addEventListener('click', clearBoxSelection);
 
+// delete every box-selected link AND its subtree in one rebuild -- mirrors the
+// sidebar 🗑 bulk delete, but over the 3D box selection.  Ctrl+Z restores.
+document.getElementById('bulkbardel').addEventListener('click', () => {
+  const sel = [...boxSelected];
+  if (!sel.length || !currentInfo) { return; }
+  const links = new Set();
+  for (const c of sel) { for (const n of linkSubtree(c)) { links.add(n); } }
+  const comps = [...new Set([...links].map(n => compMeta[n]?.name ?? n))];
+  if (!confirm(t('bulk.delConfirm', { n: sel.length }))) { return; }
+  clearBoxSelection();
+  selectLink(null);
+  setExclude({ names: comps, on: true }, t('bulk.deleting', { n: sel.length }));
+});
+
 // ---- mimic linking: select a MASTER joint, press m, then click other joints
 // to make them follow it; one URDF rebuild on apply.  For fingers: one driven
 // joint + several coupled phalanges. ----------------------------------------
@@ -5590,7 +5649,11 @@ function bulkSetType(type) {
   const changes = [];
   for (const c of links) {
     const rec = byChild.get(c);
-    if (rec && rec.joint.jointType !== type) {
+    if (!rec) { continue; }
+    // compare against the DISPLAYED type so a mass-only link reads as 'mass_only'
+    // (its joint is fixed) -- lets us skip no-ops and still clear it for a real type
+    const cur = massOnlyLinks.has(rec.child) ? 'mass_only' : rec.joint.jointType;
+    if (cur !== type) {
       changes.push({ name: rec.joint.name, parent: rec.parent,
                      child: rec.child, type });
     }

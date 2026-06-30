@@ -342,7 +342,7 @@ def _um_colors(state):
 def _um_components(state):
     """The /api/components payload for URDF mode: links straight from the parsed
     URDF, colours from the overlay (no CAD material/density concept here)."""
-    links, colors = {}, {}
+    links, colors, mass_only = {}, {}, []
     for ln in state.links:
         name = ln["name"]
         le = state.link_edits.get(name)
@@ -351,7 +351,10 @@ def _um_components(state):
                        "override": None, "color": col}
         if col:
             colors[name] = col
-    return {"links": links, "excluded": [], "colors": colors}
+        if le and le.mass_only:
+            mass_only.append(name)
+    return {"links": links, "excluded": [], "colors": colors,
+            "mass_only": mass_only}
 
 
 def _um_set_limits(state, limits):
@@ -1854,9 +1857,14 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 # sub-links like 'linkB_1__part_1' are NOT in `links`, which is
                 # built per top-level component, so the viewer keys colours off
                 # this map directly instead of compMeta)
+                # mass-only links (final URDF link names, so they match the
+                # viewer's link names directly) from the build sidecar
+                from sw2robot.exporter.ros_export import _read_mass_only
                 return self._send_json({"links": links,
                                         "excluded": excluded,
-                                        "colors": colors})
+                                        "colors": colors,
+                                        "mass_only": sorted(
+                                            _read_mass_only(cls.pkg_dir))})
             if path == "/api/fs":
                 # tiny server-side file browser: the OS file dialog cannot
                 # hand a PATH to the page, so the page browses through us

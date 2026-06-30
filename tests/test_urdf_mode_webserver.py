@@ -214,6 +214,25 @@ def test_set_type_then_mimic(server):
     assert mim.get("multiplier") == "0.5" and mim.get("offset") == "0.1"
 
 
+def test_mass_only_folds_fixed_child_and_reports_in_components(server):
+    # mark the fixed-jointed screw link mass-only (front-end "mass-only" type)
+    code, r = _post(server, "/api/set_types",
+                    {"changes": [{"child": SCREW_LINK, "type": "mass_only"}]})
+    assert code == 200 and r["applied"] == [SCREW_LINK]
+    # /api/components reports it -- the front-end reads this to show the option
+    assert SCREW_LINK in _get_json(server, "/api/components")["mass_only"]
+    # served URDF: the link + its fixed joint are folded away (weight kept above)
+    root = _served_urdf(server)
+    assert SCREW_LINK not in {l.get("name") for l in root.findall("link")}
+    assert FIXED_JOINT not in {j.get("name") for j in root.findall("joint")}
+    # switching back to a real type restores the link and clears the flag
+    code, _ = _post(server, "/api/set_types",
+                    {"changes": [{"child": SCREW_LINK, "type": "fixed"}]})
+    assert code == 200
+    assert SCREW_LINK not in _get_json(server, "/api/components")["mass_only"]
+    assert SCREW_LINK in {l.get("name") for l in _served_urdf(server).findall("link")}
+
+
 def test_flip_axis(server):
     base_axis = _joint(_served_urdf(server), REV_JOINT).find("axis").get("xyz")
     code, r = _post(server, "/api/set_axis", {"joints": [REV_JOINT]})

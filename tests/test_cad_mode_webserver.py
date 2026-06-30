@@ -151,6 +151,32 @@ def test_set_limits_then_undo(server):
 
 
 # --------------------------------------------------------------- set_mimic
+def test_mass_only_keeps_stripped_link_in_working_urdf(server):
+    """CAD mode: marking a fixed child mass-only writes type: fixed + the
+    mass_only: list and rebuilds.  The working URDF KEEPS the link (so it stays
+    selectable in the tree) but with its geometry stripped; the export folds it."""
+    base, pkg = server
+    code, _ = _post(base, "/api/set_types",
+                    {"changes": [{"child": SCREW_LINK, "type": "mass_only"}]})
+    assert code == 200
+    # reported to the front-end + persisted in joints.yaml
+    assert SCREW_LINK in _get_json(base, "/api/components")["mass_only"]
+    assert "mass_only:" in _joints_yaml(pkg)
+    # working URDF: link present (selectable) but geometry dropped
+    screw = next((l for l in _served_urdf(base).findall("link")
+                  if l.get("name") == SCREW_LINK), None)
+    assert screw is not None
+    assert screw.find("visual") is None and screw.find("collision") is None
+    # switching back to a real type restores the geometry and clears the flag
+    code, _ = _post(base, "/api/set_types",
+                    {"changes": [{"child": SCREW_LINK, "type": "fixed"}]})
+    assert code == 200
+    assert SCREW_LINK not in _get_json(base, "/api/components")["mass_only"]
+    screw = next(l for l in _served_urdf(base).findall("link")
+                 if l.get("name") == SCREW_LINK)
+    assert screw.find("visual") is not None
+
+
 def test_set_mimic_reflected_without_rebuild(server):
     base, pkg = server
     # make the fixed joint movable first (set_types still uses build() in CAD --
