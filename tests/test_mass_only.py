@@ -111,6 +111,43 @@ def test_read_mass_only_sidecar_roundtrip(tmp_path):
     assert _read_mass_only(str(tmp_path)) == {"pcb", "wiring"}
 
 
+# --------------------------------------------------------------- editor wiring
+
+def test_set_mass_only_members_adds_and_removes():
+    """The CAD set_types helper toggles names in the joints.yaml mass_only list."""
+    from sw2robot.editor.webserver import _set_mass_only_members
+    txt = "base: x\njoints:\n  - parent: a\n    child: pcb\n    type: fixed\n"
+    added = _set_mass_only_members(txt, {"pcb"}, set())
+    assert "mass_only:\n- pcb\n" in added
+    # selecting a real type later removes it again (empty list -> block dropped)
+    cleared = _set_mass_only_members(added, set(), {"pcb"})
+    assert "- pcb" not in cleared and "mass_only:" not in cleared
+
+
+def test_um_set_types_maps_mass_only_to_fixed_plus_flag(tmp_path):
+    """URDF-mode: a 'mass_only' type change sets the joint fixed AND flags the
+    child link mass-only; switching to a real type clears the flag."""
+    import sw2robot.editor.core as core
+    from sw2robot.editor.webserver import _um_set_types, _um
+    urdf = ('<robot name="r"><link name="a"/><link name="b"/>'
+            '<joint name="j" type="revolute"><parent link="a"/><child link="b"/>'
+            '<axis xyz="0 0 1"/><limit lower="-1" upper="1" effort="1" '
+            'velocity="1"/></joint></robot>')
+    p = tmp_path / "urdf" / "r.urdf"
+    p.parent.mkdir(parents=True)
+    p.write_text(urdf, encoding="utf-8")
+    st = core.load_module(str(p))
+    _um["state"] = st
+
+    _um_set_types(st, [{"child": "b", "type": "mass_only"}])
+    assert st.edits["j"].jtype == "fixed"
+    assert st.link_edits["b"].mass_only is True
+
+    _um_set_types(st, [{"child": "b", "type": "revolute"}])
+    assert st.edits["j"].jtype == "revolute"
+    assert st.link_edits["b"].mass_only is False
+
+
 def test_build_writes_mass_only_sidecar_for_export(tmp_path):
     """End-to-end through build(): the working URDF keeps the stripped link, and
     a mass_only.yaml sidecar lists its final name so the detached ROS export can

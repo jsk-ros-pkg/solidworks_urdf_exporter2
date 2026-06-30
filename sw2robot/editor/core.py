@@ -48,6 +48,7 @@ __all__ = [
     "set_color",
     "set_inertial",
     "set_joint_type",
+    "set_mass_only",
     "set_limits",
     "set_mimic",
     "set_servo",
@@ -478,6 +479,17 @@ def set_color(state: RobotCompilerState, link: str, color: str | None) -> None:
     state.link_edit_for(link).color = "#" + h
 
 
+def set_mass_only(state: RobotCompilerState, link: str, on: bool = True) -> None:
+    """Mark a link mass-only: :func:`build_urdf` drops its visual/collision and
+    folds its inertial into the fixed parent (weight kept, geometry gone).
+    ``on=False`` clears it (without leaving a stray overlay entry)."""
+    _require_link(state, link)
+    if on:
+        state.link_edit_for(link).mass_only = True
+    elif link in state.link_edits:
+        state.link_edits[link].mass_only = False
+
+
 def set_inertial(state: RobotCompilerState, link: str,
                  mass: float | None = None,
                  com: list | None = None,
@@ -762,6 +774,13 @@ def build_urdf(state: RobotCompilerState, sanitize: bool = True) -> str:
 
     # per-link overlay: visual colour + inertial (keyed by the base-URDF name,
     # applied before the name sanitize so references stay consistent)
+    # mass-only is valid only on a fixed child (its inertial lumps into the fixed
+    # parent); honour it only there, so a stray flag can't make a movable link
+    # invisible.  Joint types are final by now (the overlay loop above ran).
+    child_jtype = {je.find("child").get("link"): je.get("type")
+                   for je in root.findall("joint")
+                   if je.find("child") is not None}
+    mass_only = set()
     for le in root.findall("link"):
         led = state.link_edits.get(le.get("name"))
         if led is None:
@@ -770,6 +789,15 @@ def build_urdf(state: RobotCompilerState, sanitize: bool = True) -> str:
             _apply_color(le, led.color)
         if led.mass is not None or led.com is not None or led.inertia is not None:
             _apply_inertial(le, led.mass, led.com, led.inertia)
+        if led.mass_only and child_jtype.get(le.get("name")) == "fixed":
+            for geo in le.findall("visual") + le.findall("collision"):
+                le.remove(geo)              # weight kept (inertial), geometry gone
+            mass_only.add(le.get("name"))
+
+    # fold the mass-only links into their fixed parent so the weight reaches it
+    if mass_only:
+        from sw2robot.exporter.merge import merge_fixed_links
+        merge_fixed_links(root, only=mass_only)
 
     # final guarantee: no hyphens/spaces/etc. in any emitted link or joint name
     if sanitize:

@@ -379,10 +379,13 @@ def _um_set_types(state, changes):
     for ch in changes:
         child, t = ch.get("child"), ch.get("type")
         j = _um_joint_by_child(state, child)
-        if not j or t not in core.JOINT_TYPES:
+        # "mass_only" is a front-end-only joint type -> fixed joint + the child
+        # link flagged mass-only; any real type clears the flag.
+        if not j or t not in core.JOINT_TYPES + ("mass_only",):
             missed.append(ch)
             continue
-        core.set_joint_type(state, j, t)
+        core.set_joint_type(state, j, "fixed" if t == "mass_only" else t)
+        core.set_mass_only(state, child, t == "mass_only")
         applied.append(child)
     _um_save(state)
     return {"applied": applied, "missed": missed}
@@ -657,6 +660,23 @@ def _link_names_inverse(yml_txt):
     if base and root_name:
         inv[root_name] = base
     return inv
+
+
+def _set_mass_only_members(txt, add, remove):
+    """Add/remove component names in the joints.yaml ``mass_only:`` list block.
+    Returns the updated text (block dropped entirely when it ends up empty)."""
+    if not add and not remove:
+        return txt
+    m = re.search(r"(?m)^mass_only:\n((?:- .*\n)*)", txt)
+    block = m.group(1) if m else ""
+    for nm in set(add) | set(remove):           # drop existing entries first
+        block = re.sub(r"(?m)^- " + re.escape(nm) + r"\s*$\n?", "", block)
+    for nm in add:
+        block += f"- {nm}\n"
+    new = f"mass_only:\n{block}" if block else ""
+    if m:
+        return txt[:m.start()] + new + txt[m.end():]
+    return (txt if txt.endswith("\n") or not txt else txt + "\n") + new
 
 
 def _read_colors(pkg_dir, urdf_rel):
@@ -2313,13 +2333,18 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                     txt = f.read()
                 linv = _link_names_inverse(txt)   # display -> component
                 applied, missed = [], []
+                # "mass_only" is a front-end-only joint type: it maps to a fixed
+                # joint PLUS the child component on the `mass_only:` list (weight
+                # kept, geometry dropped).  Picking any real type clears it.
+                mass_add, mass_remove = set(), set()
                 for ch in changes:
                     c, t = ch.get("child"), ch.get("type")
                     c = linv.get(c, c)
                     if t not in ("fixed", "revolute", "continuous",
-                                 "prismatic") or not c:
+                                 "prismatic", "mass_only") or not c:
                         missed.append(ch)
                         continue
+                    eff = "fixed" if t == "mass_only" else t
                     # match by CHILD only: in a spanning tree each link is
                     # a child exactly once, and the URDF renames the root
                     # link to base_link while the yaml keeps the component
@@ -2327,8 +2352,11 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                     pat = re.compile(
                         r"(- parent:\s*\S+\s*\n\s*child:\s*" + re.escape(c)
                         + r"\s*\n\s*type:\s*)\S+")
-                    txt, k = pat.subn(r"\g<1>" + t, txt)
+                    txt, k = pat.subn(r"\g<1>" + eff, txt)
+                    if k:
+                        (mass_add if t == "mass_only" else mass_remove).add(c)
                     (applied if k else missed).append(ch)
+                txt = _set_mass_only_members(txt, mass_add, mass_remove)
                 if applied:
                     _snapshot(cls.pkg_dir, yml,
                               f"joint type x{len(applied)}")
