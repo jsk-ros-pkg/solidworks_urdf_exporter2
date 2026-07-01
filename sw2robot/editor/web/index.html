@@ -1671,6 +1671,10 @@ try {
 const viewer = document.getElementById('viewer');
 const jointsEl = document.getElementById('joints');
 
+// suppress the browser's native right-click menu ("copy/save image", ...) on
+// the viewport -- it hijacks the right-drag pan gesture mid-motion
+viewer.addEventListener('contextmenu', ev => ev.preventDefault());
+
 // every helper visual (axes, triads, TF, grid, face overlay) must be
 // INVISIBLE TO RAYCASTS: the element's drag controls raycast the whole
 // scene, and three.js hits Line objects within a 1 m (!) default
