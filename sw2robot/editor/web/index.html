@@ -1178,6 +1178,8 @@ the config and does NOT re-detect). Needs graph.json (CAD mode).">🔗 re-detect
     'fit.bigBox': { en: 'bbox is >100 m — mesh units look wrong (mm leaking through?)',
                     ja: '境界ボックスが 100m 超 — メッシュ単位が怪しい（mm が混入？）' },
     'fit.ok': { en: 'camera fitted ✓', ja: 'カメラを調整しました ✓' },
+    'pivot.focused': { en: a => `orbit centred on ${a.link}`, ja: a => `${a.link} を回転中心にしました` },
+    'pivot.recentered': { en: 'orbit recentred on model', ja: 'モデル中心に回転中心を戻しました' },
     // urdf load
     'urdf.parsed': { en: a => `URDF parsed ✓ — ${a.n} links, ${a.m} movable joints`,
                      ja: a => `URDF を解析 ✓ — ${a.n} リンク、可動関節 ${a.m}` },
@@ -1694,6 +1696,24 @@ function headlight() {
 }
 viewer.controls.addEventListener('change', headlight);
 headlight();
+// right-drag pans in the camera's image plane (not parallel to the ground),
+// so panning behaves the same regardless of how the model is oriented
+viewer.controls.screenSpacePanning = true;
+// urdf-viewer._updateEnvironment() runs EVERY frame and pins controls.target.y
+// to the model centre. That clobber fights any pan/focus that moves the orbit
+// point vertically -- the pivot snaps back to mid-height and the camera pitches
+// on the next frame. The `no-auto-recenter` attribute is SUPPOSED to disable it
+// but does not in urdf-loader 0.12.7 (verified: _updateEnvironment still fires
+// ~every frame with the attribute set). So wrap it to preserve OUR target -- it
+// still positions the shadow plane/light, which we don't use, so nothing else
+// changes. We drive the camera ourselves (setView/fitView, double-click, V).
+viewer.setAttribute('no-auto-recenter', '');     // harmless; in case a build honours it
+const _origUpdateEnv = viewer._updateEnvironment.bind(viewer);
+viewer._updateEnvironment = function () {
+  const savedTarget = viewer.controls.target.clone();
+  _origUpdateEnv();
+  viewer.controls.target.copy(savedTarget);      // undo the target.y clobber
+};
 
 // the element's default highlight (Phong) renders black in this scene --
 // replace it with the same material family as the GLB meshes, with an
@@ -4638,7 +4658,8 @@ function setView(name) {
   viewer.camera.up.set(0, 1, 0);
   if (name === 'top') { viewer.camera.up.set(0, 0, -1); }
   if (name === 'bottom') { viewer.camera.up.set(0, 0, 1); }
-  viewer.camera.near = Math.max(diag / 100, 0.001);
+  // small near floor so dollying right up to a small inner part doesn't clip it
+  viewer.camera.near = Math.max(diag / 1000, 1e-4);
   viewer.camera.far = Math.max(diag * 100, 50);
   viewer.camera.updateProjectionMatrix();
   viewer.controls.target.copy(center);
@@ -5737,6 +5758,8 @@ window.addEventListener('keydown', ev => {
     resetPose();                        // all joints back to 0 (neutral pose)
   } else if (ev.key === 'c' || ev.key === 'C') {
     resetView();                        // whole viewer back to the loaded state
+  } else if (ev.key === 'v' || ev.key === 'V') {
+    recenterPan();                      // re-centre orbit on model (keep position)
   } else if ((ev.key === 'r' || ev.key === 'R') && target) {
     reRoot(target);
     selectLink(null);
@@ -5756,7 +5779,49 @@ viewer.addEventListener('dblclick', () => {
     rec.row.style.outline = '2px solid #ffe93d';
     setTimeout(() => { rec.row.style.outline = ''; }, 1200);
   }
+  // Double-click sets the orbit BASE to this link's frame origin. Right-drag pan
+  // then accumulates on top; V snaps back here. setOrbitCenter translates the rig
+  // (no rotation) so the link lands dead-centre.
+  if (viewer.robot?.links?.[hoveredLink]) {
+    orbitBaseLink = hoveredLink;
+    setOrbitCenter(orbitBasePoint());
+    log(t('pivot.focused', { link: hoveredLink }));
+  }
 });
+
+// The orbit BASE: null = robot bbox centre (default / after C); otherwise a link
+// whose frame origin we orbit. Set by double-click, cleared by C. Right-drag pan
+// rides on top of this (controls.target = base + pan); V removes the pan.
+let orbitBaseLink = null;
+function orbitBasePoint() {
+  const link = orbitBaseLink && viewer.robot?.links?.[orbitBaseLink];
+  if (link) { return link.getWorldPosition(new THREE.Vector3()); }
+  const box = robotBox();                    // fallback: robot centre
+  return box ? box.getCenter(new THREE.Vector3()) : new THREE.Vector3();
+}
+
+// Make a world point the orbit pivot WITHOUT rotating the camera. We translate
+// the whole rig (camera + target) by the same delta, so the camera's orientation
+// and zoom are untouched (no pitch/yaw) and the point lands exactly where the old
+// centred pivot was -- screen centre (0.5,0.5). Requires no-auto-recenter (set
+// above) or the target height is clobbered back each frame, which re-introduces
+// the pitch. Shared by double-click focus and V.
+function setOrbitCenter(p) {
+  viewer.camera.position.add(p.clone().sub(viewer.controls.target));
+  viewer.controls.target.copy(p);
+  viewer.controls.update();
+  viewer.redraw();
+}
+
+// V: reset the pan offset -- translate the rig back so the orbit BASE (the
+// double-clicked link, or the robot centre if none) is dead-centre again. No
+// rotation. Lighter than C, which fully reframes to iso.
+function recenterPan() {
+  if (!viewer.robot) { log(t('fit.emptyBox'), 'err'); return; }
+  setOrbitCenter(orbitBasePoint());
+  log(orbitBaseLink ? t('pivot.focused', { link: orbitBaseLink })
+                    : t('pivot.recentered'), 'ok');
+}
 
 function fitView() {
   const box = robotBox();
@@ -5771,7 +5836,9 @@ function fitView() {
     log(t('fit.bigBox'), 'wrn');
   }
   const diag = size.length();
-  viewer.controls.minDistance = Math.min(0.25, diag / 5);
+  // tiny non-zero floor: let the camera dolly right inside the assembly to
+  // inspect inner parts
+  viewer.controls.minDistance = Math.max(diag / 1000, 1e-4);
   setView('iso');
   log(t('fit.ok'), 'ok');
 }
@@ -5954,6 +6021,7 @@ function resetView() {
   alignBtn.classList.remove('active');
   portBtn.classList.remove('active');
   clearFaceOverlay();
+  orbitBaseLink = null;          // orbit base back to the robot centre
   setView('iso');
   log(t('view.reset'), 'ok');
 }
