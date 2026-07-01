@@ -145,6 +145,11 @@ Everything below edits the package server-side and rebuilds the URDF in place
 **auto joint-limit** sweep, per-link materials/densities, a `tf` view (frame
 triads + parent links), and a sizeable ground grid.
 
+**Navigation** — left-drag orbits, right-drag pans, the wheel dollies right into
+the assembly so you can inspect internal parts. **Double-click a link** to make
+it the orbit centre (then orbit and zoom around that part); press **`v`** to
+recentre the orbit on it, or **`c`** for a full view reset.
+
 **Keyboard shortcuts** (with a link selected or hovered):
 
 | Key | Action |
@@ -155,10 +160,11 @@ triads + parent links), and a sizeable ground grid.
 | `r` / `R` | **make root** at this link |
 | `Del` / `Backspace` | delete the link **+ its subtree** |
 | `0` / `Home` | reset **pose** (all joints to 0) |
-| `c` | reset the **view** |
+| `c` | reset the **view** (pose, iso camera, orbit back on the model) |
+| `v` | **recentre** the orbit on the focused link (or model), keeping your angle/zoom |
 | `Esc` | clear selection / cancel the current mode |
-| `click` · `dbl-click` · `Shift+drag` | select · jump to its tree row · box-select a range |
-| mouse | left-drag orbit · right-drag pan · wheel zoom |
+| `click` · `dbl-click` · `Shift+drag` | select · **focus** (orbit around it + jump to its tree row) · box-select a range |
+| mouse | left-drag orbit · right-drag pan · wheel zoom (dollies right inside the model) |
 
 In a port/end-coords placement session the gizmo owns the keys: `g` move,
 `r` rotate, `Esc` cancel.
