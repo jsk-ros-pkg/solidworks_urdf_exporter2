@@ -56,7 +56,11 @@ jobs:
             arch: arm64
             ext: '.zip'
             build_args: ''
-          - runner: ubuntu-latest
+          # Pin to ubuntu-22.04 (GLIBC 2.35), NOT ubuntu-latest (24.04, GLIBC
+          # 2.38).  glibc is backward-compatible, so a binary frozen against the
+          # OLDER 2.35 runs on both 22.04 and 24.04; freezing against 2.38 fails
+          # on 22.04 with "GLIBC_2.38 not found".  See issue #113.
+          - runner: ubuntu-22.04
             os: linux
             arch: x64
             ext: ''

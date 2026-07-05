@@ -100,6 +100,10 @@ chmod +x sw2robot-web-linux-x64-v<version>          # mark it executable once
 ./sw2robot-web-linux-x64-v<version> --port 8090     # opens http://localhost:8090
 ```
 
+The binary is frozen against GLIBC 2.35, so it runs on **Ubuntu 22.04 or newer**
+(22.04, 24.04, …).  On older distros you may hit a `GLIBC_2.xx not found` error
+at launch — in that case run from source (Option B below) instead.
+
 **Option B — run from source** (see [Install from source](#install-from-source-developers)
 below):
 
