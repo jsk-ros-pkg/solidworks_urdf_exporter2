@@ -33,6 +33,37 @@ One import package, with two subpackages:
   drag, **auto joint limits** from a self-collision sweep, and export a ROS /
   robot-compiler package.
 
+## How sw2robot relates to the classic exporter
+
+sw2robot builds on — and is inspired by — the great, long-standing
+[`solidworks_urdf_exporter`](https://github.com/ros/solidworks_urdf_exporter)
+SolidWorks add-in. The two tools solve the same first mile differently, and they
+**compose** rather than compete:
+
+- **The kinematic tree is inferred, not hand-built.** The classic add-in asks you
+  to lay out the link hierarchy and set each joint's origin and axis by hand
+  inside SolidWorks. sw2robot instead **reads the assembly's existing mates
+  (constraints)** to infer the link tree and joint axes automatically — then lets
+  you correct anything it got wrong in the browser editor, rather than building it
+  from scratch.
+- **Editing is cross-platform.** Only the *extract* step needs Windows +
+  SolidWorks; *edit / build / export* run natively on Windows, macOS, and Linux
+  from a single prebuilt binary — no SolidWorks and no Python.
+- **It also edits URDFs the classic exporter produced.** Already exporting with
+  the classic add-in? Open that `.urdf` in sw2robot's editor to re-root the tree,
+  retype joints, add limits/mimic, place end-coord frames, and re-export a ROS
+  package. sw2robot works on *any* URDF, not only its own output.
+
+Which one fits depends on your workflow, not on which is "better":
+
+| | classic `solidworks_urdf_exporter` | sw2robot |
+| --- | --- | --- |
+| Extract (assembly → URDF) | Windows + SolidWorks | Windows + SolidWorks |
+| Link tree & joint axes | set by hand in SolidWorks | inferred from mates, then edited |
+| Edit / build / export | inside SolidWorks (Windows) | Windows / macOS / Linux |
+| Edit an existing URDF | — | ✓ (any URDF, not just its own) |
+| Install | SolidWorks add-in | single prebuilt binary (no Python) |
+
 ## Quick start — download the Windows `.exe` (no Python)
 
 If you just want to convert a SolidWorks assembly, you don't need to install
