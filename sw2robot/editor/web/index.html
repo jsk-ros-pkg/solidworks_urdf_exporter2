@@ -592,6 +592,9 @@
       <button id="bug" data-i18n-title="t.bug"
               title="壊れたらこれ: 操作ログ+状態をサーバーに送る">🐞
       </button>
+      <button id="savelog" data-i18n-title="t.savelog"
+              title="操作ログをダウンロード。クリック: .txt ・ Shift+クリック: .json">⤓
+      </button>
     </div>
     <div id="autorow">
       <button id="autolimits" style="width:100%" data-i18n="ui.autolimits"
@@ -1399,6 +1402,9 @@ the config and does NOT re-detect). Needs graph.json (CAD mode).">🔗 re-detect
     't.renamelist': { en: 'rename joints/links in a list', ja: '関節名・リンク名を一覧で改名' },
     'ui.renamelist': { en: '≣ rename', ja: '≣ 改名' },
     't.bug': { en: 'broken? this sends the op-log + state to the server', ja: '壊れたらこれ: 操作ログ+状態をサーバーに送る' },
+    't.savelog': { en: 'download the action log (what you did). Click: readable .txt · Shift+click: raw .json (for replay).',
+                   ja: '操作ログ（何をしたか）をダウンロード。クリック: 読みやすい .txt ・ Shift+クリック: 生 .json（再生用）。' },
+    'log.saved': { en: a => `⤓ saved ${a.file} (${a.n} actions)`, ja: a => `⤓ ${a.file} を保存しました（${a.n} 操作）` },
     't.autolimits': { en: 'sweep each rotary joint over ±2π(±360°) to the self-collision angle (coarse scan + binary search) and auto-set lower/upper. Joints free over the full ±2π become continuous. Ctrl+Z to undo.',
                       ja: '各回転関節を ±2π(±360°)の範囲で自己干渉が起きる角度まで掃引(粗スキャン+二分探索)して lower/upper を自動設定。±2π まで自由に回る関節は continuous に。Ctrl+Zで戻せます' },
     'ui.autolimits': { en: '🛠 auto joint limits (self-collision, ±2π)', ja: '🛠 自動関節リミット (自己干渉, ±2π)' },
@@ -1870,6 +1876,70 @@ function op(name, args = {}) {
   if (oplog.length > 400) { oplog.splice(0, 100); }
   // notify live listeners; a bad subscriber must never break the action itself
   for (const fn of opSubs) { try { fn(entry); } catch { /* ignore */ } }
+}
+
+// Human-readable label for a semantic action from the op() stream -- the
+// shared vocabulary used by the screencast overlay, the log export, and (later)
+// replay.  View navigation (orbit/pan/zoom) never calls op(), so it can't
+// appear here: the noise is gone by construction, not by filtering.  An unknown
+// op falls back to a Title-cased name, so a newly-instrumented action shows up
+// for free (add a nicer entry here when you want one).
+const OP_LABEL = {
+  select:      a => a.link ? 'Select: ' + a.link : 'Deselect',
+  setColor:    a => 'Colour: ' + a.link,
+  eye:         a => (a.hide ? 'Hide: ' : 'Show: ') + a.link,
+  setMaterial: a => 'Material: ' + a.link,
+  setInertial: a => 'Inertial: ' + a.link,
+  exclude:     () => 'Exclude',
+  autoLimits:  () => 'Auto limits',
+  reRoot:      a => 'Make root: ' + a.link,
+  align:       () => 'Align to face',
+  remove_port: () => 'Remove end-coords',
+  add_port:    () => 'Add end-coords',
+  setJoint:    a => {
+    const j = viewer.robot?.joints?.[a.joint];
+    const um = j ? _jointUnit(j.jointType) : null;
+    const disp = um ? um.toDisp(a.value).toFixed(um.dec) + um.unit
+                    : (+a.value).toFixed(3);
+    return `Joint ${a.joint} → ${disp}`;
+  },
+  resetPose:   () => 'Reset pose',
+  boxSelect:   a => `Box select (${a.n})`,
+  boxToggle:   a => 'Toggle: ' + a.name,
+  setMimic:    a => 'Mimic → ' + a.master,
+  clearMimic:  a => 'Clear mimic: ' + a.child,
+  loadRobot:   a => 'Load' + (a.name ? ': ' + a.name : ''),
+  rootPose:    a => 'Root pose: ' + a.what,
+  clearViewer: () => 'Clear scene',
+  undo:        () => 'Undo',
+  redo:        () => 'Redo',
+};
+function opLabel(e) {
+  return OP_LABEL[e.op] ? OP_LABEL[e.op](e)
+                        : e.op.charAt(0).toUpperCase() + e.op.slice(1);
+}
+
+// ---- action-log export (③): the same op() stream the overlay shows, written
+// out for a bug report / tutorial notes.  Text is human-readable
+// ("+12.3s  Select: base_link"); JSON is the raw oplog, which replay reads. ---
+function actionLogText() {
+  const t0 = oplog.length ? oplog[0].t : 0;   // times relative to the first action
+  return oplog.map(e => `${('+' + ((e.t - t0) / 1000).toFixed(1) + 's').padStart(8)}  `
+                        + opLabel(e)).join('\n') + '\n';
+}
+function downloadActionLog(kind = 'txt') {
+  const raw = kind === 'json';
+  const body = raw ? JSON.stringify(oplog, null, 2) : actionLogText();
+  const pkg = (currentInfo?.name || 'sw2robot').replace(/[^\w.-]+/g, '_');
+  const blob = new Blob([body], {
+    type: raw ? 'application/json' : 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${pkg}-actions.${raw ? 'json' : 'txt'}`;
+  document.body.appendChild(a); a.click(); a.remove();   // in-DOM click for Firefox
+  URL.revokeObjectURL(url);
+  log(t('log.saved', { file: a.download, n: oplog.length }), 'ok');
 }
 
 async function refreshCompMeta() {
@@ -7119,6 +7189,8 @@ window.sw2robot = {
   boxSelected: () => [...boxSelected],
   bulkType: t => bulkSetType(t),
   select: n => selectLink(n),
+  actionLogText,                         // ③ readable log (for tests / tooling)
+  exportLog: kind => downloadActionLog(kind),
   axisGlyphs: () => [...axisGlyphs.entries()].map(([name, g]) => ({
     name, visible: g.visible, children: g.children.length,
     inScene: !!g.parent })),
@@ -7141,6 +7213,8 @@ window.sw2robot = {
 };
 document.getElementById('bug').addEventListener('click',
   () => window.sw2robot.report());
+document.getElementById('savelog').addEventListener('click',
+  e => downloadActionLog(e.shiftKey ? 'json' : 'txt'));
 
 // re-render the dynamic (JS-built) UI in the new language when toggled.
 // data-i18n static chrome is handled by applyStaticI18n in the loader script.
@@ -7182,44 +7256,6 @@ document.querySelectorAll('#langbar button').forEach(b =>
   };
   const isMod = k => k === 'Control' || k === 'Shift' || k === 'Alt' ||
                      k === 'Meta';
-
-  // Human-readable label for a semantic action from the op() stream.  View
-  // navigation (orbit/pan/zoom) never calls op(), so it can't appear here --
-  // the noise is gone by construction, not by filtering.  Unknown ops fall
-  // back to a Title-cased name so a newly-instrumented action shows up for
-  // free (just add a nicer entry here when you want one).
-  const OP_LABEL = {
-    select:      a => a.link ? 'Select: ' + a.link : 'Deselect',
-    setColor:    a => 'Colour: ' + a.link,
-    eye:         a => (a.hide ? 'Hide: ' : 'Show: ') + a.link,
-    setMaterial: a => 'Material: ' + a.link,
-    setInertial: a => 'Inertial: ' + a.link,
-    exclude:     () => 'Exclude',
-    autoLimits:  () => 'Auto limits',
-    reRoot:      a => 'Make root: ' + a.link,
-    align:       () => 'Align to face',
-    remove_port: () => 'Remove end-coords',
-    add_port:    () => 'Add end-coords',
-    setJoint:    a => {
-      const j = viewer.robot?.joints?.[a.joint];
-      const um = j ? _jointUnit(j.jointType) : null;
-      const disp = um ? um.toDisp(a.value).toFixed(um.dec) + um.unit
-                      : (+a.value).toFixed(3);
-      return `Joint ${a.joint} → ${disp}`;
-    },
-    resetPose:   () => 'Reset pose',
-    boxSelect:   a => `Box select (${a.n})`,
-    boxToggle:   a => 'Toggle: ' + a.name,
-    setMimic:    a => 'Mimic → ' + a.master,
-    clearMimic:  a => 'Clear mimic: ' + a.child,
-    loadRobot:   a => 'Load' + (a.name ? ': ' + a.name : ''),
-    rootPose:    a => 'Root pose: ' + a.what,
-    clearViewer: () => 'Clear scene',
-    undo:        () => 'Undo',
-    redo:        () => 'Redo',
-  };
-  const opLabel = e => (OP_LABEL[e.op] ? OP_LABEL[e.op](e)
-                        : e.op.charAt(0).toUpperCase() + e.op.slice(1));
 
   let last = null;                // { el, label, count, timer } for ×N merge
 
