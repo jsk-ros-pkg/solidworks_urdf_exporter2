@@ -222,8 +222,10 @@
               white-space: nowrap; }
   #hovertip .key { background: #444; border: 1px solid #666;
                    border-radius: 3px; padding: 0 4px; font-family: monospace; }
-  #loadbar { position: absolute; left: 50%; top: 50%;
-             transform: translate(-50%, -50%); z-index: 7; display: none;
+  /* the single progress panel for every job -- extract, export, sweep and the
+     collision preview all render here (top-centred), one style (issue #21) */
+  #loadbar { position: absolute; left: 50%; top: 64px;
+             transform: translateX(-50%); z-index: 7; display: none;
              width: 340px; background: #1c2228ee; border: 1px solid #456;
              border-radius: 8px; padding: 14px 18px; text-align: center;
              pointer-events: none; }
@@ -239,14 +241,29 @@
   @keyframes lbslide {
     0% { margin-left: 0; } 50% { margin-left: 70%; }
     100% { margin-left: 0; } }
-  /* spinning gear for the CoACD "computing" banner */
-  #coacdstat { display: none; }
-  #coacdstat.on { display: flex; }
-  .coacd-spin { animation: coacdspin 1.1s linear infinite; }
-  @keyframes coacdspin { to { transform: rotate(360deg); } }
   #loadbar .lb-sub { font-size: 11px; color: #8a93a3; margin-top: 6px;
                      overflow: hidden; text-overflow: ellipsis;
                      white-space: nowrap; }
+  /* unified progress: per-stage checklist + live log tail (issue #21) */
+  #loadbar .lb-stages { display: none; margin-top: 10px; text-align: left; }
+  #loadbar .lb-stages .lb-stage { font-size: 11px; color: #8a93a3;
+                     line-height: 1.65; white-space: nowrap; overflow: hidden;
+                     text-overflow: ellipsis; }
+  #loadbar .lb-stages .lb-stage.done { color: #6ac26a; }
+  #loadbar .lb-stages .lb-stage.active { color: #fff; }
+  #loadbar .lb-stages .lb-ico { display: inline-block; width: 15px; }
+  #loadbar .lb-log { display: none; margin-top: 9px; text-align: left;
+                     font-family: ui-monospace, Menlo, Consolas, monospace;
+                     font-size: 10px; color: #6f7885; line-height: 1.5;
+                     max-height: 84px; overflow: hidden; }
+  #loadbar .lb-log div { white-space: nowrap; overflow: hidden;
+                     text-overflow: ellipsis; }
+  /* shared cancel control for cancellable jobs (extract / collision preview) */
+  #loadbar #lbstop { display: none; margin-top: 11px; pointer-events: auto;
+                     padding: 2px 12px; font-size: 11px; background: #3a1414;
+                     color: #ffb3b3; border: 1px solid #a33; border-radius: 3px;
+                     cursor: pointer; }
+  #loadbar #lbstop:disabled { opacity: .5; cursor: default; }
   /* end-coords placement panel (Blender-style gizmo HUD) */
   #ecpanel { position: absolute; left: 8px; top: 44px; z-index: 8;
              display: none; width: 212px; background: #1b2128f2;
@@ -399,26 +416,6 @@
          text-overflow:ellipsis"></div>
     <!-- CoACD collision-generation progress banner (top centre, below the view
          buttons): shows it is computing + which link, with a stop button -->
-    <div id="coacdstat" style="position:absolute;left:50%;top:64px;
-         transform:translateX(-50%);z-index:6;min-width:280px;max-width:80%;
-         flex-direction:column;align-items:stretch;gap:5px;
-         background:#10243aee;color:#bfe0ff;border:1px solid #2d6aa3;
-         border-radius:4px;padding:5px 10px;font-size:12px;
-         pointer-events:auto;white-space:nowrap">
-      <div style="display:flex;align-items:center;gap:8px">
-        <span class="coacd-spin" style="display:inline-block">⚙</span>
-        <span id="coacdstattext"
-              style="flex:1;overflow:hidden;text-overflow:ellipsis">CoACD …</span>
-        <button id="coacdstop" data-i18n="ui.coacdstop"
-                style="padding:1px 8px;font-size:11px;
-                       background:#3a1414;color:#ffb3b3;border:1px solid #a33;
-                       border-radius:3px;cursor:pointer">■ stop</button>
-      </div>
-      <div style="height:5px;background:#0a1622;border-radius:3px;overflow:hidden">
-        <div id="coacdbar" style="height:100%;width:0%;background:#4f9dde;
-             border-radius:3px;transition:width .25s"></div>
-      </div>
-    </div>
     <div id="emptyprompt" style="position:absolute;left:50%;top:50%;
          transform:translate(-50%,-50%);z-index:4;display:none;
          text-align:center;color:#7a828e;pointer-events:none">
@@ -457,6 +454,9 @@
       <div class="lb-text"></div>
       <div class="lb-track"><div class="lb-fill"></div></div>
       <div class="lb-sub"></div>
+      <div class="lb-stages"></div>
+      <div class="lb-log"></div>
+      <button id="lbstop" data-i18n="ui.coacdstop">■ stop</button>
     </div>
     <div id="selbar" style="position:absolute;top:40px;left:8px;z-index:5;
          display:none;gap:4px;align-items:center;background:#22252bdd;
@@ -1399,6 +1399,21 @@ the config and does NOT re-detect). Needs graph.json (CAD mode).">🔗 re-detect
                       ja: a => `${a.what} パッケージを書き出し中（メッシュ変換）…` },
     'export.done': { en: a => `exported ${a.file}`, ja: a => `${a.file} を書き出しました` },
     'export.fail': { en: a => `export failed: ${a.e}`, ja: a => `書き出しに失敗: ${a.e}` },
+    'export.cancelling': { en: 'cancelling export …', ja: '書き出しを中止中 …' },
+    'export.cancelled': { en: 'export cancelled', ja: '書き出しを中止しました' },
+    // unified progress panel (issue #21): fallback title + per-stage labels
+    'prog.working': { en: 'working …', ja: '処理中 …' },
+    'prog.cancelling': { en: 'cancelling — finishing the current step …',
+                         ja: '中止中 — 現在の処理を完了しています …' },
+    'prog.s.connect': { en: 'connect SolidWorks', ja: 'SolidWorks 接続' },
+    'prog.s.extract': { en: 'extract assembly', ja: 'アセンブリ抽出' },
+    'prog.s.meshes': { en: 'export meshes', ja: 'メッシュ書き出し' },
+    'prog.s.build': { en: 'build package', ja: 'パッケージ構築' },
+    'prog.s.load': { en: 'load model', ja: 'モデル読み込み' },
+    'prog.s.sweep': { en: 'sweep joints', ja: '関節スイープ' },
+    'prog.s.collision': { en: 'collision shapes', ja: '衝突形状' },
+    'prog.s.convert': { en: 'convert meshes', ja: 'メッシュ変換' },
+    'prog.s.zip': { en: 'package + zip', ja: 'パッケージ化 + ZIP' },
     'ui.exppkgname': { en: 'package', ja: 'パッケージ名' },
     't.exppkgname': { en: 'ROS package name for the exported ROS1/ROS2 package (default <name>_description). Lowercase letters, digits and underscores only.',
                       ja: 'エクスポートする ROS1/ROS2 パッケージの名前（既定: <name>_description）。英小文字・数字・アンダースコアのみ。' },
@@ -1844,6 +1859,11 @@ function showLoadbar(text, { indet = false, delay = 0 } = {}) {
   const show = () => {
     loadbarEl.querySelector('.lb-text').textContent = text;
     loadbarEl.querySelector('.lb-sub').textContent = '';
+    // a plain loadbar has no stage checklist / log tail -- hide any left over
+    // from a previous unified-progress run so it doesn't bleed through
+    loadbarEl.querySelector('.lb-stages').style.display = 'none';
+    loadbarEl.querySelector('.lb-log').style.display = 'none';
+    clearProgressStop();          // a plain loadbar carries no cancel control
     loadbarEl.classList.toggle('indet', indet);
     if (indet) { loadbarEl.querySelector('.lb-fill').style.width = '30%'; }
     loadbarEl.style.display = 'block';
@@ -1868,8 +1888,120 @@ function updateLoadbar(frac, sub, text) {
 function hideLoadbar() {
   clearTimeout(loadbarTimer);
   loadbarTimer = null;
+  clearProgressStop();
   loadbarEl.style.display = 'none';
 }
+
+// ---- unified progress: one bar + per-stage checklist + log tail (issue #21)
+// Extract / export / limit-sweep all report into the server's single _prog
+// object (GET /api/progress); renderProgress paints it into #loadbar and
+// pollProgress drives one poll loop, resolving with the job's result.
+const PROG_STAGE_KEY = {
+  'connect SolidWorks': 'prog.s.connect',
+  'extract assembly': 'prog.s.extract',
+  'export meshes': 'prog.s.meshes',
+  'build package': 'prog.s.build',
+  'load model': 'prog.s.load',
+  'sweep joints': 'prog.s.sweep',
+  'collision': 'prog.s.collision',
+  'convert meshes': 'prog.s.convert',
+  'package + zip': 'prog.s.zip',
+};
+function stageLabel(name) {
+  const k = PROG_STAGE_KEY[name];
+  return k ? t(k) : name;
+}
+function renderProgress(st) {
+  loadbarEl.style.display = 'block';
+  const q = s => loadbarEl.querySelector(s);
+  // once stop is pressed, show a clear "cancelling" state until the job ends
+  // (a step already running -- e.g. a CoACD part -- has to finish first)
+  const cancelling = progressCancelling && st.running;
+  q('.lb-text').textContent = cancelling ? t('prog.cancelling')
+    : (st.label ? stageLabel(st.label) : t('prog.working'));
+  if (cancelling || st.frac == null) {
+    loadbarEl.classList.add('indet');
+    q('.lb-fill').style.width = '30%';
+  } else {
+    loadbarEl.classList.remove('indet');
+    q('.lb-fill').style.width = `${Math.round(st.frac * 100)}%`;
+  }
+  q('.lb-sub').textContent = st.sub || '';
+  const stagesEl = q('.lb-stages');
+  if (st.stages && st.stages.length) {
+    stagesEl.style.display = 'block';
+    stagesEl.replaceChildren();
+    for (const s of st.stages) {
+      const row = document.createElement('div');
+      row.className = 'lb-stage ' + s.state;
+      const ico = s.state === 'done' ? '✓' : s.state === 'active' ? '▸' : '○';
+      const sp = document.createElement('span');
+      sp.className = 'lb-ico'; sp.textContent = ico;
+      row.append(sp, document.createTextNode(stageLabel(s.name)));
+      stagesEl.append(row);
+    }
+  } else {
+    stagesEl.style.display = 'none';
+  }
+  const logEl = q('.lb-log');
+  const lines = st.log || [];
+  if (lines.length) {
+    logEl.style.display = 'block';
+    logEl.replaceChildren();
+    for (const ln of lines.slice(-8)) {
+      const d = document.createElement('div');
+      d.textContent = ln;
+      logEl.append(d);
+    }
+  } else {
+    logEl.style.display = 'none';
+  }
+}
+let progressPoll = null;
+// Poll /api/progress until the job ends.  onTick(st) runs each poll (e.g. to
+// stream log lines into the console).  Resolves {result, cancelled}; rejects on
+// a job error.  intervalMs defaults to 400.
+function pollProgress({ onTick, intervalMs = 400 } = {}) {
+  return new Promise((resolve, reject) => {
+    if (progressPoll) { clearInterval(progressPoll); }
+    progressPoll = setInterval(async () => {
+      let st;
+      try { st = await (await fetch('/api/progress')).json(); }
+      catch { return; }                         // transient: keep polling
+      renderProgress(st);
+      if (onTick) { try { onTick(st); } catch (_e) { /* non-fatal */ } }
+      if (st.done) {
+        clearInterval(progressPoll); progressPoll = null;
+        if (st.error) { reject(new Error(st.error)); }
+        else { resolve({ result: st.result, cancelled: !!st.cancelled }); }
+      }
+    }, intervalMs);
+  });
+}
+// Shared cancel control on the unified panel: a cancellable job registers a stop
+// callback (extract, collision preview); the #lbstop button runs it.  showLoadbar
+// / hideLoadbar clear it, so it only shows while a cancellable job owns the panel.
+const lbStop = document.getElementById('lbstop');
+let progressStopFn = null;
+let progressCancelling = false;      // stop pressed, job winding down
+function setProgressStop(fn) {
+  progressStopFn = fn;
+  progressCancelling = false;
+  if (lbStop) { lbStop.disabled = false; lbStop.style.display = 'inline-block'; }
+}
+function clearProgressStop() {
+  progressStopFn = null;
+  progressCancelling = false;
+  if (lbStop) { lbStop.style.display = 'none'; }
+}
+lbStop?.addEventListener('click', () => {
+  if (!progressStopFn) { return; }
+  lbStop.disabled = true;                    // one press; the job ends on its own
+  // some steps can't stop instantly (CoACD is atomic per part), so show a clear
+  // "cancelling" state right away rather than leaving the panel looking frozen
+  progressCancelling = true;
+  progressStopFn();
+});
 
 // ---- mesh loading with per-file progress -------------------------------
 const meshStats = { want: 0, done: 0, fail: 0 };
@@ -4324,21 +4456,10 @@ autolimitsBtn.addEventListener('click', async () => {
       + `&margin_mm=${encodeURIComponent(mm)}`);
     const data = await resp0.json();
     if (!resp0.ok || data.error) { throw new Error(data.error ?? resp0.status); }
-    let st = {};
-    while (true) {
-      await new Promise(r => setTimeout(r, 400));
-      try { st = await (await fetch('/api/auto_limits/status')).json(); }
-      catch { continue; }                       // transient: keep polling
-      if (st.total) {
-        updateLoadbar(st.n / st.total,
-                      t('auto.sweepProg', { n: st.n, total: st.total, j: st.joint }));
-      } else if (st.phase === 'loading') {
-        updateLoadbar(null, null, t('auto.sweepLoading'));
-      }
-      if (st.done) { break; }
-    }
-    if (st.error) { throw new Error(st.error); }
-    const results = st.results || [];
+    // unified progress: the sweep reports stages (load model -> sweep joints)
+    // and per-joint frac into _prog; pollProgress paints them + returns results
+    const { result } = await pollProgress();
+    const results = (result && result.results) || [];
     const limited = results.filter(r => !r.continuous);
     const cont = results.filter(r => r.continuous);
     log(t('auto.sweepDone', { l: limited.length, c: cont.length }), 'ok');
@@ -4454,11 +4575,7 @@ updateCollUI();
 // to overlay them (semi-transparent) on the visual meshes.
 const collPreviewGenBtn = document.getElementById('coacdgen');
 const collPreviewShow = document.getElementById('coacdshow');
-const collPreviewProg = document.getElementById('coacdprog');
-const collPreviewStat = document.getElementById('coacdstat');       // top banner
-const collPreviewStatText = document.getElementById('coacdstattext');
-const collPreviewStopBtn = document.getElementById('coacdstop');
-const collPreviewBar = document.getElementById('coacdbar');         // determinate fill
+const collPreviewProg = document.getElementById('coacdprog');       // inline summary
 
 // blink the links currently being decomposed (several run in parallel), so it
 // is obvious which parts are still computing -- toggle their hover tint on one
@@ -4564,36 +4681,41 @@ async function collPreviewTick() {
   // links the SERVER produced parts for (authoritative: the overlay GLBs load
   // asynchronously, so collPreviewGroups may still be empty right when the job ends)
   const produced = Object.keys(s.parts || {}).length;
-  if (collPreviewBar) {                              // determinate progress fill
-    collPreviewBar.style.width = total ? Math.round(done / total * 100) + '%' : '0%';
-  }
   // blink ALL links currently being decomposed (they run in parallel)
   const inflight = s.running ? (s.inflight || []) : [];
   collPreviewSetBlink(inflight);
-  if (s.error) {
-    collPreviewProg.textContent = '';
-    log(t('coacd.fail', { e: s.error }), 'err');
-  } else if (s.running) {
+  if (s.running) {
+    // paint the SAME unified panel as extract/export/sweep (issue #21) -- the
+    // per-link blink/mesh-pop above stays in the viewport, unaffected
     const label = inflight.length
       ? inflight.slice(0, 2).join(', ')
         + (inflight.length > 2 ? ` +${inflight.length - 2}` : '')
       : (s.current || '');
     const msg = t('coacd.prog', { done, total, link: label, what });
+    renderProgress({
+      job: 'collision', running: true, done: false,
+      stages: [{ name: 'build collision preview', state: 'active' }],
+      frac: total ? done / total : null,
+      label: 'build collision preview',
+      sub: total ? msg : (label || t('coacd.start')),
+      log: [],
+    });
     collPreviewProg.textContent = msg;
-    if (collPreviewStatText) { collPreviewStatText.textContent = msg; }   // top banner
-    collPreviewStat?.classList.add('on');
-  } else if (s.cancelled) {
-    collPreviewProg.textContent = t('coacd.cancelled', { n: produced });
-    log(t('coacd.cancelled', { n: produced }), 'warn');
-  } else {
-    collPreviewProg.textContent = t('coacd.done', { n: produced });
-    log(t('coacd.done', { n: produced }), 'ok');
   }
   if (!s.running) {
-    collPreviewStat?.classList.remove('on');
+    hideLoadbar();
     clearInterval(collPreviewPoll); collPreviewPoll = null;
     if (collPreviewGenBtn) { collPreviewGenBtn.disabled = false; }
-    if (collPreviewStopBtn) { collPreviewStopBtn.disabled = false; }
+    if (s.error) {
+      collPreviewProg.textContent = '';
+      log(t('coacd.fail', { e: s.error }), 'err');
+    } else if (s.cancelled) {
+      collPreviewProg.textContent = t('coacd.cancelled', { n: produced });
+      log(t('coacd.cancelled', { n: produced }), 'warn');
+    } else {
+      collPreviewProg.textContent = t('coacd.done', { n: produced });
+      log(t('coacd.done', { n: produced }), 'ok');
+    }
     if (produced > 0 && !collPreviewFinalized) {
       collPreviewFinalized = true;
       // 1) the URDF/ROS export should now ship these parts as <collision>:
@@ -4606,12 +4728,11 @@ async function collPreviewTick() {
     }
   }
 }
-collPreviewStopBtn?.addEventListener('click', async () => {
-  collPreviewStopBtn.disabled = true;
-  if (collPreviewStatText) { collPreviewStatText.textContent = t('coacd.stopping'); }
+// stop the preview (the unified panel's ■ stop registers this while it runs)
+function collPreviewStop() {
   log(t('coacd.stopping'));
-  try { await fetch('/api/collision/preview/cancel'); } catch (_e) { /* ignore */ }
-});
+  fetch('/api/collision/preview/cancel').catch(() => { /* ignore */ });
+}
 // Abandon the in-flight generate job (the user switched collision mode mid-run).
 // Stop polling FIRST so the now-cancelled job's completion can't reach the
 // finalize block and revert the selector to the old mode; then tell the server
@@ -4620,10 +4741,9 @@ function collPreviewAbort() {
   if (collPreviewPoll) { clearInterval(collPreviewPoll); collPreviewPoll = null; }
   collPreviewSetBlink([]);                         // stop the per-link blink timer
   try { fetch('/api/collision/preview/cancel'); } catch (_e) { /* ignore */ }
-  collPreviewStat?.classList.remove('on');         // hide the "computing" banner
+  hideLoadbar();                                   // drop the unified panel
   if (collPreviewProg) { collPreviewProg.textContent = ''; }
   if (collPreviewGenBtn) { collPreviewGenBtn.disabled = false; }
-  if (collPreviewStopBtn) { collPreviewStopBtn.disabled = false; }
 }
 collPreviewGenBtn?.addEventListener('click', async () => {
   if (collPreviewPoll) { return; }
@@ -4632,11 +4752,15 @@ collPreviewGenBtn?.addEventListener('click', async () => {
   collPreviewFinalized = false;
   setCollisionShown(true);                       // watch it build by default
   collPreviewGenBtn.disabled = true;
-  if (collPreviewStopBtn) { collPreviewStopBtn.disabled = false; }
   collPreviewProg.textContent = t('coacd.start');
-  if (collPreviewStatText) { collPreviewStatText.textContent = t('coacd.start'); }
-  if (collPreviewBar) { collPreviewBar.style.width = '0%'; }
-  collPreviewStat?.classList.add('on');                // show "computing" banner now
+  // show the unified panel immediately (same style/position as extract/export),
+  // with a ■ stop control wired to cancel this job
+  renderProgress({
+    job: 'collision', running: true, done: false,
+    stages: [{ name: 'build collision preview', state: 'active' }],
+    frac: null, label: 'build collision preview', sub: t('coacd.start'), log: [],
+  });
+  setProgressStop(collPreviewStop);
   const mode = collModeSel?.value || 'coacd';
   const q = cqualitySel?.value || 'balanced';
   const what = mode === 'hull' ? t('coll.hullword') : 'CoACD';
@@ -4651,7 +4775,7 @@ collPreviewGenBtn?.addEventListener('click', async () => {
   } catch (e) {
     collPreviewGenBtn.disabled = false;
     collPreviewProg.textContent = '';
-    collPreviewStat?.classList.remove('on');
+    hideLoadbar();
     log(t('coacd.fail', { e: e.message ?? e }), 'err');
   }
 });
@@ -4693,7 +4817,7 @@ expLinks.forEach(a => a.addEventListener('click', async ev => {
   // separate uniform-glb button is gone -- format is now a visual selector)
   const collMode = collModeSel?.value || 'copy';
   const mergeFixed = !!mergeFixedBox?.checked;
-  const url = `/api/export/zip?ros=${ros}&meshes=${vfmt}&colfmt=${cfmt}`
+  const query = `ros=${ros}&meshes=${vfmt}&colfmt=${cfmt}`
     + (name ? `&name=${encodeURIComponent(name)}` : '')
     + (urdf ? `&urdf=${encodeURIComponent(urdf)}` : '')
     + (meshdir ? `&meshdir=${encodeURIComponent(meshdir)}` : '')
@@ -4704,7 +4828,17 @@ expLinks.forEach(a => a.addEventListener('click', async ev => {
   showLoadbar(t('export.bar', { what }), { indet: true });
   log(t('export.start', { what }));
   try {
-    const resp = await fetch(url);
+    // ASYNC export: start the build (reports into _prog), watch the unified
+    // progress panel live, then download the finished bytes
+    const r0 = await (await fetch('/api/export/zip/start?' + query)).json();
+    if (r0.error) { throw new Error(r0.error); }
+    setProgressStop(() => {                     // ■ stop -> cooperative cancel
+      log(t('export.cancelling'), 'wrn');
+      fetch('/api/export/zip/cancel').catch(() => { /* ignore */ });
+    });
+    const { cancelled } = await pollProgress();
+    if (cancelled) { log(t('export.cancelled'), 'wrn'); return; }
+    const resp = await fetch('/api/export/zip/download');
     if (!resp.ok) {
       let msg = resp.status;
       try { msg = (await resp.json()).error ?? msg; } catch (_e) { /* not json */ }
@@ -6482,26 +6616,6 @@ function fmtSecs(s) {
                 : t('time.minSec', { m: Math.floor(s / 60),
                                      s: String(s % 60).padStart(2, '0') });
 }
-// put the loadbar back into the indeterminate (sweeping) state
-function loadbarIndet() {
-  loadbarEl.classList.add('indet');
-  loadbarEl.querySelector('.lb-fill').style.width = '30%';
-}
-// map an extract log line to a short, localised phase label
-function extractPhase(line) {
-  const rp = line.match(/^reading part: (.+)$/);
-  if (rp) return rp[1];                 // show WHICH part is being read
-  if (/starting SolidWorks/.test(line)) return t('phase.starting');
-  if (/reusing the warm/.test(line))    return t('phase.reuse');
-  if (/opening copy|loading the assembly/.test(line)) return t('phase.opening');
-  if (/components.*mate|reading components/.test(line)) return t('phase.components');
-  if (/sub-assembly internal mesh/.test(line)) return t('phase.subMesh');
-  if (/reading sub-assembly/.test(line)) return t('phase.subRead');
-  if (/full assembly mesh/.test(line))   return t('phase.fullMesh');
-  if (/saving graph/.test(line))         return t('phase.savingGraph');
-  if (/model from graph|build/.test(line)) return t('phase.buildUrdf');
-  return t('phase.extracting');
-}
 
 // extraction runs SolidWorks in a server-side thread that checks a cancel flag
 // at every progress checkpoint (per phase / per mesh), so it can be interrupted
@@ -6535,71 +6649,43 @@ async function extractFlow(p) {
   log(t('extract.started'));
   extracting = true;
   showLoadbar(t('extract.bar'), { indet: true });
+  setProgressStop(() => cancelExtraction());   // ■ stop on the unified panel
   const t0 = performance.now();
   let seen = 0;
-  const poll = setInterval(async () => {
-    let st;
-    try {
-      st = await (await fetch('/api/extract/status')).json();
-    } catch { return; }
-    for (; seen < st.log.length; seen++) { log(`  ${st.log[seen]}`); }
-    const elapsed = (performance.now() - t0) / 1000;       // seconds
-
-    if (!st.running) {
-      clearInterval(poll);
-      extracting = false;
-      if (st.cancelled) {
-        hideLoadbar();
-        document.getElementById('loadbackdrop').style.display = 'none';
-        statusEl.textContent = t('extract.cancelled');
-        log(t('extract.cancelled'), 'wrn');
-        return;
-      }
-      if (st.error) {
-        hideLoadbar();
-        document.getElementById('loadbackdrop').style.display = 'none';
-        log(t('extract.failed', { e: st.error }), 'err');
-        return;
-      }
-      log(t('extract.done', { time: fmtSecs(elapsed) }), 'ok');
-      openServerPath(st.package);   // its own loadbar takes over
+  const backdrop = document.getElementById('loadbackdrop');
+  try {
+    // the server now owns the stage/frac mapping (see _prog_extract_stage) --
+    // the client just streams new log lines; renderProgress paints the rest
+    const { result, cancelled } = await pollProgress({
+      intervalMs: 1000,
+      onTick: st => {
+        const lines = st.log || [];
+        for (; seen < lines.length; seen++) { log(`  ${lines[seen]}`); }
+        statusEl.textContent = t('extract.statusElapsed',
+          { time: fmtSecs((performance.now() - t0) / 1000) });
+      },
+    });
+    extracting = false;
+    if (cancelled) {
+      hideLoadbar();
+      backdrop.style.display = 'none';
+      statusEl.textContent = t('extract.cancelled');
+      log(t('extract.cancelled'), 'wrn');
       return;
     }
-
-    const lines = st.log;
-    const lastReal = [...lines].reverse()
-      .find(l => !l.startsWith('... still')) ?? '';
-    const heartbeat = [...lines].reverse()
-      .find(l => l.startsWith('... still'));
-    const alive = heartbeat &&
-      heartbeat.match(/(\d+) SolidWorks process/);
-    statusEl.textContent = t('extract.statusElapsed', { time: fmtSecs(elapsed) });
-
-    // B: determinate bar while exporting the per-link meshes (the bulk)
-    const mesh = lastReal.match(/exporting mesh (\d+)\/(\d+)/);
-    if (mesh) {
-      const i = +mesh[1], n = +mesh[2];
-      const name = lastReal.split(': ').slice(-1)[0] ?? '';
-      updateLoadbar(i / n, t('extract.meshBar', { i, n, name }).slice(0, 64),
-                    t('extract.meshSub', { time: fmtSecs(elapsed) }));
-      return;
+    log(t('extract.done', { time: fmtSecs((performance.now() - t0) / 1000) }), 'ok');
+    if (result && result.package) {
+      openServerPath(result.package);   // its own loadbar takes over
+    } else {
+      hideLoadbar();
+      backdrop.style.display = 'none';
     }
-    // C: cold-start reassurance -- "starting SolidWorks" can be ~30 s of
-    // silence; show that it's alive (heartbeat process count) so it never
-    // looks frozen
-    loadbarIndet();
-    if (/starting SolidWorks/.test(lastReal)) {
-      const sub = alive
-        ? t('extract.alive', { c: alive[1] })
-        : t('extract.coldStart');
-      updateLoadbar(null, sub, t('extract.startingBar', { time: fmtSecs(elapsed) }));
-      return;
-    }
-    // other phases: indeterminate with a phase label + elapsed
-    const aliveTxt = alive ? t('extract.aliveShort') : '';
-    updateLoadbar(null, t('extract.elapsed', { time: fmtSecs(elapsed), alive: aliveTxt }),
-                  t('extract.phaseRunning', { phase: extractPhase(lastReal) }));
-  }, 1000);
+  } catch (e) {
+    extracting = false;
+    hideLoadbar();
+    backdrop.style.display = 'none';
+    log(t('extract.failed', { e: e.message ?? e }), 'err');
+  }
 }
 
 function openAny(p) {
