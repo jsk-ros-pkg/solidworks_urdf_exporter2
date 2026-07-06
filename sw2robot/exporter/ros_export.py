@@ -209,6 +209,34 @@ def _parallel(func, items, max_workers=None):
         return list(ex.map(func, items))
 
 
+def _parallel_cancellable(func, items, should_cancel, max_workers=None):
+    """Like :func:`_parallel`, but returns promptly (raising :class:`ExportCancelled`)
+    once ``should_cancel`` turns true -- WITHOUT waiting for the tasks already
+    running, which finish in the background (a CoACD part can't be interrupted
+    mid-run; its result is just cached).  Not-yet-started tasks are cancelled.
+    This lets a cancel land within ~0.2 s instead of after the whole parallel
+    wave.  ``func`` must not raise (catch + sentinel, like _parallel)."""
+    items = list(items)
+    if not items:
+        return
+    if should_cancel is None:
+        _parallel(func, items, max_workers)
+        return
+    from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+    ex = ThreadPoolExecutor(max_workers=_pool_workers(len(items), max_workers))
+    futs = [ex.submit(func, x) for x in items]
+    try:
+        pending = set(futs)
+        while pending:
+            if should_cancel():
+                raise ExportCancelled()
+            _done, pending = wait(pending, timeout=0.2,
+                                  return_when=FIRST_COMPLETED)
+    finally:
+        # never block on the in-flight tasks; drop the pending (unstarted) ones
+        ex.shutdown(wait=False, cancel_futures=True)
+
+
 def _atomic_write(path, data):
     """Write ``data`` (bytes) to ``path`` via a unique temp + ``os.replace`` so a
     concurrent writer (another export hitting the same cache key) can't see a
@@ -1370,7 +1398,7 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
             except Exception:
                 pass                        # the real error resurfaces in _emit_collision
             _warm_tick(src, len(_coacd_srcs))
-        _parallel(_warm_coacd, _coacd_srcs)
+        _parallel_cancellable(_warm_coacd, _coacd_srcs, should_cancel)
     elif collision in _PRIMITIVE_MODES:
         # primitive fitting voxelises the mesh (auto mode scores several
         # candidates by IoU) -- a few hundred ms per unique source; warm them in
@@ -1390,7 +1418,7 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
                 except Exception:
                     pass                # the real error resurfaces in expansion
             _warm_tick(src, len(_prim_srcs))
-        _parallel(_warm_prim, _prim_srcs)
+        _parallel_cancellable(_warm_prim, _prim_srcs, should_cancel)
 
     def _verbatim(job):
         # already the target format, no colour override, no bake: the source is

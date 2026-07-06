@@ -1122,3 +1122,23 @@ def test_build_ros_description_cancels(tmp_path):
     pkg_dir = _make_pkg(tmp_path, robot="rc")
     with _pytest.raises(ExportCancelled):
         build_ros_description(pkg_dir, "rc", should_cancel=lambda: True)
+
+
+def test_build_ros_description_cancels_during_collision_warm(tmp_path):
+    """A cancel during the parallel CoACD warm aborts promptly via
+    _parallel_cancellable (issue #21 — cancel mid-step, not after the whole
+    phase), rather than running the whole batch first."""
+    import pytest as _pytest
+
+    from sw2robot.exporter.ros_export import (
+        ExportCancelled,
+        build_ros_description,
+        coacd_available,
+    )
+
+    if not coacd_available():
+        _pytest.skip("coacd not installed")
+    pkg_dir = _make_pkg(tmp_path, robot="rw")
+    with _pytest.raises(ExportCancelled):
+        build_ros_description(pkg_dir, "rw", collision="coacd",
+                              should_cancel=lambda: True)

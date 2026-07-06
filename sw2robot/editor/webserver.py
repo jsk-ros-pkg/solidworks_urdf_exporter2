@@ -618,6 +618,7 @@ def _export_zip(pkg_dir, robot_name, visual_fmt="dae", collision_fmt="stl",
     import zipfile
 
     from sw2robot.exporter.ros_export import (
+        ExportCancelled,
         build_ros_description,
         ros_pkg_name,
     )
@@ -641,6 +642,8 @@ def _export_zip(pkg_dir, robot_name, visual_fmt="dae", collision_fmt="stl",
         progress("zip", 0, n)
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         for i, (arc, data) in enumerate(files):
+            if should_cancel and should_cancel():   # stop mid-compression
+                raise ExportCancelled()
             # a node under scripts/ must extract executable (0755) so ament's
             # install(PROGRAMS) + `colcon build --symlink-install` leaves a
             # runnable libexec entry that `ros2 launch` can find
@@ -720,13 +723,17 @@ def _export_fname(robot_name, pkg, params):
             else f"{pkg}.zip")
 
 
-def _run_export(pkg_dir, robot_name, urdf_rel, params):
-    """Background ZIP export; stashes the bytes for /api/export/zip/download."""
+def _run_export(pkg_dir, robot_name, urdf_rel, params, gen):
+    """Background ZIP export; stashes the bytes for /api/export/zip/download.
+    ``gen`` is this job's progress generation: cancelling abandons in-flight
+    CoACD parts, so their late progress reports must not touch a newer job."""
     from sw2robot.exporter.ros_export import ExportCancelled
     _stage_map = {"collision": "collision", "meshes": "convert meshes",
                   "zip": "package + zip"}
 
     def _bp(stage, done, total, detail=""):
+        if _prog_gen() != gen:      # a newer job owns the panel; drop stale ticks
+            return
         # title = the (i18n) stage name (renderProgress maps it), count in the
         # sub line; keep the bar animated (indeterminate) until the first item
         # of a stage completes, so a slow first CoACD part never looks frozen
@@ -1354,6 +1361,7 @@ _job_lock = threading.Lock()
 # results the client needs travel in _prog["result"].
 _prog = {"job": None, "running": False, "done": True, "cancelled": False,
          "error": None,
+         "gen": 0,          # bumped each job; lets stale reports be ignored
          "stages": [],      # [{"name": str, "state": "pending|active|done"}]
          "frac": None,      # 0..1 for a determinate bar, None = indeterminate
          "label": "", "sub": "",
@@ -1365,15 +1373,22 @@ _PROG_LOG_CAP = 200
 
 def _prog_start(job, stages, label=""):
     """Claim the shared progress object for ``job`` with a fresh ordered stage
-    list (list of stage names).  Returns False if a job is already running."""
+    list (list of stage names).  Returns the new generation id, or None if a job
+    is already running."""
     with _prog_lock:
         if _prog["running"]:
-            return False
+            return None
         _prog.update(
             job=job, running=True, done=False, cancelled=False, error=None,
+            gen=_prog["gen"] + 1,
             stages=[{"name": s, "state": "pending"} for s in stages],
             frac=None, label=label, sub="", log=[], result=None)
-        return True
+        return _prog["gen"]
+
+
+def _prog_gen():
+    with _prog_lock:
+        return _prog["gen"]
 
 
 def _prog_stage(name, frac=None, label=None):
@@ -2416,7 +2431,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 params, err = _parse_export_query(cls, query)
                 if err:
                     return self._send_json({"error": err[0]}, err[1])
-                if not _prog_start("export", _EXPORT_STAGES):
+                gen = _prog_start("export", _EXPORT_STAGES)
+                if gen is None:
                     return self._send_json(
                         {"error": "a job is already running"}, 409)
                 _export_cancel.clear()
@@ -2424,7 +2440,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                     _export_out.update(data=None, fname=None)
                 threading.Thread(
                     target=_run_export,
-                    args=(cls.pkg_dir, cls.robot_name, cls.urdf_rel, params),
+                    args=(cls.pkg_dir, cls.robot_name, cls.urdf_rel, params, gen),
                     daemon=True).start()
                 return self._send_json({"started": True})
             if path == "/api/export/zip/cancel":
