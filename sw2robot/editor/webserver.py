@@ -1709,7 +1709,8 @@ def _run_extract(sldasm):
         _preconvert_meshes(str(state.package_dir))
         progress(f"done -> {state.package_dir} (SolidWorks kept warm for "
                  f"the next extraction)")
-        _prog_finish(result={"package": str(state.package_dir)})
+        _job["running"] = False          # clear BEFORE _prog_finish opens the
+        _prog_finish(result={"package": str(state.package_dir)})   # busy-guard
     except _CancelExtract:
         # the COM sequence was aborted mid-flight, so the warm session may hold
         # a half-open doc -- tear it down so the next extraction starts clean
@@ -1722,12 +1723,14 @@ def _run_extract(sldasm):
         except Exception:
             pass
         _job["log"].append("cancelled.")
+        _job["running"] = False          # clear BEFORE _prog_finish (see above)
         _prog_finish(cancelled=True)
     except Exception as e:
         import traceback
 
         from sw2robot.exporter.swcom import SolidWorksUnavailable
         _job["error"] = f"{type(e).__name__}: {e}"
+        _job["running"] = False          # clear BEFORE _prog_finish (see above)
         _prog_finish(error=f"{type(e).__name__}: {e}")
         print(f"[sw2robot.web] extract FAILED: {e!r}")
         traceback.print_exc()     # full traceback -> the exact failing line
@@ -1743,7 +1746,11 @@ def _run_extract(sldasm):
             _shutdown_sw()         # tear the wedged session down, then forget it
     finally:
         hb_stop.set()
-        _job["running"] = False
+        # NB: _job["running"] is cleared in each branch ABOVE, just before its
+        # _prog_finish opens the shared busy-guard -- not here.  Clearing it in
+        # finally would race: a new extract can claim the guard and set
+        # running=True between a branch's _prog_finish and this line, and this
+        # line would then wrongly clobber the new job's flag back to False.
 
 
 # ---- live self-collision (autoinit.SelfCollision over the current URDF) --
