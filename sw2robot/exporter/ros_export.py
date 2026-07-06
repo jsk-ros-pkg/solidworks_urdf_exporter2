@@ -446,6 +446,91 @@ def _collision_part_stls(src, mode, quality, cache_dir):
     return _coacd_part_stls(src, quality, cache_dir)
 
 
+# ------------------------------------------------ primitive collision shapes
+# Optionally replace each <collision>'s mesh with a fitted URDF primitive
+# (<box>/<cylinder>/<sphere>) instead of a mesh file -- the lightest collision
+# geometry there is (native URDF primitives, no STL), for path planning where a
+# coarse convex bound per link is enough.  The fitting lives UPSTREAM in
+# scikit-robot (fit_primitive_to_mesh + primitive_params_to_origin); we only
+# place the result.  scikit-robot is an OPTIONAL dependency -- its absence (or a
+# version predating the per-mesh primitive API) raises a clear error, like coacd.
+
+# collision-mode string -> primitive_type for fit_primitive_to_mesh
+# (None = auto-pick box/cylinder/sphere by voxel IoU)
+_PRIMITIVE_MODES = {"primitive": None, "box": "box",
+                    "cylinder": "cylinder", "sphere": "sphere"}
+# every supported <collision> mode (single source of truth for the CLI + web)
+COLLISION_MODES = ("copy", "hull", "coacd", *_PRIMITIVE_MODES)
+# modes that produce a viewer preview / need generation (everything but 'copy')
+PREVIEW_COLLISION_MODES = ("hull", "coacd", *_PRIMITIVE_MODES)
+
+
+def skrobot_primitive_available():
+    """True if scikit-robot exposes the per-mesh primitive-fitting API (the
+    release that ships ``skrobot.utils.primitive_fitting``)."""
+    import importlib.util
+    try:
+        return importlib.util.find_spec(
+            "skrobot.utils.primitive_fitting") is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def _fit_collision_primitive(src, primitive_type):
+    """``(params, M)`` for the source mesh ``src`` fitted to a URDF primitive:
+    ``params`` is scikit-robot's primitive dict (type + dimensions) and ``M`` is
+    the 4x4 primitive-origin transform in the mesh (source) frame.  ``oriented=
+    None`` lets scikit-robot pick the tighter of an axis-aligned / oriented fit
+    (and, when ``primitive_type`` is None, the best of box/cylinder/sphere) by
+    voxel IoU."""
+    import trimesh
+    from skrobot.utils import fit_primitive_to_mesh, primitive_params_to_origin
+    mesh = _load_mesh_metres(src)
+    params = fit_primitive_to_mesh(mesh, primitive_type=primitive_type,
+                                   oriented=None)
+    xyz, rpy = primitive_params_to_origin(params)
+    M = trimesh.transformations.euler_matrix(*rpy, axes="sxyz")
+    M[:3, 3] = xyz
+    return params, M
+
+
+def _primitive_geometry_el(params):
+    """A URDF ``<geometry>`` element for a fitted primitive dict.  The shape's
+    centre + rotation are carried by the ``<collision>``'s ``<origin>``, so the
+    geometry here is axis-aligned at the origin."""
+    geo = ET.Element("geometry")
+    t = params["type"]
+    if t == "box":
+        ET.SubElement(geo, "box").set(
+            "size", " ".join(_fmt_num(v) for v in params["extents"]))
+    elif t == "sphere":
+        ET.SubElement(geo, "sphere").set("radius", _fmt_num(params["radius"]))
+    elif t in ("cylinder", "capsule"):
+        cyl = ET.SubElement(geo, "cylinder")
+        cyl.set("radius", _fmt_num(params["radius"]))
+        length = float(params["height"])
+        if t == "capsule":            # URDF has no capsule; fold the caps in
+            length += 2 * float(params["radius"])
+        cyl.set("length", _fmt_num(length))
+    else:
+        raise ValueError(f"unsupported primitive type: {t!r}")
+    return geo
+
+
+def _collision_preview_meshes(src, mode, quality, cache_dir):
+    """``[trimesh, ...]`` in the source frame for a link's collision preview:
+    the convex STL part(s) for ``coacd``/``hull``, or the single fitted primitive
+    mesh for a primitive mode."""
+    import trimesh
+
+    if mode in _PRIMITIVE_MODES:
+        from skrobot.utils.primitive_fitting import create_primitive_mesh
+        params, _M = _fit_collision_primitive(src, _PRIMITIVE_MODES[mode])
+        return [create_primitive_mesh(params)]
+    return [trimesh.load(io.BytesIO(d), file_type="stl")
+            for d in _collision_part_stls(src, mode, quality, cache_dir)]
+
+
 # a fixed high-contrast palette so adjacent convex parts read apart in the viewer.
 # NO red/salmon: red is the self-collision highlight colour, so a red preview part
 # (a single-part hull is always palette[0]) would read as a collision.
@@ -608,7 +693,8 @@ def collision_preview_glbs(pkg_dir, robot_name, quality="balanced", progress=Non
     convex decomposition into many parts -- shares the on-disk part cache with
     the ROS export, so generating the preview also warms a later ``collision=
     'coacd'`` export; ``"hull"`` produces a single convex hull per link (fast,
-    no optional dependency).
+    no optional dependency); ``"primitive"`` / ``"box"`` / ``"cylinder"`` /
+    ``"sphere"`` fit a native URDF primitive per link (needs scikit-robot).
 
     Links are processed CONCURRENTLY in a thread pool -- CoACD releases the GIL,
     so this scales with cores (measured ~4x on a 12-core box).  ``max_workers``
@@ -639,9 +725,15 @@ def collision_preview_glbs(pkg_dir, robot_name, quality="balanced", progress=Non
             raise ValueError(
                 "CoACD collision decomposition needs the optional 'coacd' "
                 "package -- install it with: pip install coacd")
+    elif mode in _PRIMITIVE_MODES:
+        if not skrobot_primitive_available():
+            raise ValueError(
+                "primitive collision fitting needs scikit-robot with the "
+                "per-mesh primitive API -- install/upgrade it with: pip install "
+                "-U scikit-robot")
     elif mode != "hull":
         raise ValueError(f"unsupported collision mode: {mode!r} "
-                         "(use 'coacd' or 'hull')")
+                         f"(use one of {PREVIEW_COLLISION_MODES})")
     cache_dir = os.path.join(pkg_dir, "meshes", ".coacd_cache")
     preview_dir = os.path.join(cache_dir, "preview")
     os.makedirs(preview_dir, exist_ok=True)
@@ -691,8 +783,7 @@ def collision_preview_glbs(pkg_dir, robot_name, quality="balanced", progress=Non
         scene = trimesh.Scene()
         part_i = 0
         for src, mat in blocks:
-            for data in _collision_part_stls(src, mode, quality, cache_dir):
-                part = trimesh.load(io.BytesIO(data), file_type="stl")
+            for part in _collision_preview_meshes(src, mode, quality, cache_dir):
                 part.apply_transform(mat)
                 rgb = _COLLISION_PALETTE[part_i % len(_COLLISION_PALETTE)]
                 part.visual = trimesh.visual.ColorVisuals(
@@ -999,9 +1090,13 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
     STL (the "simple collision" alternative -- one convex shape per link, what
     path planning usually wants); ``'coacd'`` runs CoACD approximate convex
     decomposition, replacing each ``<collision>``'s mesh with a *set* of convex
-    part STLs (better for high-fidelity physics).  ``coacd_quality``
+    part STLs (better for high-fidelity physics); ``'primitive'`` / ``'box'`` /
+    ``'cylinder'`` / ``'sphere'`` fit a native URDF primitive per ``<collision>``
+    (no mesh file at all -- the lightest collision, ``'primitive'`` auto-picks
+    the best of box/cylinder/sphere by voxel IoU).  ``coacd_quality``
     (``'balanced'`` | ``'fine'``) picks the CoACD preset and is ignored for the
-    other modes.  ``'coacd'`` needs the optional ``coacd`` package; its absence
+    other modes.  ``'coacd'`` needs the optional ``coacd`` package and the
+    primitive modes need the optional ``scikit-robot`` package; their absence
     raises a clear error.  ``'hull'`` has no extra dependency.  CoACD
     decomposition is cached under ``meshes/.coacd_cache``.
 
@@ -1023,9 +1118,9 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
     before any entries are emitted, so a half-rewritten package never ships."""
     if ros_version not in (1, 2):
         raise ValueError(f"unsupported ros_version: {ros_version}")
-    if collision not in ("copy", "hull", "coacd"):
+    if collision not in COLLISION_MODES:
         raise ValueError(f"unsupported collision mode: {collision!r} "
-                         "(use 'copy', 'hull' or 'coacd')")
+                         f"(use one of {COLLISION_MODES})")
     if collision == "coacd":
         if coacd_quality not in _COACD_PRESETS:
             raise ValueError(
@@ -1035,6 +1130,11 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
             raise ValueError(
                 "CoACD collision decomposition needs the optional 'coacd' "
                 "package -- install it with: pip install coacd")
+    if collision in _PRIMITIVE_MODES and not skrobot_primitive_available():
+        raise ValueError(
+            "primitive collision fitting needs scikit-robot with the per-mesh "
+            "primitive API -- install/upgrade it with: pip install -U "
+            "scikit-robot")
     coacd_cache_dir = os.path.join(pkg_dir, "meshes", ".coacd_cache")
     if loop_closures is None:
         # the editor's ZIP export calls us directly (no model); pick up the
@@ -1095,6 +1195,9 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
     # mode + quality so a source shared by several links is built once (CoACD is
     # also disk-cached under .coacd_cache)
     coll_done = {}
+    # fitted primitives (primitive/box/cylinder/sphere): (params, M) keyed by
+    # source + mode so a source shared by several links is fitted once
+    prim_done = {}
 
     def _emit_collision(base, src):
         # build the convex collision part STL(s) for a source mesh per the
@@ -1157,6 +1260,57 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
                     "filename", f"package://{pkg}/{mesh_rel}/{name}")
                 link.insert(idx + k, nb)
 
+    def _fit_primitive_cached(base, src):
+        # fit (once per source+mode) the primitive for `src`; (params, M) or None
+        key = (os.path.abspath(src), collision)
+        if key in prim_done:
+            return prim_done[key]
+        try:
+            res = _fit_collision_primitive(src, _PRIMITIVE_MODES[collision])
+        except Exception as e:
+            errors.append(f"{base}: {collision} collision failed ({e!r})")
+            return None
+        prim_done[key] = res
+        return res
+
+    def _expand_collision_primitive(link):
+        # replace each convertible <collision>'s mesh with a fitted URDF primitive
+        # (<box>/<cylinder>/<sphere>), no mesh file: swap the <geometry> element
+        # and set the block <origin> to the primitive pose in the link frame.
+        # Blocks we can't fit (multi-mesh, external/missing, primitive already)
+        # are left untouched.
+        import numpy as np
+        for block in list(link.findall("collision")):
+            meshes = list(block.iter("mesh"))
+            if len(meshes) != 1:
+                continue                   # primitive or multi-mesh -- leave it
+            base, src, _ext = _resolve_mesh(pkg_dir, meshes[0].get("filename"),
+                                            own_pkgs=own_pkgs)
+            if base is None:
+                continue                   # external ref -- leave as-is
+            if src is None:
+                errors.append(f"no source mesh for '{base}'")
+                continue
+            res = _fit_primitive_cached(base, src)
+            if res is None:
+                continue
+            params, M = res
+            # the primitive is fitted in the source frame; place it in the link
+            # frame via the bake transform (origins were zeroed) or, when origins
+            # are kept, via the block's own <origin>
+            m_bake = bake.get(id(meshes[0]))
+            base_M = m_bake if m_bake is not None \
+                else _origin_matrix(block.find("origin"))
+            geo = block.find("geometry")
+            new_geo = _primitive_geometry_el(params)
+            if geo is not None:                # stdlib ElementTree: no .replace()
+                gi = list(block).index(geo)
+                block.remove(geo)
+                block.insert(gi, new_geo)
+            else:
+                block.append(new_geo)
+            _set_origin_el(block, np.asarray(base_M, float) @ M)
+
     if collision == "coacd":
         # CoACD is the heaviest per-mesh op; warm its disk cache for every unique
         # collision source IN PARALLEL (CoACD releases the GIL) so the serial
@@ -1168,6 +1322,21 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
             except Exception:
                 pass                        # the real error resurfaces in _emit_collision
         _parallel(_warm_coacd,
+                  set(_iter_sources(root, pkg_dir, own_pkgs, ("collision",))))
+    elif collision in _PRIMITIVE_MODES:
+        # primitive fitting voxelises the mesh (auto mode scores several
+        # candidates by IoU) -- a few hundred ms per unique source; warm them in
+        # parallel so the serial expansion below is all cache hits
+        def _warm_prim(src):
+            key = (os.path.abspath(src), collision)
+            if key in prim_done:
+                return
+            try:
+                prim_done[key] = _fit_collision_primitive(
+                    src, _PRIMITIVE_MODES[collision])
+            except Exception:
+                pass                    # the real error resurfaces in expansion
+        _parallel(_warm_prim,
                   set(_iter_sources(root, pkg_dir, own_pkgs, ("collision",))))
 
     def _verbatim(job):
@@ -1189,9 +1358,11 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
         link_color = colors.get(link.get("name"))
         if collision in ("coacd", "hull"):
             _expand_collision(link)
+        elif collision in _PRIMITIVE_MODES:
+            _expand_collision_primitive(link)
         for ctx, fmt in ctx_fmt:
-            if ctx == "collision" and collision in ("coacd", "hull"):
-                continue                   # handled by _expand_collision
+            if ctx == "collision" and collision != "copy":
+                continue                   # handled by the collision expanders
             for block in link.findall(ctx):
                 for mesh in block.iter("mesh"):
                     base, src, _ext = _resolve_mesh(pkg_dir, mesh.get("filename"),

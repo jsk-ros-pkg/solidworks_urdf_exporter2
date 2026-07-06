@@ -23,11 +23,13 @@ dependencies = [
 
 [project.optional-dependencies]
 # the live self-collision highlight + the auto joint-limit sweep (skrobot FK +
-# python-fcl), plus the standalone viser GUI.  The web editor's view / edit /
-# extract / build all work WITHOUT these; collision + auto-limits degrade
-# gracefully when they are not installed.
+# python-fcl), plus the standalone viser GUI.  scikit-robot also powers the
+# `--collision primitive|box|cylinder|sphere` fitting (>=0.3.17 ships the
+# per-mesh primitive API, skrobot.utils.primitive_fitting).  The web editor's
+# view / edit / extract / build all work WITHOUT these; collision + auto-limits
+# degrade gracefully (clear error if a primitive mode is requested) when absent.
 ui = [
-    "scikit-robot>=0.3.16",
+    "scikit-robot>=0.3.17",
     "python-fcl>=0.7",
     "viser",
 ]

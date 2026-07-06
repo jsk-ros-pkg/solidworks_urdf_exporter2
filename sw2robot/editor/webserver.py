@@ -2123,8 +2123,9 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                     return self._send_json(
                         {"error": f"unsupported ros version: {ros}"}, 400)
                 ros_version = int(ros)
+                from sw2robot.exporter.ros_export import COLLISION_MODES
                 collision = (query.get("collision") or ["copy"])[0]
-                if collision not in ("copy", "hull", "coacd"):
+                if collision not in COLLISION_MODES:
                     return self._send_json(
                         {"error": f"unsupported collision mode: {collision}"}, 400)
                 cquality = (query.get("cquality") or ["balanced"])[0]
@@ -2205,8 +2206,9 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 cls = type(self)
                 if not cls.pkg_dir:
                     return self._send_json({"error": "no package open"}, 400)
+                from sw2robot.exporter.ros_export import PREVIEW_COLLISION_MODES
                 mode = (query.get("mode") or ["coacd"])[0]
-                if mode not in ("coacd", "hull"):
+                if mode not in PREVIEW_COLLISION_MODES:
                     return self._send_json(
                         {"error": f"unsupported collision mode: {mode}"}, 400)
                 # quality only affects CoACD, but validate it regardless so a

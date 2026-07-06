@@ -718,6 +718,10 @@ link; 'CoACD' decomposes each link into many convex parts.">
             <option value="copy" data-i18n="ui.collcopy">Visual mesh</option>
             <option value="hull" data-i18n="ui.collhull">Convex hull</option>
             <option value="coacd" data-i18n="ui.collcoacd">CoACD (convex parts)</option>
+            <option value="primitive" data-i18n="ui.collprimitive">Primitive (auto)</option>
+            <option value="box" data-i18n="ui.collbox">Box</option>
+            <option value="cylinder" data-i18n="ui.collcylinder">Cylinder</option>
+            <option value="sphere" data-i18n="ui.collsphere">Sphere</option>
           </select>
         </label>
         <select id="cquality"
@@ -1417,11 +1421,15 @@ the config and does NOT re-detect). Needs graph.json (CAD mode).">🔗 re-detect
                   ja: 'ポータブルな ROS 2 (ament_cmake) パッケージ (<name>_description): package:// URL、選択した形式のメッシュ、launch/display.launch.py + rviz 設定付き（実行: ros2 launch <name>_description display.launch.py）' },
     'ui.expros2': { en: '⬇ ROS2 package', ja: '⬇ ROS2 パッケージ' },
     'ui.collmode': { en: 'collision', ja: '衝突形状' },
-    't.collmode': { en: "How <collision> geometry is produced for the ROS1/ROS2 packages: 'visual mesh' reuses the visual mesh as-is; 'convex hull' uses a single convex hull per link (simple, good for path planning); 'CoACD' decomposes each link into many convex parts (best for physics, slower — server needs the coacd package). Generate previews the hull/CoACD result in the viewer.",
-                    ja: 'ROS1/ROS2 パッケージの <collision> ジオメトリの生成方法: 「ビジュアルメッシュ」はメッシュをそのまま使用、「凸包」はリンクごとに単一の凸包（シンプル、経路計画向け）、「CoACD」は各リンクを多数の凸パーツに分解（物理向け・低速、サーバーに coacd パッケージが必要）。「生成」でビューアにプレビューします。' },
+    't.collmode': { en: "How <collision> geometry is produced for the ROS1/ROS2 packages: 'visual mesh' reuses the visual mesh as-is; 'convex hull' uses a single convex hull per link (simple, good for path planning); 'CoACD' decomposes each link into many convex parts (best for physics, slower — server needs the coacd package); 'primitive'/'box'/'cylinder'/'sphere' fit a native URDF primitive per link, no mesh file at all — the lightest collision ('primitive' auto-picks the best shape; server needs scikit-robot). Generate previews the result in the viewer.",
+                    ja: 'ROS1/ROS2 パッケージの <collision> ジオメトリの生成方法: 「ビジュアルメッシュ」はメッシュをそのまま使用、「凸包」はリンクごとに単一の凸包（シンプル、経路計画向け）、「CoACD」は各リンクを多数の凸パーツに分解（物理向け・低速、サーバーに coacd パッケージが必要）、「プリミティブ／直方体／円柱／球」はリンクごとに URDF ネイティブのプリミティブをフィット（メッシュファイル無しで最軽量、「プリミティブ」は最適形状を自動選択、サーバーに scikit-robot が必要）。「生成」でビューアにプレビューします。' },
     'ui.collcopy': { en: 'Visual mesh', ja: 'ビジュアルメッシュ' },
     'ui.collhull': { en: 'Convex hull', ja: '凸包' },
     'ui.collcoacd': { en: 'CoACD (convex parts)', ja: 'CoACD（凸パーツ）' },
+    'ui.collprimitive': { en: 'Primitive (auto)', ja: 'プリミティブ（自動）' },
+    'ui.collbox': { en: 'Box', ja: '直方体' },
+    'ui.collcylinder': { en: 'Cylinder', ja: '円柱' },
+    'ui.collsphere': { en: 'Sphere', ja: '球' },
     'coll.hullword': { en: 'convex-hull', ja: '凸包' },
     'ui.coacd': { en: 'CoACD collision', ja: 'CoACD 衝突形状' },
     'ui.cqbalanced': { en: 'Balanced', ja: 'バランス' },
