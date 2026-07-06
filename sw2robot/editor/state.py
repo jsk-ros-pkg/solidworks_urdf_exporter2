@@ -32,6 +32,18 @@ class JointEdit(BaseModel):
     # Actuator limits (None = keep the CAD URDF default); effort N*m, velocity rad/s
     effort: float | None = None
     velocity: float | None = None
+    # Optional URDF joint physics (None per field = element/attr omitted):
+    #   <dynamics damping= friction=>
+    damping: float | None = None
+    friction: float | None = None
+    #   <safety_controller soft_lower_limit= soft_upper_limit= k_position= k_velocity=>
+    soft_lower_limit: float | None = None
+    soft_upper_limit: float | None = None
+    k_position: float | None = None
+    k_velocity: float | None = None
+    #   <calibration rising= falling=>
+    cal_rising: float | None = None
+    cal_falling: float | None = None
     servo_model: str | None = None   # e.g. "HLS3606M" (drives profile auto-fill)
     # CAD-specific edits robot-compiler can't do (axis/type live in the URDF):
     flip_axis: bool = False       # negate the joint's <axis xyz>

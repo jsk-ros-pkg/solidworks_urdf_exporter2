@@ -386,6 +386,28 @@ def _um_set_limits(state, limits):
     return {"applied": applied, "missed": missed}
 
 
+def _um_set_physics(state, items):
+    """URDF-mode: apply effort/velocity + dynamics/safety/calibration to the
+    overlay (each null clears its field), mirroring _um_set_limits."""
+    from . import core
+    applied, missed = [], []
+    for it in items:
+        child = it.get("child")
+        j = _um_joint_by_child(state, child)
+        if not j:
+            missed.append(child)
+            continue
+        e = state.edit_for(j)
+        v = it.get("effort")
+        e.effort = None if v is None else float(v)
+        v = it.get("velocity")
+        e.velocity = None if v is None else float(v)
+        core.set_joint_physics(state, j, **{k: it.get(k) for k in _PHYS_KEYS})
+        applied.append(child)
+    _um_save(state)
+    return {"applied": applied, "missed": missed}
+
+
 def _um_set_types(state, changes):
     from . import core
     applied, missed = [], []
@@ -1151,6 +1173,110 @@ def _set_limit_in_urdf(pkg_dir, urdf_rel, child, lower, upper, continuous):
         return head, body
 
     return _edit_joint_block(pkg_dir, urdf_rel, child, edit)
+
+
+# Optional joint physics: (urdf element, ((urdf attr, payload key), ...)) in
+# write order.  Shared by the served-URDF patcher and the joints.yaml patcher so
+# both agree on element names, attribute order and the cal_rising/cal_falling ->
+# rising/falling mapping.  effort/velocity are handled separately (they live in
+# <limit>).  The payload carries the COMPLETE desired physics for the joint:
+# a null field clears that attribute (idempotent, so replays converge).
+_PHYS_ELEMS = (
+    ("dynamics", (("damping", "damping"), ("friction", "friction"))),
+    ("safety_controller", (("soft_lower_limit", "soft_lower_limit"),
+                           ("soft_upper_limit", "soft_upper_limit"),
+                           ("k_position", "k_position"),
+                           ("k_velocity", "k_velocity"))),
+    ("calibration", (("rising", "cal_rising"), ("falling", "cal_falling"))),
+)
+_PHYS_KEYS = tuple(k for _tag, pairs in _PHYS_ELEMS for _attr, k in pairs)
+
+
+def _set_physics_in_urdf(pkg_dir, urdf_rel, child, phys):
+    """Bake effort/velocity + ``<dynamics>``/``<safety_controller>``/
+    ``<calibration>`` into the served URDF joint (matched by child), rebuilding
+    each element from ``phys`` so a cleared field drops it.  Build-skipping;
+    joints.yaml still persists the values.  Returns True if the joint was found."""
+    import re
+
+    def edit(head, body):
+        eff, vel = phys.get("effort"), phys.get("velocity")
+        lm = re.search(r'<limit\b[^>]*?>', body)
+        if lm is not None and (eff is not None or vel is not None):
+            seg = lm.group(0)
+            if eff is not None:
+                seg = _set_attr_in_tag(seg, "effort", _fmt_num(float(eff)))
+            if vel is not None:
+                seg = _set_attr_in_tag(seg, "velocity", _fmt_num(float(vel)))
+            body = body[:lm.start()] + seg + body[lm.end():]
+        for tag, pairs in _PHYS_ELEMS:
+            body = re.sub(rf'[ \t]*<{tag}\b[^>]*?>[ \t]*\n?', '', body)  # drop old
+            attrs = [(a, _fmt_num(float(phys[k]))) for a, k in pairs
+                     if phys.get(k) is not None]
+            if attrs:
+                pad = _body_indent(body)
+                rendered = " ".join(f'{a}="{v}"' for a, v in attrs)
+                body = _append_into_body(body, f'{pad}<{tag} {rendered}/>\n')
+        return head, body
+
+    return _edit_joint_block(pkg_dir, urdf_rel, child, edit)
+
+
+def _phys_yaml_lines(phys, indent):
+    """joints.yaml lines (at ``indent``) for the physics carried in ``phys``."""
+    out = []
+    if phys.get("effort") is not None:
+        out.append(f"{indent}effort:   {float(phys['effort']):g}")
+    if phys.get("velocity") is not None:
+        out.append(f"{indent}velocity: {float(phys['velocity']):g}")
+    for tag, pairs in _PHYS_ELEMS:
+        parts = [f"{a}: {float(phys[k]):g}" for a, k in pairs
+                 if phys.get(k) is not None]
+        if parts:
+            out.append(f"{indent}{tag}: {{{', '.join(parts)}}}")
+    return out
+
+
+def _set_joint_physics_yaml(txt, child, phys):
+    """Replace the physics lines of the joint whose ``child`` matches, preserving
+    the block's other lines / comments.  Returns (text, n_changed).  Operates
+    line-by-line: joints.yaml physics are single-line leaves (effort/velocity) or
+    flow-mapping (dynamics/safety_controller/calibration), never nested."""
+    import re
+    lines = txt.split("\n")
+    starts = [i for i, l in enumerate(lines)
+              if re.match(r'\s*-\s*parent:', l)]
+    if not starts:
+        return txt, 0
+    phys_key = re.compile(
+        r'\s*(effort|velocity|dynamics|safety_controller|calibration)\s*:')
+    for bi, s in enumerate(starts):
+        # block = [s, e): up to the next joint entry, or the first line that
+        # leaves the list (a top-level comment / unindented content) / EOF
+        e = starts[bi + 1] if bi + 1 < len(starts) else len(lines)
+        for k in range(s + 1, e):
+            lk = lines[k]
+            if lk.strip() and not lk.startswith(" ") and not lk.startswith("\t"):
+                e = k
+                break
+            if re.match(r'\s*#', lk) and not lk.startswith(("    ", "\t")):
+                e = k
+                break
+        block = lines[s:e]
+        cm = next((re.match(r'(\s*)child:\s*(\S+)', bl) for bl in block
+                   if re.match(r'\s*child:\s*\S+', bl)), None)
+        if not cm or cm.group(2) != child:
+            continue
+        indent = cm.group(1)                 # child:/type: sit at this indent
+        kept = [bl for bl in block if not phys_key.match(bl)]
+        # drop trailing blank lines inside the block, re-add after physics
+        tail = []
+        while kept and not kept[-1].strip():
+            tail.insert(0, kept.pop())
+        new_block = kept + _phys_yaml_lines(phys, indent) + tail
+        lines[s:e] = new_block
+        return "\n".join(lines), 1
+    return txt, 0
 
 
 def _set_mimic_in_urdf(pkg_dir, urdf_rel, child, master, multiplier, offset, clear):
@@ -2379,6 +2505,45 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                     with open(yml, "w", encoding="utf-8") as f:
                         f.write(txt)
                 print(f"[sw2robot.web] set_limits: {len(applied)} applied, "
+                      f"{len(missed)} not matched")
+                return self._send_json({"applied": applied, "missed": missed})
+            if parsed.path == "/api/set_physics":
+                # effort/velocity + <dynamics>/<safety_controller>/<calibration>
+                # per joint (matched by child).  Payload carries the COMPLETE
+                # desired physics; a null field clears it.  CAD mode persists to
+                # joints.yaml + patches the served URDF in place; URDF mode edits
+                # the overlay (same split as /api/set_limits).
+                cls = type(self)
+                n = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(n) or b"{}")
+                items = body.get("physics") or []
+                if not cls.pkg_dir:
+                    return self._send_json({"error": "no package open"}, 400)
+                if not _cad_mode(cls.pkg_dir):
+                    return self._um_reply(_um_set_physics, items)
+                name = os.path.splitext(os.path.basename(cls.urdf_rel))[0]
+                yml = os.path.join(cls.pkg_dir, name + ".joints.yaml")
+                if not os.path.exists(yml):
+                    return self._send_json(
+                        {"error": "joints.yaml not found"}, 400)
+                with open(yml, encoding="utf-8") as f:
+                    txt = f.read()
+                linv = _link_names_inverse(txt)   # display -> component
+                applied, missed = [], []
+                changed_yaml = False
+                for it in items:
+                    child = it.get("child")
+                    txt, ky = _set_joint_physics_yaml(
+                        txt, linv.get(child, child), it)
+                    changed_yaml = changed_yaml or bool(ky)
+                    ok = _set_physics_in_urdf(cls.pkg_dir, cls.urdf_rel,
+                                              child, it)
+                    (applied if ok else missed).append(child)
+                if changed_yaml:
+                    _snapshot(cls.pkg_dir, yml, f"physics x{len(applied)}")
+                    with open(yml, "w", encoding="utf-8") as f:
+                        f.write(txt)
+                print(f"[sw2robot.web] set_physics: {len(applied)} applied, "
                       f"{len(missed)} not matched")
                 return self._send_json({"applied": applied, "missed": missed})
             if parsed.path == "/api/set_axis":

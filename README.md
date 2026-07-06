@@ -164,6 +164,11 @@ Everything below edits the package server-side and rebuilds the URDF in place
   **multiplier** and **offset** per follower (URDF `<mimic>`). Move the master
   and the followers track it live.
 - **Delete subtree** — drop a link and everything below it.
+- **Actuator & physics** — per movable joint, set `<limit>` effort/velocity and
+  the optional URDF `<dynamics>` (damping/friction), `<safety_controller>`
+  (soft limits, k_position, k_velocity) and `<calibration>` (rising/falling).
+  Blank fields stay unset. Persisted in `joints.yaml`, so they survive a
+  re-extract (or hand-edit the same keys under each joint in `joints.yaml`).
 
 **Coordinate frames**
 

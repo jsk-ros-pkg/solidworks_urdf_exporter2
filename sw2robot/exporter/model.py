@@ -205,6 +205,18 @@ class Joint:
     axis: list | None = None
     lower: float | None = None
     upper: float | None = None
+    # actuator limits: None -> the URDF writer's defaults (effort 10, velocity 3.14)
+    effort: float | None = None
+    velocity: float | None = None
+    # optional URDF joint physics (set via joints.yaml or the editor overlay);
+    # each is None when unset so the element is simply omitted:
+    #   dynamics    -> <dynamics damping= friction=>
+    #   safety      -> <safety_controller soft_lower_limit= soft_upper_limit=
+    #                                     k_position= k_velocity=>
+    #   calibration -> <calibration rising= falling=>
+    dynamics: dict | None = None
+    safety: dict | None = None
+    calibration: dict | None = None
     mate_types: list = field(default_factory=list)
     # mimic coupling (closed-loop / geared): {joint, multiplier, offset}
     mimic: dict | None = None
@@ -260,6 +272,46 @@ def _match_component(comps, ref):
     return None
 
 
+def _num(v):
+    """Coerce a YAML scalar to float, or None if absent / unparseable."""
+    if v is None:
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _subdict(src, keys):
+    """Pull ``keys`` out of mapping ``src`` as floats; None if none are present."""
+    if not isinstance(src, dict):
+        return None
+    d = {k: _num(src.get(k)) for k in keys if _num(src.get(k)) is not None}
+    return d or None
+
+
+# URDF joint-physics sub-elements and their attribute names, in write order.
+_DYNAMICS_KEYS = ("damping", "friction")
+_SAFETY_KEYS = ("soft_lower_limit", "soft_upper_limit", "k_position", "k_velocity")
+_CALIBRATION_KEYS = ("rising", "falling")
+
+
+def physics_from_cfg(j):
+    """Extract optional joint-physics from a joints.yaml ``joints`` entry.
+
+    Returns ``{effort, velocity, dynamics, safety, calibration}`` with any
+    unset field left as None, so a plain config entry adds nothing.  Accepts
+    ``safety_controller`` (the URDF spelling) or ``safety`` as an alias."""
+    return {
+        "effort": _num(j.get("effort")),
+        "velocity": _num(j.get("velocity")),
+        "dynamics": _subdict(j.get("dynamics"), _DYNAMICS_KEYS),
+        "safety": _subdict(j.get("safety_controller") or j.get("safety"),
+                           _SAFETY_KEYS),
+        "calibration": _subdict(j.get("calibration"), _CALIBRATION_KEYS),
+    }
+
+
 def resolve_directed(comps, joints_cfg):
     """Config 'joints' -> ordered list of directed edges.
 
@@ -284,7 +336,8 @@ def resolve_directed(comps, joints_cfg):
                     "lower": j.get("lower"), "upper": j.get("upper"),
                     "axis_point": j.get("axis_point"),
                     "axis_dir": j.get("axis_dir"),
-                    "mimic": j.get("mimic")})
+                    "mimic": j.get("mimic"),
+                    **physics_from_cfg(j)})
     return out
 
 
@@ -2152,7 +2205,10 @@ def _config_parent_map(comps, adjacency, base, directed):
             "type": jtype, "axis": ax,
             "lower": -3.141592 if lo is None else lo,
             "upper": 3.141592 if up is None else up,
-            "mimic": d.get("mimic")}
+            "mimic": d.get("mimic"),
+            "effort": d.get("effort"), "velocity": d.get("velocity"),
+            "dynamics": d.get("dynamics"), "safety": d.get("safety"),
+            "calibration": d.get("calibration")}
     # Mirror / sibling fallback: a joint whose child got no axis (a SolidWorks
     # mirror-feature copy, or a wheel mated only by coincident planes) inherits
     # its mated twin's axis.  The config already supplies the joint TYPE here, so
@@ -2272,10 +2328,18 @@ def _finalize_tree(comps, adjacency, base, parent_of, edge_info, root_rpy=None,
                     # joint axes are expressed in the CHILD anchor frame
                     d_local = anchor[child][:3, :3].T @ (d / n)
                     axis = [round(float(x), 8) for x in d_local]
+        # physics sub-elements are meaningful only on movable joints; a joint
+        # the config pinned to fixed drops them (URDF ignores them there anyway)
+        movable = jtype in ("revolute", "continuous", "prismatic")
         joints.append(Joint(
             name=f"{pa.link_name}__{ch.link_name}",
             parent=pa.link_name, child=ch.link_name, jtype=jtype,
             xyz=xyz, rpy=rpy, axis=axis, lower=lower, upper=upper,
+            effort=info.get("effort") if movable else None,
+            velocity=info.get("velocity") if movable else None,
+            dynamics=info.get("dynamics") if movable else None,
+            safety=info.get("safety") if movable else None,
+            calibration=info.get("calibration") if movable else None,
             mate_types=rec.get("types", []), mimic=info.get("mimic"),
             sw_axis_point=sw_pt, sw_axis_dir=sw_dir,
             geo_note=info.get("note")))

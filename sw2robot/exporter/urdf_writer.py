@@ -173,6 +173,36 @@ def _link_xml(comp, ros_pkg=None, rn=lambda n: n, mesh_dir=None, density=None):
     return "\n".join(lines), method, problems
 
 
+def _attrs(spec, source):
+    """Render ``name="value"`` attribute pairs for the keys in ``spec`` that are
+    present (not None) in mapping ``source``, in ``spec`` order."""
+    if not isinstance(source, dict):
+        return ""
+    parts = []
+    for key in spec:
+        v = source.get(key)
+        if v is not None:
+            parts.append(f'{key}="{float(v):.6g}"')
+    return " ".join(parts)
+
+
+def _physics_lines(joint):
+    """URDF ``<dynamics>`` / ``<safety_controller>`` / ``<calibration>`` lines
+    for a joint, each emitted only when the joint carries values for it."""
+    out = []
+    dyn = _attrs(("damping", "friction"), getattr(joint, "dynamics", None))
+    if dyn:
+        out.append(f"    <dynamics {dyn}/>")
+    saf = _attrs(("soft_lower_limit", "soft_upper_limit", "k_position",
+                  "k_velocity"), getattr(joint, "safety", None))
+    if saf:
+        out.append(f"    <safety_controller {saf}/>")
+    cal = _attrs(("rising", "falling"), getattr(joint, "calibration", None))
+    if cal:
+        out.append(f"    <calibration {cal}/>")
+    return out
+
+
 def _joint_xml(joint, rn=lambda n: n, jn=lambda n: n):
     lines = [f'  <joint name="{jn(joint.name)}" type="{joint.jtype}">']
     lines.append(f'    <origin xyz="{_fmt(joint.xyz)}" rpy="{_fmt(joint.rpy)}"/>')
@@ -180,11 +210,22 @@ def _joint_xml(joint, rn=lambda n: n, jn=lambda n: n):
     lines.append(f'    <child link="{rn(joint.child)}"/>')
     if joint.axis is not None:
         lines.append(f'    <axis xyz="{_fmt(joint.axis)}"/>')
+    eff = getattr(joint, "effort", None)
+    vel = getattr(joint, "velocity", None)
+    eff = 10 if eff is None else eff
+    vel = 3.14 if vel is None else vel
     if joint.jtype in ("revolute", "prismatic"):
         lo = joint.lower if joint.lower is not None else -3.14159
         up = joint.upper if joint.upper is not None else 3.14159
         lines.append(f'    <limit lower="{lo:.6g}" upper="{up:.6g}" '
-                     f'effort="10" velocity="3.14"/>')
+                     f'effort="{eff:.6g}" velocity="{vel:.6g}"/>')
+    elif joint.jtype == "continuous" and (
+            getattr(joint, "effort", None) is not None
+            or getattr(joint, "velocity", None) is not None):
+        # continuous joints carry no lower/upper, but a <limit> may still pin
+        # effort/velocity when the user set them
+        lines.append(f'    <limit effort="{eff:.6g}" velocity="{vel:.6g}"/>')
+    lines.extend(_physics_lines(joint))
     if joint.mimic:
         mj = jn(joint.mimic.get("joint"))
         mult = joint.mimic.get("multiplier", 1.0)

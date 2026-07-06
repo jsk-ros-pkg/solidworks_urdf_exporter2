@@ -173,6 +173,23 @@
     cursor: pointer; }
   .jp-lim-apply:hover { background: #2d4a55; }
   .jp-lim-apply:disabled { opacity: .5; cursor: default; }
+  /* actuator & physics (dynamics / safety_controller / calibration) */
+  .jp-physics { margin-top: 6px; border-top: 1px solid #22262b; padding-top: 4px; }
+  .jp-physics > summary { color: #8a93a3; font-size: 11px; cursor: pointer;
+    list-style: none; user-select: none; }
+  .jp-physics > summary::-webkit-details-marker { display: none; }
+  .jp-physics > summary::before { content: '\25B8'; display: inline-block;
+    margin-right: 4px; transition: transform .12s; color: #6cf; }
+  .jp-physics[open] > summary::before { transform: rotate(90deg); }
+  .jp-physics > summary:hover { color: #cfe3ff; }
+  .jp-physics .jp-sub { color: #6b7480; font-size: 10px; margin: 5px 0 1px;
+    text-transform: uppercase; letter-spacing: .04em; }
+  .jp-physics .jp-num { width: 64px; color: #cdd6e0; }
+  .jp-physics .jp-lbl { min-width: 62px; }
+  .jp-phys-apply { font-size: 10px; padding: 1px 8px; border-radius: 3px;
+    background: #25303c; color: #cfe3ff; border: 1px solid #38516b; cursor: pointer; }
+  .jp-phys-apply:hover { background: #2d4a55; }
+  .jp-hint { color: #6b7480; font-size: 9px; margin-top: 2px; }
   .jp-name { flex: 1; min-width: 0; color: #cfe3ff; word-break: break-all; }
   /* rename (double-click a name in the tree/panel, or the ≣ 改名 list) */
   .renamable { cursor: text; }
@@ -981,6 +998,29 @@ the config and does NOT re-detect). Needs graph.json (CAD mode).">🔗 re-detect
     'jp.mimicOff': { en: 'offset', ja: 'オフセット' },
     'jp.mimicUnlink': { en: '✕ unlink mimic', ja: '✕ mimic 解除' },
     'jp.fixed': { en: 'fixed — pick a type above to add motion', ja: 'fixed — 上で種類を選ぶと可動になります' },
+    // physics section (dynamics / safety_controller / calibration + actuator)
+    'jp.physics': { en: '⚙ actuator & physics', ja: '⚙ アクチュエータ・物理' },
+    'jp.effort': { en: 'effort (N·m/N)', ja: 'effort (N·m/N)' },
+    'jp.velocity': { en: 'velocity (rad/s, m/s)', ja: 'velocity (rad/s, m/s)' },
+    'jp.dynamics': { en: 'dynamics', ja: 'dynamics' },
+    'jp.damping': { en: 'damping', ja: 'damping' },
+    'jp.friction': { en: 'friction', ja: 'friction' },
+    'jp.safety': { en: 'safety_controller', ja: 'safety_controller' },
+    'jp.softLower': { en: 'soft lower', ja: 'soft lower' },
+    'jp.softUpper': { en: 'soft upper', ja: 'soft upper' },
+    'jp.kPosition': { en: 'k_position', ja: 'k_position' },
+    'jp.kVelocity': { en: 'k_velocity', ja: 'k_velocity' },
+    'jp.calibration': { en: 'calibration', ja: 'calibration' },
+    'jp.calRising': { en: 'rising', ja: 'rising' },
+    'jp.calFalling': { en: 'falling', ja: 'falling' },
+    'jp.physApply': { en: 'apply physics', ja: '物理を反映' },
+    'jp.physHint': { en: 'blank = leave unset (element/attribute omitted)',
+                     ja: '空欄 = 未設定（要素/属性を出力しない）' },
+    'phys.applying': { en: 'setting joint physics — rebuilding …',
+                       ja: 'ジョイント物理を設定して再ビルド中 …' },
+    'phys.done': { en: 'joint physics applied', ja: 'ジョイント物理を反映しました' },
+    'phys.fail': { en: a => `set physics failed: ${a.e}`,
+                   ja: a => `物理の設定に失敗: ${a.e}` },
     // mimic linking (m): master + follower joints
     'mimic.bar': { en: a => `mimic: master <b>${a.master}</b> — click joints to add followers (<b>${a.n}</b>) · Enter apply · Esc cancel`,
                    ja: a => `mimic: master <b>${a.master}</b> — 関節をクリックで follower 追加 (<b>${a.n}</b>) · Enter 適用 · Esc 取消` },
@@ -3422,6 +3462,79 @@ function _jointLimits(j) {
   return [lo, hi];
 }
 
+// current joint physics read straight off the URDF node (source of truth on
+// screen): <limit effort/velocity>, <dynamics>, <safety_controller>, <calibration>
+function _readPhysics(j) {
+  const n = j.urdfNode;
+  const at = (sel, a) => n?.querySelector?.(sel)?.getAttribute?.(a) ?? '';
+  return {
+    effort: at('limit', 'effort'), velocity: at('limit', 'velocity'),
+    damping: at('dynamics', 'damping'), friction: at('dynamics', 'friction'),
+    soft_lower_limit: at('safety_controller', 'soft_lower_limit'),
+    soft_upper_limit: at('safety_controller', 'soft_upper_limit'),
+    k_position: at('safety_controller', 'k_position'),
+    k_velocity: at('safety_controller', 'k_velocity'),
+    cal_rising: at('calibration', 'rising'),
+    cal_falling: at('calibration', 'falling'),
+  };
+}
+
+// collapsible actuator/physics editor for a movable joint: effort/velocity go
+// into <limit>, the rest into optional <dynamics>/<safety_controller>/
+// <calibration> (blank clears).  POSTs /api/set_physics (rebuild + reload).
+function physicsSectionHtml(j) {
+  const p = _readPhysics(j);
+  const num = (key, val) =>
+    `<input type="number" class="jp-num jp-phys" data-key="${key}" ` +
+    `step="any" value="${val}">`;
+  const row = (lbl, ...inputs) =>
+    `<div class="jp-row"><span class="jp-lbl">${lbl}</span>${inputs.join('')}</div>`;
+  return (
+    `<details class="jp-physics" open><summary>${t('jp.physics')}</summary>` +
+      row(t('jp.effort'), num('effort', p.effort)) +
+      row(t('jp.velocity'), num('velocity', p.velocity)) +
+      `<div class="jp-sub">${t('jp.dynamics')}</div>` +
+      row(t('jp.damping'), num('damping', p.damping)) +
+      row(t('jp.friction'), num('friction', p.friction)) +
+      `<div class="jp-sub">${t('jp.safety')}</div>` +
+      row(t('jp.softLower'), num('soft_lower_limit', p.soft_lower_limit)) +
+      row(t('jp.softUpper'), num('soft_upper_limit', p.soft_upper_limit)) +
+      row(t('jp.kPosition'), num('k_position', p.k_position)) +
+      row(t('jp.kVelocity'), num('k_velocity', p.k_velocity)) +
+      `<div class="jp-sub">${t('jp.calibration')}</div>` +
+      row(t('jp.calRising'), num('cal_rising', p.cal_rising)) +
+      row(t('jp.calFalling'), num('cal_falling', p.cal_falling)) +
+      `<div class="jp-row jp-physrow">` +
+        `<button class="jp-phys-apply">${t('jp.physApply')}</button></div>` +
+      `<div class="jp-hint">${t('jp.physHint')}</div>` +
+    `</details>`);
+}
+
+// gather the physics inputs (blank -> null = clear) and POST /api/set_physics
+async function applyPhysics(child, phys) {
+  if (!currentInfo) { return; }
+  log(t('phys.applying'));
+  statusEl.textContent = t('status.rebuilding');
+  try {
+    const resp = await fetch('/api/set_physics', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ physics: [{ child, ...phys }] }) });
+    const r = await resp.json();
+    if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
+    if (!r.applied?.length) {
+      log(t('limits.noneMatched', { child }), 'err');
+      reselectAfterLoad = null;
+      return;
+    }
+    log(t('phys.done'), 'ok');
+    loadRobot(currentInfo, { keepPose: true });
+    refreshHistory();
+  } catch (e) {
+    log(t('phys.fail', { e: e.message ?? e }), 'err');
+    reselectAfterLoad = null;
+  }
+}
+
 function jointPanelHtml(j, parentLink, childLink) {
   const movable = j.jointType !== 'fixed';
   const mimic = !!j.mimicJoint;
@@ -3470,7 +3583,7 @@ function jointPanelHtml(j, parentLink, childLink) {
       `<div class="jp-row jp-fliprow">` +
         `<button class="jp-flip" title="${t('jp.flipTitle')}">` +
         `${t('jp.flip')}</button>` +
-      `</div>`;
+      `</div>` + physicsSectionHtml(j);
   } else if (mimic) {
     // read the live coupling from the URDF <mimic> element (the loader exposes
     // only the master link, not multiplier/offset)
@@ -3554,6 +3667,17 @@ function wireJointPanel(el, j) {
   // ⇄ reverse this joint's + direction (axis negated, limits swapped)
   panel.querySelector('.jp-flip')?.addEventListener('click', () =>
     applyAxisFlip(j.name, childLink));
+
+  // actuator & physics: gather the inputs (blank -> null) and apply
+  panel.querySelector('.jp-phys-apply')?.addEventListener('click', () => {
+    const phys = {};
+    panel.querySelectorAll('.jp-phys').forEach(inp => {
+      const v = inp.value.trim();
+      phys[inp.dataset.key] = v === '' ? null : parseFloat(v);
+    });
+    reselectAfterLoad = childLink;      // keep this panel open after rebuild
+    applyPhysics(childLink, phys);
+  });
 
   const slider = panel.querySelector('.jp-slider');
   if (!slider) { return; }            // fixed / mimic: no angle control

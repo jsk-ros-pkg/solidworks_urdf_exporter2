@@ -416,6 +416,30 @@ def set_actuator(state: RobotCompilerState, joint: str,
         e.velocity = float(velocity)
 
 
+# Joint-physics overlay fields (JointEdit attr -> None clears it). Grouped by
+# the URDF element they populate; used by set_joint_physics and build_urdf.
+_PHYSICS_FIELDS = (
+    "damping", "friction",
+    "soft_lower_limit", "soft_upper_limit", "k_position", "k_velocity",
+    "cal_rising", "cal_falling",
+)
+
+
+def set_joint_physics(state: RobotCompilerState, joint: str, **fields) -> None:
+    """Set optional URDF joint physics on the overlay -- ``<dynamics>`` (damping,
+    friction), ``<safety_controller>`` (soft_lower_limit, soft_upper_limit,
+    k_position, k_velocity) and ``<calibration>`` (cal_rising, cal_falling).
+
+    Pass a field as ``None`` to clear it (drop that attribute); omit it to leave
+    it unchanged.  Unknown keys are ignored."""
+    _require_joint(state, joint)
+    e = state.edit_for(joint)
+    for key, val in fields.items():
+        if key not in _PHYSICS_FIELDS:
+            continue
+        setattr(e, key, None if val is None else float(val))
+
+
 def apply_servo_profile(state: RobotCompilerState, joint: str,
                         model: str | None) -> dict | None:
     """Record the servo model and, if known, auto-fill effort / velocity / range
@@ -685,6 +709,39 @@ def _sanitize_urdf_names(root) -> None:
             mim.set("joint", jmap[mim.get("joint")])
 
 
+# <element>: (urdf attribute, JointEdit field) pairs, in URDF attribute order.
+_PHYSICS_ELEMENTS = (
+    ("dynamics", (("damping", "damping"), ("friction", "friction"))),
+    ("safety_controller", (("soft_lower_limit", "soft_lower_limit"),
+                           ("soft_upper_limit", "soft_upper_limit"),
+                           ("k_position", "k_position"),
+                           ("k_velocity", "k_velocity"))),
+    ("calibration", (("rising", "cal_rising"), ("falling", "cal_falling"))),
+)
+
+
+def _apply_joint_physics(je, edit) -> None:
+    """Bake the overlay's ``<dynamics>`` / ``<safety_controller>`` /
+    ``<calibration>`` onto a movable joint element.  Each element is (re)built
+    from the set fields, or removed when the overlay clears them all."""
+    if je.get("type") not in ("revolute", "prismatic", "continuous"):
+        return
+    for tag, pairs in _PHYSICS_ELEMENTS:
+        attrs = {attr: getattr(edit, fld) for attr, fld in pairs
+                 if getattr(edit, fld) is not None}
+        el = je.find(tag)
+        if not attrs:
+            if el is not None:
+                je.remove(el)
+            continue
+        if el is None:
+            el = ET.SubElement(je, tag)
+        else:
+            el.attrib.clear()
+        for attr, val in attrs.items():
+            el.set(attr, f"{float(val):.6g}")
+
+
 def build_urdf(state: RobotCompilerState, sanitize: bool = True,
                fold_mass_only: bool = True) -> str:
     """The CAD URDF with the interactive overlay baked in -- per-joint (rename,
@@ -772,6 +829,8 @@ def build_urdf(state: RobotCompilerState, sanitize: bool = True,
             lim.set("upper", "3.14159" if ftype == "revolute" else "0.1")
             lim.set("effort", "10")
             lim.set("velocity", "3.14")
+        # optional <dynamics>/<safety_controller>/<calibration> from the overlay
+        _apply_joint_physics(je, e)
 
     # repoint any mimic that referenced a now-renamed joint
     for je in root.findall("joint"):

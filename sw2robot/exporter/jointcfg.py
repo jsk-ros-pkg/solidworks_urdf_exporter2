@@ -52,6 +52,38 @@ from __future__ import annotations
 import yaml
 
 
+def _inline_map(d, keys):
+    """A YAML flow-mapping ``{k: v, ...}`` for present float keys, or ''."""
+    if not isinstance(d, dict):
+        return ""
+    parts = [f"{k}: {float(d[k]):g}" for k in keys
+             if d.get(k) is not None]
+    return "{" + ", ".join(parts) + "}" if parts else ""
+
+
+def _physics_yaml_lines(j):
+    """joints.yaml lines for a joint's optional actuator/physics fields."""
+    lines = []
+    eff = getattr(j, "effort", None)
+    vel = getattr(j, "velocity", None)
+    if eff is not None:
+        lines.append(f"    effort:   {float(eff):g}")
+    if vel is not None:
+        lines.append(f"    velocity: {float(vel):g}")
+    dyn = _inline_map(getattr(j, "dynamics", None), ("damping", "friction"))
+    if dyn:
+        lines.append(f"    dynamics: {dyn}")
+    saf = _inline_map(getattr(j, "safety", None),
+                      ("soft_lower_limit", "soft_upper_limit",
+                       "k_position", "k_velocity"))
+    if saf:
+        lines.append(f"    safety_controller: {saf}")
+    cal = _inline_map(getattr(j, "calibration", None), ("rising", "falling"))
+    if cal:
+        lines.append(f"    calibration: {cal}")
+    return lines
+
+
 def write_template(model, path):
     lines = [
         "# Joint config -- this IS the kinematic tree.  Edit parent/child to",
@@ -60,6 +92,10 @@ def write_template(model, path):
         "# type: fixed | revolute | prismatic | continuous",
         "# Sub-assemblies with moving internals expand automatically;",
         "# override with  expand: [name-substr]  /  no_expand: [name-substr]",
+        "# Optional per-joint actuator/physics (movable joints only):",
+        "#   effort: 5   velocity: 2   dynamics: {damping: 0.1, friction: 0.0}",
+        "#   safety_controller: {soft_lower_limit: -1, soft_upper_limit: 1,"
+        " k_position: 100, k_velocity: 10}   calibration: {rising: 0.0}",
         f"base: {model.base_link}",
         "joints:",
     ]
@@ -92,6 +128,10 @@ def write_template(model, path):
             if m.get("poly"):
                 poly = ", ".join(repr(float(x)) for x in m["poly"])
                 lines.append(f"      poly: [{poly}]")
+        # round-trip optional joint physics so editor / hand edits survive a
+        # rebuild and a re-extract (the editor rebuilds from this config, which
+        # would otherwise drop these -- same reasoning as limits/mimic above).
+        lines.extend(_physics_yaml_lines(j))
     # robot-compiler module interface (root is emitted as base_link by default)
     lines.append("")
     lines.append("# --- robot-compiler module interface (optional) ---")
