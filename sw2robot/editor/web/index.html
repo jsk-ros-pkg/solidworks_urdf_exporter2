@@ -21,6 +21,13 @@
   #views button { font-size: 11px; padding: 3px 8px; opacity: .85; }
   #views button.toggle.active { background: #3d6fb4; border-color: #7db8ff;
            color: #fff; opacity: 1; }
+  /* replay/record live in #toolrow, not #views -- give them the same active tint */
+  #toolrow button.toggle.active { background: #3d6fb4; border-color: #7db8ff;
+           color: #fff; }
+  /* recording: red + slow pulse so it's obvious a capture is live */
+  #record.active { background: #c0392b; border-color: #ff8a7a; color: #fff;
+           animation: recpulse 1.2s ease-in-out infinite; }
+  @keyframes recpulse { 50% { opacity: .5; } }
   #panel { width: 340px; padding: 12px; overflow-y: auto; flex-shrink: 0;
            background: #22252b; border-left: 1px solid #333;
            display: flex; flex-direction: column; }
@@ -597,6 +604,9 @@
       </button>
       <button id="replay" class="toggle" data-i18n-title="t.replay"
               title="記録を再生。クリック: .json を読み込んで再生 ・ Shift+クリック: 現在のセッションを再生">▷
+      </button>
+      <button id="record" class="toggle" data-i18n-title="t.record"
+              title="タブを録画。クリック: 開始/停止 ・ Shift+クリック: replayを自動録画">⏺
       </button>
       <input id="replayfile" type="file" accept=".json,application/json"
              style="display:none">
@@ -1416,6 +1426,12 @@ the config and does NOT re-detect). Needs graph.json (CAD mode).">🔗 re-detect
     'replay.done': { en: a => `▷ replay done (${a.done} played, ${a.skipped} skipped)`, ja: a => `▷ 再生完了（${a.done} 実行 / ${a.skipped} スキップ）` },
     'replay.stepFail': { en: a => `▷ replay: ${a.op} failed: ${a.e}`, ja: a => `▷ 再生: ${a.op} 失敗: ${a.e}` },
     'replay.badFile': { en: a => `▷ replay: could not read file: ${a.e}`, ja: a => `▷ 再生: ファイルを読めませんでした: ${a.e}` },
+    't.record': { en: 'record a video of the tab (all UI + the keycast overlay). Click: start / stop (the browser asks to share this tab once) · Shift+click: auto-record a replay of this session end to end. Saves a .webm.',
+                  ja: 'タブの動画を録画（全UI＋keycastオーバーレイ込み）。クリック: 開始/停止（最初に「このタブを共有」の確認あり）・ Shift+クリック: 現セッションのreplayを最初から最後まで自動録画。.webm で保存。' },
+    'rec.on': { en: '⏺ recording… (click again to stop)', ja: '⏺ 録画中…（もう一度クリックで停止）' },
+    'rec.saved': { en: a => `⏺ saved ${a.file} (${a.kb} KB)`, ja: a => `⏺ ${a.file} を保存しました（${a.kb} KB）` },
+    'rec.cancelled': { en: '⏺ recording cancelled (tab not shared)', ja: '⏺ 録画をキャンセルしました（タブ未共有）' },
+    'rec.unsupported': { en: '⏺ this browser cannot record the screen (getDisplayMedia/MediaRecorder missing)', ja: '⏺ このブラウザは画面録画に対応していません（getDisplayMedia/MediaRecorder なし）' },
     't.autolimits': { en: 'sweep each rotary joint over ±2π(±360°) to the self-collision angle (coarse scan + binary search) and auto-set lower/upper. Joints free over the full ±2π become continuous. Ctrl+Z to undo.',
                       ja: '各回転関節を ±2π(±360°)の範囲で自己干渉が起きる角度まで掃引(粗スキャン+二分探索)して lower/upper を自動設定。±2π まで自由に回る関節は continuous に。Ctrl+Zで戻せます' },
     'ui.autolimits': { en: '🛠 auto joint limits (self-collision, ±2π)', ja: '🛠 自動関節リミット (自己干渉, ±2π)' },
@@ -2013,6 +2029,54 @@ async function replayLog(entries, { speed = 1, maxGap = 1500 } = {}) {
     document.getElementById('replay')?.classList.remove('active');
   }
   log(t('replay.done', { done, skipped }), 'ok');
+}
+
+// ---- screen recording: capture the whole tab (all UI + the keycast overlay)
+// to a .webm via getDisplayMedia + MediaRecorder.  The browser asks "share
+// this tab" once per recording (the required user gesture); after that it is
+// hands-off.  Pairs with replay: Shift-click records a replay end to end. ------
+let _rec = null;                 // { recorder, chunks, stream } while recording
+let _recStarting = false;        // guards the async gap before _rec is assigned
+async function startScreenRecording() {
+  if (_rec || _recStarting) { return _rec; }   // already recording / share dialog open
+  if (!navigator.mediaDevices?.getDisplayMedia || !window.MediaRecorder) {
+    log(t('rec.unsupported'), 'err'); return null;
+  }
+  let stream;
+  _recStarting = true;
+  try {
+    stream = await navigator.mediaDevices.getDisplayMedia({
+      video: { frameRate: 30 }, audio: false });
+  } catch { log(t('rec.cancelled'), 'wrn'); return null; }
+  finally { _recStarting = false; }
+  const mime = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm']
+    .find(m => MediaRecorder.isTypeSupported(m)) || 'video/webm';
+  const chunks = [];
+  const recorder = new MediaRecorder(stream, { mimeType: mime });
+  recorder.ondataavailable = e => { if (e.data.size) { chunks.push(e.data); } };
+  recorder.onstop = () => {
+    stream.getTracks().forEach(tr => tr.stop());
+    const blob = new Blob(chunks, { type: mime });
+    const pkg = (currentInfo?.name || 'sw2robot').replace(/[^\w.-]+/g, '_');
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `${pkg}-demo.webm`; a.click();
+    URL.revokeObjectURL(url);
+    log(t('rec.saved', { file: a.download, kb: Math.round(blob.size / 1024) }), 'ok');
+  };
+  // the browser's own "Stop sharing" chip ends the track -> finalise cleanly
+  stream.getVideoTracks()[0].addEventListener('ended', stopScreenRecording);
+  recorder.start();
+  _rec = { recorder, chunks, stream };
+  document.getElementById('record')?.classList.add('active');
+  log(t('rec.on'), 'ok');
+  return _rec;
+}
+function stopScreenRecording() {
+  if (!_rec) { return; }
+  const r = _rec; _rec = null;
+  document.getElementById('record')?.classList.remove('active');
+  if (r.recorder.state !== 'inactive') { r.recorder.stop(); }  // onstop downloads
 }
 
 async function refreshCompMeta() {
@@ -7267,6 +7331,9 @@ window.sw2robot = {
   oplog: () => oplog.slice(),            // ② a copy of the raw action stream
   replay: (entries, opts) => replayLog(entries ?? oplog.slice(), opts),
   cancelReplay: replayCancel,
+  record: () => startScreenRecording(),  // 🎥 screen recording (for tooling/tests)
+  stopRecord: stopScreenRecording,
+  isRecording: () => !!_rec,
   axisGlyphs: () => [...axisGlyphs.entries()].map(([name, g]) => ({
     name, visible: g.visible, children: g.children.length,
     inScene: !!g.parent })),
@@ -7305,6 +7372,15 @@ document.getElementById('replayfile').addEventListener('change', async ev => {
     replayLog(entries);
   } catch (e) {
     log(t('replay.badFile', { e: e.message ?? e }), 'err');
+  }
+});
+document.getElementById('record').addEventListener('click', async e => {
+  if (_rec) { stopScreenRecording(); return; }           // click again = stop
+  const wantReplay = e.shiftKey && oplog.length;
+  const started = await startScreenRecording();          // asks to share the tab
+  if (started && wantReplay) {                            // Shift = record a replay
+    await replayLog(oplog.slice());
+    stopScreenRecording();
   }
 });
 
