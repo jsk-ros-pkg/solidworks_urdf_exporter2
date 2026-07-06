@@ -451,9 +451,11 @@ def _collision_part_stls(src, mode, quality, cache_dir):
 # (<box>/<cylinder>/<sphere>) instead of a mesh file -- the lightest collision
 # geometry there is (native URDF primitives, no STL), for path planning where a
 # coarse convex bound per link is enough.  The fitting lives UPSTREAM in
-# scikit-robot (fit_primitive_to_mesh + primitive_params_to_origin); we only
-# place the result.  scikit-robot is an OPTIONAL dependency -- its absence (or a
-# version predating the per-mesh primitive API) raises a clear error, like coacd.
+# scikit-robot (skrobot.utils.primitive_fitting.fit_primitive_to_mesh); it returns
+# a params dict (type + centre/extents/axis) from which we build the primitive's
+# origin transform ourselves.  scikit-robot is an OPTIONAL dependency -- its
+# absence (or a version predating the per-mesh primitive API) raises a clear
+# error, like coacd.
 
 # collision-mode string -> primitive_type for fit_primitive_to_mesh
 # (None = auto-pick box/cylinder/sphere by voxel IoU)
@@ -476,22 +478,47 @@ def skrobot_primitive_available():
         return False
 
 
+def _primitive_params_to_matrix(params):
+    """The 4x4 primitive-origin transform (in the mesh frame) for a scikit-robot
+    primitive dict: the shape ``center`` as translation plus, for a box, its
+    fitted ``rotation`` and, for a cylinder/capsule, the rotation taking +Z onto
+    its ``axis`` (URDF cylinders lie along +Z).  Mirrors scikit-robot's own
+    ``create_primitive_mesh`` so the exported primitive and the viewer preview
+    coincide."""
+    import numpy as np
+    M = np.eye(4)
+    t = params["type"]
+    if t == "box":
+        M[:3, :3] = np.asarray(params.get("rotation", np.eye(3)), dtype=float)
+    elif t in ("cylinder", "capsule"):
+        z = np.array([0.0, 0.0, 1.0])
+        axis = np.asarray(params["axis"], dtype=float)
+        axis = axis / np.linalg.norm(axis)
+        if np.allclose(axis, -z):
+            M[:3, :3] = _rotation_matrix(np.pi, [1.0, 0.0, 0.0])
+        elif not np.allclose(axis, z):
+            angle = np.arccos(np.clip(np.dot(z, axis), -1.0, 1.0))
+            M[:3, :3] = _rotation_matrix(angle, np.cross(z, axis))
+    M[:3, 3] = np.asarray(params["center"], dtype=float)
+    return M
+
+
+def _rotation_matrix(angle, axis):
+    """3x3 rotation of ``angle`` radians about ``axis`` (need not be unit)."""
+    import trimesh
+    return trimesh.transformations.rotation_matrix(angle, axis)[:3, :3]
+
+
 def _fit_collision_primitive(src, primitive_type):
     """``(params, M)`` for the source mesh ``src`` fitted to a URDF primitive:
     ``params`` is scikit-robot's primitive dict (type + dimensions) and ``M`` is
-    the 4x4 primitive-origin transform in the mesh (source) frame.  ``oriented=
-    None`` lets scikit-robot pick the tighter of an axis-aligned / oriented fit
-    (and, when ``primitive_type`` is None, the best of box/cylinder/sphere) by
-    voxel IoU."""
-    import trimesh
-    from skrobot.utils import fit_primitive_to_mesh, primitive_params_to_origin
+    the 4x4 primitive-origin transform in the mesh (source) frame.  A
+    ``primitive_type`` of None lets scikit-robot auto-pick the best of
+    box/cylinder/sphere by voxel IoU."""
+    from skrobot.utils.primitive_fitting import fit_primitive_to_mesh
     mesh = _load_mesh_metres(src)
-    params = fit_primitive_to_mesh(mesh, primitive_type=primitive_type,
-                                   oriented=None)
-    xyz, rpy = primitive_params_to_origin(params)
-    M = trimesh.transformations.euler_matrix(*rpy, axes="sxyz")
-    M[:3, 3] = xyz
-    return params, M
+    params = fit_primitive_to_mesh(mesh, primitive_type=primitive_type)
+    return params, _primitive_params_to_matrix(params)
 
 
 def _primitive_geometry_el(params):
