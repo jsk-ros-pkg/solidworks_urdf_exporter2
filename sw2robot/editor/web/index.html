@@ -340,6 +340,10 @@
     animation: keycap-in .08s ease-out;
     transition: opacity .25s ease; white-space: nowrap; }
   #keyoverlay .keycap.mouse { background: rgba(34, 56, 92, .85); }
+  /* semantic action (from the op() stream) — greenish so it reads as
+     "something happened", distinct from a raw keypress */
+  #keyoverlay .keycap.op { background: rgba(28, 66, 48, .86);
+                           border-color: rgba(120, 230, 170, .35); }
   #keyoverlay .keycap.fading { opacity: 0; }
   #keyoverlay .keycap .mult { font-size: 12px; color: #9fd0ff;
                               font-weight: 700; }
@@ -1348,8 +1352,8 @@ the config and does NOT re-detect). Needs graph.json (CAD mode).">🔗 re-detect
     't.posedrag': { en: 'OFF: drag to orbit the view / ON: drag a link to move its joint',
                     ja: 'OFF: ドラッグで視点回転 / ON: リンクをドラッグして関節を動かす' },
     't.gridcap': { en: 'grid pitch', ja: 'グリッド間隔' },
-    't.keycast': { en: 'demo recording: show pressed keys / mouse in the bottom-left',
-                   ja: 'デモ録画用: 押したキー/マウス操作を画面左下に表示' },
+    't.keycast': { en: 'demo recording: show pressed keys and each action (select, add-port, re-root …) in the bottom-left. View navigation (orbit / pan / zoom) is intentionally not shown.',
+                   ja: 'デモ録画用: 押したキーと各操作（選択・ポート追加・ルート化…）を画面左下に表示。視点操作（回転/pan/ズーム）はあえて表示しません。' },
     'ui.emptyDrop': { en: 'Click here to open a package',
                       ja: 'クリックしてパッケージを開く' },
     'ui.emptyPick': { en: 'recent files · paste a full path · 🗄 on the right',
@@ -1858,9 +1862,14 @@ let massOnlyLinks = new Set(); // links flagged mass-only (weight kept, no mesh)
 // it's broken" moment in the USER's long-lived session can be inspected
 // (and replayed in tests) instead of guessed at -------------------------
 const oplog = [];
+const opSubs = [];               // live subscribers (keycast overlay, future recorders)
+function onOp(fn) { opSubs.push(fn); }   // subscribe to the semantic action stream
 function op(name, args = {}) {
-  oplog.push({ t: Math.round(performance.now()), op: name, ...args });
+  const entry = { t: Math.round(performance.now()), op: name, ...args };
+  oplog.push(entry);
   if (oplog.length > 400) { oplog.splice(0, 100); }
+  // notify live listeners; a bad subscriber must never break the action itself
+  for (const fn of opSubs) { try { fn(entry); } catch { /* ignore */ } }
 }
 
 async function refreshCompMeta() {
@@ -2621,9 +2630,14 @@ playBtn.addEventListener('click', () => {
   log(playMode ? t('play.on') : t('play.off'), 'ok');
 });
 document.getElementById('playhome').addEventListener('click', () => {
-  for (const [name, r] of playRows) {
-    previewJoint(name, Math.min(r.hi, Math.max(r.lo, 0)));
-  }
+  let n = 0;
+  withJointOpSuppressed(() => {
+    for (const [name, r] of playRows) {
+      previewJoint(name, Math.min(r.hi, Math.max(r.lo, 0)));
+      n += 1;
+    }
+  });
+  if (n) { op('resetPose', { n }); }   // one action, not n joint edits
 });
 
 viewer.addEventListener('angle-change', e => {
@@ -2638,7 +2652,47 @@ viewer.addEventListener('angle-change', e => {
     pr.slider.value = a;
     pr.val.value = pr.fmt(a);
   }
+  _recordJointEdit(e.detail);
 });
+
+// ---- record a joint move as ONE semantic op per settle --------------------
+// angle-change fires every frame while a slider or a pose-drag moves, so a
+// single drag would flood the action log (and the screencast overlay).  We
+// debounce per joint: when a joint's value stops changing for a moment, emit
+// one op('setJoint').  Programmatic moves (pose restore on reload, snap-to-rest
+// on a type flip, reset-pose) run inside withJointOpSuppressed(), so the model
+// updates without the move being logged as if the user did it by hand.
+let _joSuppress = 0;
+function withJointOpSuppressed(fn) {
+  _joSuppress += 1;
+  try { return fn(); } finally { _joSuppress -= 1; }
+}
+const _joPending = new Map();      // joint name -> { val, suppressed, timer }
+function _recordJointEdit(name) {
+  const j = viewer.robot?.joints?.[name];
+  // only user-drivable joints: a mimic follows its master and a fixed joint
+  // can't move, so an angle-change on either is a side effect, not an edit
+  if (!j || j.mimicJoint || j.jointType === 'fixed') { return; }
+  // stamp suppression at event time: a programmatic burst runs synchronously
+  // while _joSuppress > 0, so its last event marks the entry suppressed even
+  // though the debounce timer fires later, after the flag has been cleared.
+  const suppressed = _joSuppress > 0;
+  const prev = _joPending.get(name);
+  if (prev) {
+    clearTimeout(prev.timer);
+    // a programmatic (suppressed) move must not erase a real pending edit that
+    // hasn't fired yet -- flush it now so the user's drag isn't lost
+    if (suppressed && !prev.suppressed) { op('setJoint', { joint: name, value: prev.val }); }
+  }
+  const val = Number(j.angle);
+  const timer = setTimeout(() => {
+    const p = _joPending.get(name);
+    _joPending.delete(name);
+    if (!p || p.suppressed) { return; }        // programmatic move: don't log
+    op('setJoint', { joint: name, value: p.val });
+  }, 350);
+  _joPending.set(name, { val, suppressed, timer });
+}
 
 // ---- joint axis markers: depth-test OFF so they shine through the meshes;
 // children of the joint Object3D, so they follow FK for free ---------------
@@ -4356,7 +4410,7 @@ function patchJointTypeLive(j, type) {
   if (type === 'fixed') {
     if (j.jointType !== 'fixed') {
       axisMemory.set(j.name, j.axis.toArray());  // remember for un-fixing later
-      j.setJointValue(0);                         // return to rest before locking
+      withJointOpSuppressed(() => j.setJointValue(0));   // rest before locking
     }
     j.jointType = 'fixed';
     return;
@@ -4372,7 +4426,7 @@ function patchJointTypeLive(j, type) {
     // the background rebuild persists the authoritative range for next reload.
     if (!(hi > lo)) { j.limit = { lower: -Math.PI, upper: Math.PI }; }
   }
-  j.setJointValue(0);
+  withJointOpSuppressed(() => j.setJointValue(0));
 }
 
 // re-render everything that reads a joint's type WITHOUT touching the 3D scene
@@ -6369,13 +6423,15 @@ viewer.addEventListener('geometry-loaded', () => {
     if (restore) {
       // joint edit reload: keep the camera, put the pose back
       let n = 0;
-      for (const [name, v] of Object.entries(restore.angles)) {
-        const j = viewer.robot.joints[name];
-        if (j && j.jointType !== 'fixed' && !j.mimicJoint) {
-          viewer.setJointValue(name, v);
-          n += 1;
+      withJointOpSuppressed(() => {
+        for (const [name, v] of Object.entries(restore.angles)) {
+          const j = viewer.robot.joints[name];
+          if (j && j.jointType !== 'fixed' && !j.mimicJoint) {
+            viewer.setJointValue(name, v);
+            n += 1;
+          }
         }
-      }
+      });
       if (restore.linkWorlds) {
         // the model jumped in scene space (re-root / root frame change):
         // move the CAMERA by the same rigid transform so the view looks
@@ -6426,11 +6482,16 @@ viewer.addEventListener('urdf-error', e => {
 });
 
 function resetPose() {
-  for (const j of Object.values(viewer.robot?.joints ?? {})) {
-    if (j.jointType !== 'fixed' && !j.mimicJoint) {
-      viewer.setJointValue(j.name, 0);
+  let n = 0;
+  withJointOpSuppressed(() => {
+    for (const j of Object.values(viewer.robot?.joints ?? {})) {
+      if (j.jointType !== 'fixed' && !j.mimicJoint) {
+        viewer.setJointValue(j.name, 0);
+        n += 1;
+      }
     }
-  }
+  });
+  if (n) { op('resetPose', { n }); }   // one action, not n joint edits
 }
 document.getElementById('reset').addEventListener('click', resetPose);
 
@@ -7119,9 +7180,46 @@ document.querySelectorAll('#langbar button').forEach(b =>
     'ArrowUp': '↑', 'ArrowDown': '↓', 'ArrowLeft': '←', 'ArrowRight': '→',
     'Control': 'Ctrl', 'Meta': 'Cmd',
   };
-  const MOUSE = { 0: 'L-Click', 1: 'M-Click', 2: 'R-Click' };
   const isMod = k => k === 'Control' || k === 'Shift' || k === 'Alt' ||
                      k === 'Meta';
+
+  // Human-readable label for a semantic action from the op() stream.  View
+  // navigation (orbit/pan/zoom) never calls op(), so it can't appear here --
+  // the noise is gone by construction, not by filtering.  Unknown ops fall
+  // back to a Title-cased name so a newly-instrumented action shows up for
+  // free (just add a nicer entry here when you want one).
+  const OP_LABEL = {
+    select:      a => a.link ? 'Select: ' + a.link : 'Deselect',
+    setColor:    a => 'Colour: ' + a.link,
+    eye:         a => (a.hide ? 'Hide: ' : 'Show: ') + a.link,
+    setMaterial: a => 'Material: ' + a.link,
+    setInertial: a => 'Inertial: ' + a.link,
+    exclude:     () => 'Exclude',
+    autoLimits:  () => 'Auto limits',
+    reRoot:      a => 'Make root: ' + a.link,
+    align:       () => 'Align to face',
+    remove_port: () => 'Remove end-coords',
+    add_port:    () => 'Add end-coords',
+    setJoint:    a => {
+      const j = viewer.robot?.joints?.[a.joint];
+      const um = j ? _jointUnit(j.jointType) : null;
+      const disp = um ? um.toDisp(a.value).toFixed(um.dec) + um.unit
+                      : (+a.value).toFixed(3);
+      return `Joint ${a.joint} → ${disp}`;
+    },
+    resetPose:   () => 'Reset pose',
+    boxSelect:   a => `Box select (${a.n})`,
+    boxToggle:   a => 'Toggle: ' + a.name,
+    setMimic:    a => 'Mimic → ' + a.master,
+    clearMimic:  a => 'Clear mimic: ' + a.child,
+    loadRobot:   a => 'Load' + (a.name ? ': ' + a.name : ''),
+    rootPose:    a => 'Root pose: ' + a.what,
+    clearViewer: () => 'Clear scene',
+    undo:        () => 'Undo',
+    redo:        () => 'Redo',
+  };
+  const opLabel = e => (OP_LABEL[e.op] ? OP_LABEL[e.op](e)
+                        : e.op.charAt(0).toUpperCase() + e.op.slice(1));
 
   let last = null;                // { el, label, count, timer } for ×N merge
 
@@ -7142,7 +7240,7 @@ document.querySelectorAll('#langbar button').forEach(b =>
       return;
     }
     const el = document.createElement('span');
-    el.className = 'keycap' + (kind === 'mouse' ? ' mouse' : '');
+    el.className = 'keycap' + (kind && kind !== 'key' ? ' ' + kind : '');
     el.append(document.createTextNode(label));
     const m = document.createElement('span');
     m.className = 'mult';
@@ -7175,25 +7273,16 @@ document.querySelectorAll('#langbar button').forEach(b =>
     if (!on || e.repeat) return;
     show(chord(e, e.key), 'key');
   }
-  function onMouse(e) {
-    if (!on) return;
-    const name = MOUSE[e.button];
-    if (!name) return;
-    const mods = [];
-    if (e.ctrlKey)  mods.push('Ctrl');
-    if (e.altKey)   mods.push('Alt');
-    if (e.shiftKey) mods.push('Shift');
-    show([...mods, name].join(' + '), 'mouse');
-  }
-  function onWheel(e) {
-    if (!on) return;
-    show(e.deltaY < 0 ? 'Scroll ↑' : 'Scroll ↓', 'mouse');
-  }
 
-  // capture phase so we see the event before any field/control consumes it
+  // Semantic actions come from the op() stream, NOT from raw mouse/wheel
+  // events -- so a click that only orbits/pans/zooms the camera produces
+  // nothing, while a click that selects a link, adds a port, re-roots, etc.
+  // shows its meaning ("Select: base_link").  Keyboard is still read raw
+  // above, because a keypress is almost always an intentional command.
+  onOp(e => { if (on) show(opLabel(e), 'op'); });
+
+  // capture phase so we see the keypress before any field/control consumes it
   window.addEventListener('keydown', onKey, true);
-  window.addEventListener('mousedown', onMouse, true);
-  window.addEventListener('wheel', onWheel, { capture: true, passive: true });
 
   toggle.addEventListener('click', () => {
     on = toggle.classList.toggle('active');
