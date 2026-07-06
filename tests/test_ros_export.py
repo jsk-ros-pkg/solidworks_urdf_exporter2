@@ -1085,3 +1085,40 @@ def test_visual_and_collision_formats_are_independent(tmp_path, vfmt, cfmt):
     mesh_arcs = {a for a in files if a.startswith("mix_description/meshes/")}
     assert mesh_arcs == {f"mix_description/meshes/part.{vfmt}",
                          f"mix_description/meshes/part.{cfmt}"}
+
+
+def test_build_ros_description_reports_progress(tmp_path):
+    """build_ros_description invokes the progress callback for the mesh-convert
+    stage with monotonically advancing counts ending at the total (issue #21)."""
+    from sw2robot.exporter.ros_export import build_ros_description
+
+    pkg_dir = _make_pkg(tmp_path, robot="rp")
+    events = []
+    build_ros_description(
+        pkg_dir, "rp",
+        progress=lambda stage, done, total, detail: events.append(
+            (stage, done, total)))
+
+    mesh = [(d, tot) for (s, d, tot) in events if s == "meshes"]
+    assert mesh, "no mesh-conversion progress reported"
+    total = mesh[-1][1]
+    assert total >= 1
+    dones = [d for d, _ in mesh]
+    assert dones == sorted(dones)             # never regresses
+    assert dones[-1] == total                 # ends at 100%
+    assert all(tot == total for _d, tot in mesh)
+
+
+def test_build_ros_description_cancels(tmp_path):
+    """should_cancel turning true aborts the build with ExportCancelled rather
+    than emitting a half-built package (issue #21 export stop button)."""
+    import pytest as _pytest
+
+    from sw2robot.exporter.ros_export import (
+        ExportCancelled,
+        build_ros_description,
+    )
+
+    pkg_dir = _make_pkg(tmp_path, robot="rc")
+    with _pytest.raises(ExportCancelled):
+        build_ros_description(pkg_dir, "rc", should_cancel=lambda: True)

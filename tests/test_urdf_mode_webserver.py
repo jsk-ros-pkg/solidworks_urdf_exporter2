@@ -1090,3 +1090,70 @@ def test_coacd_cancel_stops_at_link_boundary(server, monkeypatch):
     assert s.get("running") is False
     assert s.get("cancelled") is True
     assert 0 < s.get("done") < total         # stopped early, after some progress
+
+
+def test_async_export_progress_and_download(server):
+    """The async export (issue #21): /start runs a background build reporting
+    into /api/progress, /download returns the finished zip once, and its file
+    list matches the synchronous /api/export/zip endpoint."""
+    import io
+    import time
+    import zipfile
+
+    r = _get_json(server, "/api/export/zip/start?ros=1&meshes=stl&colfmt=stl")
+    assert r.get("started") is True
+
+    st = {}
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        st = _get_json(server, "/api/progress")
+        if st.get("done"):
+            break
+        time.sleep(0.1)
+    assert st.get("done") and not st.get("error"), st
+    assert st.get("job") == "export"
+    assert st["result"]["ready"] is True
+    # the checklist ended fully done and the bar hit 100%
+    assert all(s["state"] == "done" for s in st["stages"])
+    assert st["frac"] == 1.0
+
+    code, data = _get_status(server, "/api/export/zip/download")
+    assert code == 200
+    assert data[:2] == b"PK"                      # a real zip
+    async_names = set(zipfile.ZipFile(io.BytesIO(data)).namelist())
+
+    # single-shot: the bytes are freed after one download
+    code2, _ = _get_status(server, "/api/export/zip/download")
+    assert code2 == 404
+
+    # same package contents as the synchronous endpoint
+    with urllib.request.urlopen(
+            server + "/api/export/zip?ros=1&meshes=stl&colfmt=stl") as resp:
+        sync = resp.read()
+    sync_names = set(zipfile.ZipFile(io.BytesIO(sync)).namelist())
+    assert async_names == sync_names
+
+
+def test_export_start_rejects_second_job(server):
+    """_prog_start is a single global busy-guard: a second heavy job while an
+    export is in flight is refused with 409."""
+    import time
+
+    r = _get_json(server, "/api/export/zip/start?ros=1&meshes=stl&colfmt=stl")
+    assert r.get("started") is True
+    try:
+        # a second start (or any other job) must 409 while one is running.  The
+        # export can finish very fast on the tiny fixture, so only assert the
+        # guard IF it is still running.
+        st = _get_json(server, "/api/progress")
+        if st.get("running"):
+            code, body = _get_status(
+                server, "/api/export/zip/start?ros=1&meshes=stl&colfmt=stl")
+            assert code == 409
+    finally:
+        deadline = time.time() + 60
+        while time.time() < deadline:
+            if _get_json(server, "/api/progress").get("done"):
+                break
+            time.sleep(0.1)
+        _get_status(server, "/api/export/zip/download")   # drain the stash
