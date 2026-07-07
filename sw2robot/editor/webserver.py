@@ -2367,7 +2367,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                             pkg = os.path.isdir(os.path.join(full, "urdf"))
                             dirs.append({"name": e, "path": full,
                                          "package": pkg})
-                        elif e.lower().endswith((".sldasm", ".urdf")):
+                        elif e.lower().endswith((".sldasm", ".sldprt", ".urdf")):
                             files.append({"name": e, "path": full})
                 except OSError as e:
                     return self._send_json({"error": str(e)}, 400)
@@ -2523,9 +2523,9 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 target = os.path.abspath(os.path.expanduser(
                     target.strip().strip('"')))
                 if not (os.path.isfile(target)
-                        and target.lower().endswith(".sldasm")):
+                        and target.lower().endswith((".sldasm", ".sldprt"))):
                     return self._send_json(
-                        {"error": f"not a .sldasm file: {target}"}, 400)
+                        {"error": f"not a .sldasm/.sldprt file: {target}"}, 400)
                 if not _prog_start("extract", _EXTRACT_STAGES):
                     return self._send_json(
                         {"error": "a job is already running"}, 409)

@@ -949,8 +949,8 @@ def _pick_sldasm(initial=""):
             if os.path.isfile(initial):
                 kw["initialfile"] = os.path.basename(initial)
         path = filedialog.askopenfilename(
-            title="Select a SolidWorks assembly",
-            filetypes=[("SolidWorks assembly", "*.sldasm"),
+            title="Select a SolidWorks assembly or part",
+            filetypes=[("SolidWorks assembly / part", "*.sldasm *.sldprt"),
                        ("All files", "*.*")], **kw)
         root.destroy()
         return path or ""

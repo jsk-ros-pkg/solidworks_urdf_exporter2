@@ -232,6 +232,21 @@ report "not available" until it is installed.
 python -m sw2robot.exporter.export path/to/assembly.sldasm -o output
 ```
 
+**Or a single `.sldprt` -> URDF.** Point the exact same command (or the editor's
+🗄 file browser / 📋 path bar) at a lone part instead of an assembly:
+
+```bash
+python -m sw2robot.exporter.export path/to/part.sldprt -o output
+```
+
+A single part has no mates to infer a kinematic tree from, so this yields a
+trivial **1-link, 0-joint URDF** — one rigid body with the part's mesh and its
+**SolidWorks-native mass / centre-of-mass / inertia tensor** (exact CAD geometry
++ material, not a mesh estimate). Handy for a static prop, an environment
+object, or a single end-effector/sensor body you want in a simulator with an
+accurate inertial. It will not turn a multibody part into a jointed robot — that
+needs an assembly with mates.
+
 **Open the browser editor** on an already-extracted package (no SolidWorks
 needed — a sample is included):
 

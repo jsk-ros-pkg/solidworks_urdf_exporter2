@@ -164,6 +164,43 @@ def _sw_mass_props(mp):
     return mass, [float(x) for x in com], inertia6
 
 
+def _read_part_props(md):
+    """``(material, density, sw_dict|None)`` read straight from a PART's model doc.
+
+    ``md`` is an ``IModelDoc2`` of a ``.SLDPRT`` (either a component's
+    ``GetModelDoc2`` or a standalone part opened on its own).  ``sw_dict`` is
+    ``{"mass","com","inertia"}`` in the part-local frame (SI) or None when the
+    SolidWorks-native mass properties are unavailable.  All lookups are
+    best-effort: any failure just leaves that field None."""
+    material = density = None
+    sw = None
+    try:
+        pd = as_iface(md, "IPartDoc")
+        res = pd.GetMaterialPropertyName2("", "")
+        if isinstance(res, (tuple, list)):
+            res = next((x for x in res if x), None)
+        material = str(res) if res else None
+    except Exception:
+        pass
+    try:
+        mdoc = as_iface(md, "IModelDoc2")
+        ext = as_iface(mdoc.Extension, "IModelDocExtension")
+        mp = ext.CreateMassProperty
+        if callable(mp):
+            mp = mp()
+        d = getattr(mp, "Density", None)
+        if d and d > 1.0:               # kg/m^3
+            density = float(d)
+        # SolidWorks-native mass/COM/inertia (exact CAD geometry +
+        # material/override) -- preferred over the mesh estimate
+        mass, com, inertia6 = _sw_mass_props(mp)
+        if mass is not None:
+            sw = {"mass": mass, "com": com, "inertia": inertia6}
+    except Exception:
+        pass
+    return material, density, sw
+
+
 @dataclass
 class Component:
     name: str
@@ -385,39 +422,15 @@ def extract_components(doc, exclude=None, progress=None):
         key = path.lower()
         if key in matcache:
             return matcache[key]
-        material = density = None
-        sw = None
+        props = (None, None, None)
         try:
             md = safe_call(ct, "GetModelDoc2")
             if md is not None:
-                try:
-                    pd = as_iface(md, "IPartDoc")
-                    res = pd.GetMaterialPropertyName2("", "")
-                    if isinstance(res, (tuple, list)):
-                        res = next((x for x in res if x), None)
-                    material = str(res) if res else None
-                except Exception:
-                    pass
-                try:
-                    mdoc = as_iface(md, "IModelDoc2")
-                    ext = as_iface(mdoc.Extension, "IModelDocExtension")
-                    mp = ext.CreateMassProperty
-                    if callable(mp):
-                        mp = mp()
-                    d = getattr(mp, "Density", None)
-                    if d and d > 1.0:           # kg/m^3
-                        density = float(d)
-                    # SolidWorks-native mass/COM/inertia (exact CAD geometry +
-                    # material/override) -- preferred over the mesh estimate
-                    mass, com, inertia6 = _sw_mass_props(mp)
-                    if mass is not None:
-                        sw = {"mass": mass, "com": com, "inertia": inertia6}
-                except Exception:
-                    pass
+                props = _read_part_props(md)
         except Exception:
             pass
-        matcache[key] = (material, density, sw)
-        return material, density, sw
+        matcache[key] = props
+        return props
     for c in raw:
         ct = as_iface(c, "IComponent2")
         name = safe_prop(ct, "Name2")
@@ -2399,6 +2412,31 @@ def extract_graph(doc, robot_name, source_assembly, progress=None):
                   f"(check for suppressed/lightweight mates)")
     _warn_unsolved_mates(comps, adjacency)
     return comps, adjacency, ground
+
+
+def extract_part_graph(doc, robot_name, part_path):
+    """A single ``.SLDPRT`` -> the same ``(comps, adjacency, ground)`` triple
+    ``extract_graph`` returns, but with exactly ONE component and no mates.
+
+    A lone part has no assembly structure to infer a kinematic tree from, so the
+    result is a trivial one-link robot: the part itself, at the identity pose in
+    its own frame, carrying its SolidWorks-native mass/COM/inertia.  The build
+    then emits a 1-link, 0-joint URDF -- useful for a static prop / environment
+    object / single rigid body you want in a simulator with an accurate inertial.
+    ``adjacency`` is empty and the sole component is its own ground (the base)."""
+    # _read_part_props guards every COM call in try/except, so pass the raw doc
+    # straight in -- an unguarded as_iface() here would import win32com and blow
+    # up the cross-platform unit test on macOS/Linux (there is no SolidWorks).
+    material, density, sw = _read_part_props(doc)
+    sw = sw or {}
+    ln = safe_name(os.path.splitext(os.path.basename(part_path))[0])
+    comp = Component(
+        name=ln, link_name=ln, part_path=part_path,
+        is_subassembly=False, world=np.eye(4), fixed=True, dof=0,
+        material=material, density=density,
+        sw_mass=sw.get("mass"), sw_com=sw.get("com"),
+        sw_inertia=sw.get("inertia"))
+    return [comp], {}, [comp.name]
 
 
 def _warn_unsolved_mates(comps, adjacency):
