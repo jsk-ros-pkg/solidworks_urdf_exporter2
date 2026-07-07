@@ -502,6 +502,82 @@ const paste = await page.evaluate(() => ({
 check('server-browser: pasting a .sldasm path into the bar starts extraction',
       /SolidWorks|抽出/.test(paste.text), JSON.stringify(paste));
 
+// ---- 11b. 🗄 server browser: .sldasm/.sldprt/.urdf type checkboxes ----------
+// A folder with one of each input type: .sldprt is OFF by default, so its row
+// starts hidden while .sldasm/.urdf show; the checkboxes toggle rows live and
+// the choice persists.  Rows are tagged via dataset.fstype (see tagCad).
+await page.evaluate(() => {
+  const of = window.fetch.bind(window);
+  window.fetch = async (u, opts) => {
+    const url = typeof u === 'string' ? u : u?.url;
+    const J = o => new Response(JSON.stringify(o),
+      { headers: { 'Content-Type': 'application/json' } });
+    if (url && url.includes('/api/recent')) { return J([]); }
+    if (url && url.includes('/api/list')) { return J([]); }
+    if (url && url.includes('/api/fs')) {
+      return J({ path: 'C:/cad', parent: 'C:/', dirs: [], files: [
+        { name: 'arm.SLDASM', path: 'C:/cad/arm.SLDASM' },
+        { name: 'bracket.SLDPRT', path: 'C:/cad/bracket.SLDPRT' },
+        { name: 'robot.urdf', path: 'C:/cad/robot.urdf' }] });
+    }
+    return of(u, opts);
+  };
+  // start from the documented defaults regardless of any persisted choice
+  for (const k of ['sw2robot.fs.showSldasm', 'sw2robot.fs.showSldprt',
+                   'sw2robot.fs.showUrdf']) { localStorage.removeItem(k); }
+  document.getElementById('fstype-sldasm').checked = true;
+  document.getElementById('fstype-sldprt').checked = false;
+  document.getElementById('fstype-urdf').checked = true;
+});
+await page.evaluate(() => document.getElementById('fsbrowse').click());
+await sleep(400);
+// shown-state of each input row, keyed by its dataset.fstype
+const rowsByType = () => page.evaluate(() => {
+  const out = {};
+  for (const d of document.querySelectorAll('#fslist > div')) {
+    if (d.dataset.fstype) { out[d.dataset.fstype] = d.style.display !== 'none'; }
+  }
+  return out;
+});
+const tfDefault = await rowsByType();
+check('type-filter: .sldprt hidden by default, .sldasm/.urdf shown',
+      tfDefault.sldasm === true && tfDefault.urdf === true
+      && tfDefault.sldprt === false, JSON.stringify(tfDefault));
+// enabling .sldprt reveals the part row
+await page.evaluate(() => {
+  const c = document.getElementById('fstype-sldprt');
+  c.checked = true; c.dispatchEvent(new Event('change'));
+});
+await sleep(120);
+const tfWithPrt = await rowsByType();
+check('type-filter: enabling .sldprt reveals the part row',
+      tfWithPrt.sldprt === true, JSON.stringify(tfWithPrt));
+// disabling .sldasm hides the assembly row; .urdf/.sldprt stay
+await page.evaluate(() => {
+  const c = document.getElementById('fstype-sldasm');
+  c.checked = false; c.dispatchEvent(new Event('change'));
+});
+await sleep(120);
+const tfNoAsm = await rowsByType();
+check('type-filter: disabling .sldasm hides only the assembly row',
+      tfNoAsm.sldasm === false && tfNoAsm.urdf === true
+      && tfNoAsm.sldprt === true, JSON.stringify(tfNoAsm));
+// the choice persists to localStorage
+const tfPersist = await page.evaluate(() => ({
+  asm: localStorage.getItem('sw2robot.fs.showSldasm'),
+  prt: localStorage.getItem('sw2robot.fs.showSldprt') }));
+check('type-filter: choice persists to localStorage',
+      tfPersist.asm === '0' && tfPersist.prt === '1', JSON.stringify(tfPersist));
+// restore defaults so the suite stays idempotent for a re-run
+await page.evaluate(() => {
+  for (const k of ['sw2robot.fs.showSldasm', 'sw2robot.fs.showSldprt',
+                   'sw2robot.fs.showUrdf']) { localStorage.removeItem(k); }
+  document.getElementById('fstype-sldasm').checked = true;
+  document.getElementById('fstype-sldprt').checked = false;
+  document.getElementById('fstype-urdf').checked = true;
+  document.getElementById('fsclose').click();
+});
+
 check('suite: no page errors at end', pageErrors.length === 0,
       pageErrors.join(' | '));
 await browser.close();
