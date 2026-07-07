@@ -263,10 +263,11 @@ def sw_session_status() -> dict:
 
 
 def sw_recent_assemblies(limit: int = 10) -> list:
-    """Best-effort list of recently-opened ``.sldasm`` paths from the SolidWorks
-    MRU registry key, newest first -- used only to pre-fill the import path
-    field (an approximation of "the assembly you have open").  Returns ``[]`` on
-    any failure (non-Windows, no SolidWorks, key absent)."""
+    """Best-effort list of recently-opened ``.sldasm``/``.sldprt`` paths from the
+    SolidWorks MRU registry key, newest first -- used only to pre-fill / suggest
+    an import path (an approximation of "the CAD file you have open").  Single
+    parts are included because a lone ``.SLDPRT`` exports as a 1-link URDF too.
+    Returns ``[]`` on any failure (non-Windows, no SolidWorks, key absent)."""
     try:
         import winreg
     except ImportError:
@@ -289,8 +290,8 @@ def sw_recent_assemblies(limit: int = 10) -> list:
         return []
     # Newest SolidWorks version first (e.g. "SOLIDWORKS 2025" > "2024").  The MRU
     # lives under "<ver>\Recent File List" as values File1, File2, ... (full
-    # paths, parts AND assemblies mixed); keep the .sldasm ones in File-number
-    # order so File1 (most-recently-opened) is first.
+    # paths, parts AND assemblies mixed); keep the .sldasm/.sldprt ones in
+    # File-number order so File1 (most-recently-opened) is first.
     for ver in sorted(versions, reverse=True):
         sub = rf"{base}\{ver}\Recent File List"
         items = []
@@ -303,7 +304,8 @@ def sw_recent_assemblies(limit: int = 10) -> list:
                     except OSError:
                         break
                     j += 1
-                    if isinstance(val, str) and val.lower().endswith(".sldasm"):
+                    if isinstance(val, str) and val.lower().endswith(
+                            (".sldasm", ".sldprt")):
                         items.append((vname, val))
         except OSError:
             continue

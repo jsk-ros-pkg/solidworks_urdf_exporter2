@@ -1,4 +1,4 @@
-"""SolidWorks assembly -> URDF/ROS package, split into two phases.
+"""SolidWorks assembly (or single part) -> URDF/ROS package, split into two phases.
 
   extract  (SLOW, needs SolidWorks): open a throwaway copy, pull the CAD graph
            + per-link coloured 3DXML meshes, write ``graph.json``.  Run once.
@@ -10,6 +10,11 @@
     uv run python -m sw2robot.exporter.export  <assembly.sldasm> [-o OUT] [-n NAME]
     uv run python -m sw2robot.exporter.extract <assembly.sldasm> [-o OUT] [-n NAME]
     uv run python -m sw2robot.exporter.build   <pkg_dir> [--config c.yaml] [--base ..] [--exclude ..]
+
+A single ``.SLDPRT`` is also accepted anywhere a ``.SLDASM`` is: a lone part has
+no mates to infer a kinematic tree from, so it yields a trivial 1-link, 0-joint
+URDF carrying the part's SolidWorks-native mass/COM/inertia -- handy for a static
+prop / environment object / single rigid body in a simulator.
 """
 
 from __future__ import annotations
@@ -19,18 +24,24 @@ import os
 import sys
 
 from . import jointcfg
-from .mesh import _SAVE_OPTS, export_meshes, export_subgraph_meshes
+from .mesh import (
+    _SAVE_OPTS,
+    export_meshes,
+    export_part_mesh,
+    export_subgraph_meshes,
+)
 from .model import (
     build_model,
     capture_deep_worlds,
     extract_graph,
     extract_limit_joints,
+    extract_part_graph,
     extract_subgraphs,
     safe_name,
     to_graph_state,
 )
 from .state import GraphState
-from .swcom import SolidWorks, as_iface
+from .swcom import SW_DOC_PART, SolidWorks, as_iface, doc_type_for
 from .urdf_writer import write_ros_package, write_urdf
 
 GRAPH_FILE = "graph.json"
@@ -58,10 +69,36 @@ def _pkg_paths(assembly_path, out_dir, robot_name):
 
 
 # ---------------------------------------------------------------- extract
+def _extract_part_into(sw, part_path, pkg_dir, meshes_dir, robot_name, _say):
+    """Extraction body for a single ``.SLDPRT``: one link, no joints.
+
+    A lone part carries no assembly structure, so there is nothing to infer a
+    kinematic tree from -- we emit a trivial one-link robot with the part's
+    SolidWorks-native mass/COM/inertia and its mesh.  See
+    :func:`sw2robot.exporter.model.extract_part_graph`."""
+    _say(f"opening copy of {os.path.basename(part_path)} (loading the part) ...")
+    doc = sw.open_copy(part_path)
+
+    _say("reading part mass properties ...")
+    comps, adjacency, ground = extract_part_graph(doc, robot_name, part_path)
+
+    _say("exporting part mesh ...")
+    export_part_mesh(doc, comps[0], meshes_dir)
+
+    _say("saving graph.json ...")
+    graph = to_graph_state(comps, adjacency, ground, robot_name, part_path)
+    graph.save(os.path.join(pkg_dir, GRAPH_FILE))
+    sw.close_doc(doc)
+    return pkg_dir
+
+
 def _extract_into(sw, assembly_path, pkg_dir, meshes_dir, robot_name, _say,
                   _part=None):
     """Extraction body against an already-running SolidWorks session.  ``_part``
     (optional) reports the part currently being read, for the load indicator."""
+    if doc_type_for(assembly_path) == SW_DOC_PART:
+        return _extract_part_into(sw, assembly_path, pkg_dir, meshes_dir,
+                                  robot_name, _say)
     _say(f"opening copy of {os.path.basename(assembly_path)} "
          f"(loading the assembly) ...")
     doc = sw.open_copy(assembly_path)
@@ -309,7 +346,9 @@ def _exclude_list(s):
 
 def main():
     ap = argparse.ArgumentParser(description="extract + build (full export)")
-    ap.add_argument("assembly")
+    ap.add_argument("assembly",
+                    help="path to a .SLDASM assembly, or a single .SLDPRT part "
+                         "(a lone part exports as a 1-link, 0-joint URDF)")
     ap.add_argument("-o", "--out", default=None)
     ap.add_argument("-n", "--name", default=None)
     ap.add_argument("--visible", action="store_true")
