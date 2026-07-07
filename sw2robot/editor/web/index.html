@@ -21,6 +21,13 @@
   #views button { font-size: 11px; padding: 3px 8px; opacity: .85; }
   #views button.toggle.active { background: #3d6fb4; border-color: #7db8ff;
            color: #fff; opacity: 1; }
+  /* replay/record live in #toolrow, not #views -- give them the same active tint */
+  #toolrow button.toggle.active { background: #3d6fb4; border-color: #7db8ff;
+           color: #fff; }
+  /* recording: red + slow pulse so it's obvious a capture is live */
+  #record.active { background: #c0392b; border-color: #ff8a7a; color: #fff;
+           animation: recpulse 1.2s ease-in-out infinite; }
+  @keyframes recpulse { 50% { opacity: .5; } }
   #panel { width: 340px; padding: 12px; overflow-y: auto; flex-shrink: 0;
            background: #22252b; border-left: 1px solid #333;
            display: flex; flex-direction: column; }
@@ -340,12 +347,29 @@
     animation: keycap-in .08s ease-out;
     transition: opacity .25s ease; white-space: nowrap; }
   #keyoverlay .keycap.mouse { background: rgba(34, 56, 92, .85); }
+  /* semantic action (from the op() stream) — greenish so it reads as
+     "something happened", distinct from a raw keypress */
+  #keyoverlay .keycap.op { background: rgba(28, 66, 48, .86);
+                           border-color: rgba(120, 230, 170, .35); }
   #keyoverlay .keycap.fading { opacity: 0; }
   #keyoverlay .keycap .mult { font-size: 12px; color: #9fd0ff;
                               font-weight: 700; }
   @keyframes keycap-in {
     from { transform: translateY(6px) scale(.92); opacity: 0; }
     to   { transform: none; opacity: 1; } }
+  /* ---- synthetic replay cursor (glides between action spots) ---- */
+  #replaycursor { position: fixed; left: 0; top: 0; z-index: 20; display: none;
+    margin: -2px 0 0 -2px; pointer-events: none;
+    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, .55));
+    transition: left .35s cubic-bezier(.4, 0, .2, 1),
+                top  .35s cubic-bezier(.4, 0, .2, 1); }
+  #replaycursor svg { display: block; }
+  #replaycursor.click::after { content: ''; position: absolute; left: 3px; top: 3px;
+    border: 2px solid #4db8ff; border-radius: 50%; transform: translate(-50%, -50%);
+    animation: curpulse .5s ease-out; }
+  @keyframes curpulse {
+    from { width: 6px; height: 6px; opacity: .9; }
+    to   { width: 42px; height: 42px; opacity: 0; } }
 </style>
 <script type="importmap">
 {
@@ -545,6 +569,10 @@
     <div id="linkinfo"></div>
     <div id="keyoverlay" aria-hidden="true"></div>
   </div>
+  <!-- synthetic pointer shown only during replay (glides to each action) -->
+  <div id="replaycursor" aria-hidden="true"><svg width="24" height="24"
+       viewBox="0 0 24 24"><path d="M4 2 L4 20 L9 15 L12.5 22 L15 21 L12 14 L19 14 Z"
+       fill="#fff" stroke="#111" stroke-width="1.3" stroke-linejoin="round"/></svg></div>
   <div id="resizer" data-i18n-title="t.resizer" title="ドラッグでパネル幅を調整"></div>
   <div id="panel">
     <div id="langbar" style="display:flex;gap:4px;justify-content:flex-end;
@@ -588,6 +616,17 @@
       <button id="bug" data-i18n-title="t.bug"
               title="壊れたらこれ: 操作ログ+状態をサーバーに送る">🐞
       </button>
+      <button id="savelog" data-i18n-title="t.savelog"
+              title="操作ログをダウンロード。クリック: .txt ・ Shift+クリック: .json">⤓
+      </button>
+      <button id="replay" class="toggle" data-i18n-title="t.replay"
+              title="記録を再生。クリック: .json を読み込んで再生 ・ Shift+クリック: 現在のセッションを再生">▷
+      </button>
+      <button id="record" class="toggle" data-i18n-title="t.record"
+              title="タブを録画。クリック: 開始/停止 ・ Shift+クリック: replayを自動録画">⏺
+      </button>
+      <input id="replayfile" type="file" accept=".json,application/json"
+             style="display:none">
     </div>
     <div id="autorow">
       <button id="autolimits" style="width:100%" data-i18n="ui.autolimits"
@@ -1348,8 +1387,8 @@ the config and does NOT re-detect). Needs graph.json (CAD mode).">🔗 re-detect
     't.posedrag': { en: 'OFF: drag to orbit the view / ON: drag a link to move its joint',
                     ja: 'OFF: ドラッグで視点回転 / ON: リンクをドラッグして関節を動かす' },
     't.gridcap': { en: 'grid pitch', ja: 'グリッド間隔' },
-    't.keycast': { en: 'demo recording: show pressed keys / mouse in the bottom-left',
-                   ja: 'デモ録画用: 押したキー/マウス操作を画面左下に表示' },
+    't.keycast': { en: 'demo recording: show pressed keys and each action (select, add-port, re-root …) in the bottom-left. View navigation (orbit / pan / zoom) is intentionally not shown.',
+                   ja: 'デモ録画用: 押したキーと各操作（選択・ポート追加・ルート化…）を画面左下に表示。視点操作（回転/pan/ズーム）はあえて表示しません。' },
     'ui.emptyDrop': { en: 'Click here to open a package',
                       ja: 'クリックしてパッケージを開く' },
     'ui.emptyPick': { en: 'recent files · paste a full path · 🗄 on the right',
@@ -1395,6 +1434,23 @@ the config and does NOT re-detect). Needs graph.json (CAD mode).">🔗 re-detect
     't.renamelist': { en: 'rename joints/links in a list', ja: '関節名・リンク名を一覧で改名' },
     'ui.renamelist': { en: '≣ rename', ja: '≣ 改名' },
     't.bug': { en: 'broken? this sends the op-log + state to the server', ja: '壊れたらこれ: 操作ログ+状態をサーバーに送る' },
+    't.savelog': { en: 'download the action log (what you did). Click: readable .txt · Shift+click: raw .json (for replay).',
+                   ja: '操作ログ（何をしたか）をダウンロード。クリック: 読みやすい .txt ・ Shift+クリック: 生 .json（再生用）。' },
+    'log.saved': { en: a => `⤓ saved ${a.file} (${a.n} actions)`, ja: a => `⤓ ${a.file} を保存しました（${a.n} 操作）` },
+    't.replay': { en: 'replay a recorded session. Click: load a saved .json and play it back · Shift+click: replay the current session. Click again to stop.',
+                  ja: '記録したセッションを再生。クリック: 保存した .json を読み込んで再生 ・ Shift+クリック: 現在のセッションを再生。もう一度クリックで停止。' },
+    'replay.empty': { en: 'replay: nothing to play', ja: '再生: 再生する操作がありません' },
+    'replay.done': { en: a => `▷ replay done (${a.done} played, ${a.skipped} skipped)`, ja: a => `▷ 再生完了（${a.done} 実行 / ${a.skipped} スキップ）` },
+    'replay.stepFail': { en: a => `▷ replay: ${a.op} failed: ${a.e}`, ja: a => `▷ 再生: ${a.op} 失敗: ${a.e}` },
+    'replay.partial': { en: a => `▷ replay was partial — these actions can't be replayed and were skipped: ${a.ops}`,
+                        ja: a => `▷ 再生は部分的です — 次の操作は再生できずスキップしました: ${a.ops}` },
+    'replay.badFile': { en: a => `▷ replay: could not read file: ${a.e}`, ja: a => `▷ 再生: ファイルを読めませんでした: ${a.e}` },
+    't.record': { en: 'record a video of the tab (all UI + the keycast overlay). Click: start / stop (the browser asks to share this tab once) · Shift+click: auto-record a replay of this session end to end. Saves a .webm.',
+                  ja: 'タブの動画を録画（全UI＋keycastオーバーレイ込み）。クリック: 開始/停止（最初に「このタブを共有」の確認あり）・ Shift+クリック: 現セッションのreplayを最初から最後まで自動録画。.webm で保存。' },
+    'rec.on': { en: '⏺ recording… (click again to stop)', ja: '⏺ 録画中…（もう一度クリックで停止）' },
+    'rec.saved': { en: a => `⏺ saved ${a.file} (${a.kb} KB)`, ja: a => `⏺ ${a.file} を保存しました（${a.kb} KB）` },
+    'rec.cancelled': { en: '⏺ recording cancelled (tab not shared)', ja: '⏺ 録画をキャンセルしました（タブ未共有）' },
+    'rec.unsupported': { en: '⏺ this browser cannot record the screen (getDisplayMedia/MediaRecorder missing)', ja: '⏺ このブラウザは画面録画に対応していません（getDisplayMedia/MediaRecorder なし）' },
     't.autolimits': { en: 'sweep each rotary joint over ±2π(±360°) to the self-collision angle (coarse scan + binary search) and auto-set lower/upper. Joints free over the full ±2π become continuous. Ctrl+Z to undo.',
                       ja: '各回転関節を ±2π(±360°)の範囲で自己干渉が起きる角度まで掃引(粗スキャン+二分探索)して lower/upper を自動設定。±2π まで自由に回る関節は continuous に。Ctrl+Zで戻せます' },
     'ui.autolimits': { en: '🛠 auto joint limits (self-collision, ±2π)', ja: '🛠 自動関節リミット (自己干渉, ±2π)' },
@@ -1858,9 +1914,308 @@ let massOnlyLinks = new Set(); // links flagged mass-only (weight kept, no mesh)
 // it's broken" moment in the USER's long-lived session can be inspected
 // (and replayed in tests) instead of guessed at -------------------------
 const oplog = [];
+const opSubs = [];               // live subscribers (keycast overlay, future recorders)
+function onOp(fn) { opSubs.push(fn); }   // subscribe to the semantic action stream
+let _replaying = false;          // true while replayLog() re-performs a session
 function op(name, args = {}) {
-  oplog.push({ t: Math.round(performance.now()), op: name, ...args });
-  if (oplog.length > 400) { oplog.splice(0, 100); }
+  const entry = { t: Math.round(performance.now()), op: name, ...args };
+  // while replaying we still light up the overlay, but we must NOT append the
+  // re-performed actions back into the log we're reading from.
+  if (!_replaying) {
+    oplog.push(entry);
+    if (oplog.length > 400) { oplog.splice(0, 100); }
+  }
+  // notify live listeners; a bad subscriber must never break the action itself
+  for (const fn of opSubs) { try { fn(entry); } catch { /* ignore */ } }
+}
+
+// ---- camera track: sampled SEPARATELY from op() (so it never touches the
+// overlay / action log), throttled, so replay can move the view the way it
+// moved during recording -- the "someone is looking around" feel. -----------
+const camlog = [];               // { t, op:'camera', pos:[x,y,z], tgt:[x,y,z] }
+let _camLastT = 0;
+viewer.controls.addEventListener('change', () => {
+  if (_replaying) { return; }                     // don't record our own playback
+  const now = Math.round(performance.now());
+  if (now - _camLastT < 100) { return; }          // ~10 keyframes/sec max
+  _camLastT = now;
+  const p = viewer.camera.position, g = viewer.controls.target;
+  camlog.push({ t: now, op: 'camera',
+                pos: [p.x, p.y, p.z], tgt: [g.x, g.y, g.z] });
+  if (camlog.length > 4000) { camlog.splice(0, 1000); }
+});
+// actions + camera keyframes merged into one time-ordered stream for replay/export
+function fullTimeline() {
+  return [...oplog, ...camlog].sort((a, b) => (a.t ?? 0) - (b.t ?? 0));
+}
+// a fresh session (new package / cleared viewer): the old actions + camera
+// keyframes reference a robot/coordinate-frame that no longer exists, so
+// replaying/exporting them would be garbage -- drop everything, timers included.
+function _resetSessionLogs() {
+  oplog.length = 0;
+  camlog.length = 0;
+  _camLastT = 0;
+  for (const p of _joPending.values()) { clearTimeout(p.timer); }
+  _joPending.clear();
+}
+
+// Human-readable label for a semantic action from the op() stream -- the
+// shared vocabulary used by the screencast overlay, the log export, and (later)
+// replay.  View navigation (orbit/pan/zoom) never calls op(), so it can't
+// appear here: the noise is gone by construction, not by filtering.  An unknown
+// op falls back to a Title-cased name, so a newly-instrumented action shows up
+// for free (add a nicer entry here when you want one).
+const OP_LABEL = {
+  select:      a => a.link ? 'Select: ' + a.link : 'Deselect',
+  setColor:    a => 'Colour: ' + a.link,
+  eye:         a => (a.hide ? 'Hide: ' : 'Show: ') + a.link,
+  setMaterial: a => 'Material: ' + a.link,
+  setInertial: a => 'Inertial: ' + a.link,
+  exclude:     () => 'Exclude',
+  autoLimits:  () => 'Auto limits',
+  reRoot:      a => 'Make root: ' + a.link,
+  align:       () => 'Align to face',
+  remove_port: () => 'Remove end-coords',
+  add_port:    () => 'Add end-coords',
+  setJoint:    a => {
+    const j = viewer.robot?.joints?.[a.joint];
+    const um = j ? _jointUnit(j.jointType) : null;
+    const disp = um ? um.toDisp(a.value).toFixed(um.dec) + um.unit
+                    : (+a.value).toFixed(3);
+    return `Joint ${a.joint} → ${disp}`;
+  },
+  resetPose:   () => 'Reset pose',
+  boxSelect:   a => `Box select (${a.n})`,
+  boxToggle:   a => 'Toggle: ' + a.name,
+  setMimic:    a => 'Mimic → ' + a.master,
+  clearMimic:  a => 'Clear mimic: ' + a.child,
+  loadRobot:   a => 'Load' + (a.name ? ': ' + a.name : ''),
+  rootPose:    a => 'Root pose: ' + a.what,
+  clearViewer: () => 'Clear scene',
+  undo:        () => 'Undo',
+  redo:        () => 'Redo',
+};
+function opLabel(e) {
+  return OP_LABEL[e.op] ? OP_LABEL[e.op](e)
+                        : e.op.charAt(0).toUpperCase() + e.op.slice(1);
+}
+
+// ---- action-log export (③): the same op() stream the overlay shows, written
+// out for a bug report / tutorial notes.  Text is human-readable
+// ("+12.3s  Select: base_link"); JSON is the raw oplog, which replay reads. ---
+function actionLogText() {
+  const t0 = oplog.length ? oplog[0].t : 0;   // times relative to the first action
+  return oplog.map(e => `${('+' + ((e.t - t0) / 1000).toFixed(1) + 's').padStart(8)}  `
+                        + opLabel(e)).join('\n') + '\n';
+}
+function downloadActionLog(kind = 'txt') {
+  const raw = kind === 'json';
+  const body = raw ? JSON.stringify(fullTimeline(), null, 2) : actionLogText();
+  const pkg = (currentInfo?.name || 'sw2robot').replace(/[^\w.-]+/g, '_');
+  const blob = new Blob([body], {
+    type: raw ? 'application/json' : 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${pkg}-actions.${raw ? 'json' : 'txt'}`;
+  document.body.appendChild(a); a.click(); a.remove();   // in-DOM click for Firefox
+  URL.revokeObjectURL(url);
+  log(t('log.saved', { file: a.download, n: oplog.length }), 'ok');
+}
+
+// ---- replay (②): re-perform a recorded op() stream, with the original
+// inter-action timing, driving the viewer -- so a recording plays itself back
+// (joints move, links select) for a demo video.  Only a SAFE, non-destructive
+// subset is replayable; anything else (rename/exclude/add_port/... which mutate
+// server state) is skipped with a log line.  Add an entry here to grow it. ----
+// glide a joint from its current angle to `to` (easeInOutQuad) instead of
+// snapping, so a replayed drag looks like a hand moving it.  Non-blocking: the
+// replay loop keeps its recorded timing while the joint eases in the background.
+const _tweenGen = new Map();     // joint -> generation, so a newer tween wins
+let _activeTweens = 0;           // eases still running (replayLog drains these)
+function _cancelTweens() {        // invalidate every running tween (bump all gens)
+  for (const n of _tweenGen.keys()) { _tweenGen.set(n, (_tweenGen.get(n) || 0) + 1); }
+}
+function tweenJoint(name, to, dur = 500) {
+  const j = viewer.robot?.joints?.[name];
+  if (!j) { return; }
+  op('setJoint', { joint: name, value: to });     // announce label once (not logged)
+  const from = Number(j.angle) || 0;
+  const gen = (_tweenGen.get(name) || 0) + 1;
+  _tweenGen.set(name, gen);
+  if (Math.abs(to - from) < 1e-6) {
+    withJointOpSuppressed(() => viewer.setJointValue(name, to)); return;
+  }
+  const t0 = performance.now();
+  _activeTweens += 1;
+  let live = true;
+  const finish = () => { if (live) { live = false; _activeTweens -= 1; } };
+  const step = () => {
+    // stop only when SUPERSEDED (a newer tween, or _cancelTweens on stop/reset/
+    // reload).  NOT gated on _replaying: the last action's ease starts as the
+    // replay loop ends and must finish (replayLog drains us before resolving).
+    if (_tweenGen.get(name) !== gen) { finish(); return; }
+    const k = Math.min(1, (performance.now() - t0) / dur);
+    const e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
+    withJointOpSuppressed(() => viewer.setJointValue(name, from + (to - from) * e));
+    if (k < 1) { requestAnimationFrame(step); } else { finish(); }
+  };
+  requestAnimationFrame(step);
+}
+const REPLAY = {
+  select:    e => selectLink(e.link),
+  setJoint:  e => tweenJoint(e.joint, e.value),
+  resetPose: () => { _cancelTweens(); resetPose(); },   // stop any in-flight glide first
+  eye:       e => {
+    if (hiddenLinks.has(e.link) === !!e.hide) { return; }   // already in target state
+    toggleLinkVisible(e.link, jointRecForLink(e.link)?.row);  // pass the row so its UI updates
+    if (e.link === selectedLink) {                           // keep the selbar eye in sync too
+      document.getElementById('seleye').classList.toggle('off', hiddenLinks.has(e.link));
+    }
+  },
+  boxSelect: e => {                                // reproduce the recorded set (not select-all)
+    clearBoxSelection();                           // (the recorded select(null) handles deselect)
+    for (const n of e.names ?? []) {
+      if (viewer.robot?.links?.[n]) { boxSelected.add(n); _tintLink(n, 'sel'); }
+    }
+    refreshBulkbar();
+  },
+  boxToggle: e => toggleBoxLink(e.name),
+  undo:      () => doHistory('undo'),
+  redo:      () => doHistory('redo'),
+  camera:    e => {                               // move the view to a keyframe
+    if (!e.pos || !e.tgt) { return; }
+    viewer.camera.position.set(e.pos[0], e.pos[1], e.pos[2]);
+    viewer.controls.target.set(e.tgt[0], e.tgt[1], e.tgt[2]);
+    viewer.controls.update();
+    viewer.redraw();
+  },
+};
+
+// ---- synthetic cursor: a fake pointer that glides to each action's on-screen
+// spot and pulses on click-like ops, so an automated replay reads as "someone
+// is operating it" rather than things happening by themselves. ---------------
+const CLICK_OPS = new Set(['select', 'eye', 'reRoot', 'add_port', 'remove_port',
+                           'boxToggle', 'setColor', 'setMaterial']);
+const _cursorV = new THREE.Vector3();
+const _cursorView = new THREE.Vector3();
+function _actionScreenPos(e) {
+  if (!viewer.robot || !viewer.camera) { return null; }
+  const obj = e.op === 'setJoint' ? viewer.robot.joints?.[e.joint]
+            : viewer.robot.links?.[e.link || e.child || e.name];
+  if (!obj) { return null; }
+  obj.getWorldPosition(_cursorV);
+  // reject points BEHIND the camera: the perspective divide would mirror them
+  // to a bogus on-screen spot (view space looks down -z, so front is z < 0)
+  _cursorView.copy(_cursorV).applyMatrix4(viewer.camera.matrixWorldInverse);
+  if (_cursorView.z >= 0) { return null; }
+  return _projToScreen(_cursorV, viewer.getBoundingClientRect());
+}
+function _showCursor(on) {
+  const c = document.getElementById('replaycursor');
+  if (c) { c.style.display = on ? 'block' : 'none'; }
+}
+function _moveCursor(x, y, click) {
+  const c = document.getElementById('replaycursor');
+  if (!c) { return; }
+  c.style.left = x + 'px'; c.style.top = y + 'px';
+  if (click) { c.classList.remove('click'); void c.offsetWidth; c.classList.add('click'); }
+}
+function replayCancel() { _cancelTweens(); _replaying = false; }   // stop eases where they are
+async function replayLog(entries, { speed = 1, maxGap = 1500 } = {}) {
+  if (_replaying) { return; }                   // no re-entrancy
+  if (!Array.isArray(entries) || !entries.length) {
+    log(t('replay.empty'), 'wrn'); return;
+  }
+  _cancelTweens();                              // drop any ease left over from a prior run
+  speed = speed > 0 ? speed : 1;               // guard against a 0 / negative speed
+  _replaying = true;
+  document.getElementById('replay')?.classList.add('active');
+  _showCursor(true);
+  let done = 0, prev = entries[0].t ?? 0;
+  const skippedOps = new Set();                // distinct non-replayable op names
+  try {
+    for (const e of entries) {
+      const wait = Math.min(maxGap, Math.max(0, (e.t ?? prev) - prev)) / speed;
+      prev = e.t ?? prev;
+      const fn = REPLAY[e.op];
+      // only track the cursor for ops that actually replay (camera has no
+      // on-screen spot; a skipped op must NOT show a phantom click) -- start the
+      // glide NOW so the pointer arrives as the action fires
+      const pos = (fn && e.op !== 'camera') ? _actionScreenPos(e) : null;
+      if (pos) { _moveCursor(pos.x, pos.y, false); }
+      if (wait) { await new Promise(r => setTimeout(r, wait)); }
+      if (!_replaying) { break; }                // cancelled mid-run
+      if (pos && CLICK_OPS.has(e.op)) { _moveCursor(pos.x, pos.y, true); }  // click pulse
+      if (!fn) { skippedOps.add(e.op); continue; }
+      try { fn(e); done += 1; }
+      catch (err) { log(t('replay.stepFail', { op: e.op, e: err.message ?? err }), 'wrn'); }
+    }
+    // let the final ease(s) finish before resolving, so a caller that stops a
+    // screen recording on our promise captures the full motion (bounded so a
+    // stuck tween can't hang the await)
+    const drainUntil = performance.now() + 800;
+    while (_replaying && _activeTweens > 0 && performance.now() < drainUntil) {
+      await new Promise(r => setTimeout(r, 30));
+    }
+  } finally {
+    _replaying = false;
+    document.getElementById('replay')?.classList.remove('active');
+    _showCursor(false);
+  }
+  log(t('replay.done', { done, skipped: skippedOps.size }), 'ok');
+  // not just a count: name the actions we couldn't replay, so a "done" that
+  // silently dropped rename/exclude/add_port/... reads as the partial it is
+  if (skippedOps.size) { log(t('replay.partial', { ops: [...skippedOps].join(', ') }), 'wrn'); }
+}
+
+// ---- screen recording: capture the whole tab (all UI + the keycast overlay)
+// to a .webm via getDisplayMedia + MediaRecorder.  The browser asks "share
+// this tab" once per recording (the required user gesture); after that it is
+// hands-off.  Pairs with replay: Shift-click records a replay end to end. ------
+let _rec = null;                 // { recorder, chunks, stream } while recording
+let _recStarting = false;        // guards the async gap before _rec is assigned
+async function startScreenRecording() {
+  if (_rec || _recStarting) { return _rec; }   // already recording / share dialog open
+  if (!navigator.mediaDevices?.getDisplayMedia || !window.MediaRecorder) {
+    log(t('rec.unsupported'), 'err'); return null;
+  }
+  let stream;
+  _recStarting = true;
+  try {
+    stream = await navigator.mediaDevices.getDisplayMedia({
+      video: { frameRate: 30 }, audio: false });
+  } catch { log(t('rec.cancelled'), 'wrn'); return null; }
+  finally { _recStarting = false; }
+  const mime = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm']
+    .find(m => MediaRecorder.isTypeSupported(m)) || 'video/webm';
+  const chunks = [];
+  const recorder = new MediaRecorder(stream, { mimeType: mime });
+  recorder.ondataavailable = e => { if (e.data.size) { chunks.push(e.data); } };
+  recorder.onstop = () => {
+    stream.getTracks().forEach(tr => tr.stop());
+    const blob = new Blob(chunks, { type: mime });
+    const pkg = (currentInfo?.name || 'sw2robot').replace(/[^\w.-]+/g, '_');
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `${pkg}-demo.webm`;
+    document.body.appendChild(a); a.click(); a.remove();   // in-DOM click for Firefox
+    URL.revokeObjectURL(url);
+    log(t('rec.saved', { file: a.download, kb: Math.round(blob.size / 1024) }), 'ok');
+  };
+  // the browser's own "Stop sharing" chip ends the track -> finalise cleanly
+  stream.getVideoTracks()[0].addEventListener('ended', stopScreenRecording);
+  recorder.start();
+  _rec = { recorder, chunks, stream };
+  document.getElementById('record')?.classList.add('active');
+  log(t('rec.on'), 'ok');
+  return _rec;
+}
+function stopScreenRecording() {
+  if (!_rec) { return; }
+  const r = _rec; _rec = null;
+  document.getElementById('record')?.classList.remove('active');
+  if (r.recorder.state !== 'inactive') { r.recorder.stop(); }  // onstop downloads
 }
 
 async function refreshCompMeta() {
@@ -2621,9 +2976,14 @@ playBtn.addEventListener('click', () => {
   log(playMode ? t('play.on') : t('play.off'), 'ok');
 });
 document.getElementById('playhome').addEventListener('click', () => {
-  for (const [name, r] of playRows) {
-    previewJoint(name, Math.min(r.hi, Math.max(r.lo, 0)));
-  }
+  let n = 0;
+  withJointOpSuppressed(() => {
+    for (const [name, r] of playRows) {
+      previewJoint(name, Math.min(r.hi, Math.max(r.lo, 0)));
+      n += 1;
+    }
+  });
+  if (n) { op('resetPose', { n }); }   // one action, not n joint edits
 });
 
 viewer.addEventListener('angle-change', e => {
@@ -2638,7 +2998,47 @@ viewer.addEventListener('angle-change', e => {
     pr.slider.value = a;
     pr.val.value = pr.fmt(a);
   }
+  _recordJointEdit(e.detail);
 });
+
+// ---- record a joint move as ONE semantic op per settle --------------------
+// angle-change fires every frame while a slider or a pose-drag moves, so a
+// single drag would flood the action log (and the screencast overlay).  We
+// debounce per joint: when a joint's value stops changing for a moment, emit
+// one op('setJoint').  Programmatic moves (pose restore on reload, snap-to-rest
+// on a type flip, reset-pose) run inside withJointOpSuppressed(), so the model
+// updates without the move being logged as if the user did it by hand.
+let _joSuppress = 0;
+function withJointOpSuppressed(fn) {
+  _joSuppress += 1;
+  try { return fn(); } finally { _joSuppress -= 1; }
+}
+const _joPending = new Map();      // joint name -> { val, suppressed, timer }
+function _recordJointEdit(name) {
+  const j = viewer.robot?.joints?.[name];
+  // only user-drivable joints: a mimic follows its master and a fixed joint
+  // can't move, so an angle-change on either is a side effect, not an edit
+  if (!j || j.mimicJoint || j.jointType === 'fixed') { return; }
+  // stamp suppression at event time: a programmatic burst runs synchronously
+  // while _joSuppress > 0, so its last event marks the entry suppressed even
+  // though the debounce timer fires later, after the flag has been cleared.
+  const suppressed = _joSuppress > 0;
+  const prev = _joPending.get(name);
+  if (prev) {
+    clearTimeout(prev.timer);
+    // a programmatic (suppressed) move must not erase a real pending edit that
+    // hasn't fired yet -- flush it now so the user's drag isn't lost
+    if (suppressed && !prev.suppressed) { op('setJoint', { joint: name, value: prev.val }); }
+  }
+  const val = Number(j.angle);
+  const timer = setTimeout(() => {
+    const p = _joPending.get(name);
+    _joPending.delete(name);
+    if (!p || p.suppressed) { return; }        // programmatic move: don't log
+    op('setJoint', { joint: name, value: p.val });
+  }, 350);
+  _joPending.set(name, { val, suppressed, timer });
+}
 
 // ---- joint axis markers: depth-test OFF so they shine through the meshes;
 // children of the joint Object3D, so they follow FK for free ---------------
@@ -4356,7 +4756,7 @@ function patchJointTypeLive(j, type) {
   if (type === 'fixed') {
     if (j.jointType !== 'fixed') {
       axisMemory.set(j.name, j.axis.toArray());  // remember for un-fixing later
-      j.setJointValue(0);                         // return to rest before locking
+      withJointOpSuppressed(() => j.setJointValue(0));   // rest before locking
     }
     j.jointType = 'fixed';
     return;
@@ -4372,7 +4772,7 @@ function patchJointTypeLive(j, type) {
     // the background rebuild persists the authoritative range for next reload.
     if (!(hi > lo)) { j.limit = { lower: -Math.PI, upper: Math.PI }; }
   }
-  j.setJointValue(0);
+  withJointOpSuppressed(() => j.setJointValue(0));
 }
 
 // re-render everything that reads a joint's type WITHOUT touching the 3D scene
@@ -5840,7 +6240,7 @@ function selectLinksInBox(rect) {
     }
   }
   for (const n of boxSelected) { _tintLink(n, 'sel'); }
-  op('boxSelect', { n: boxSelected.size });
+  op('boxSelect', { n: boxSelected.size, names: [...boxSelected] });
   refreshBulkbar();
   log(boxSelected.size ? t('bulk.boxSelected', { n: boxSelected.size })
                        : t('bulk.boxNone'), boxSelected.size ? undefined : 'wrn');
@@ -6351,6 +6751,7 @@ viewer.addEventListener('geometry-loaded', () => {
   hideLoadbar();
   document.getElementById('loadbackdrop').style.display = 'none';  // new model in
   log(t('mesh.allLoaded'), 'ok');
+  _cancelTweens();               // a replay ease must not keep driving the NEW robot
   const restore = pendingRestore;
   pendingRestore = null;
   requestAnimationFrame(() => {
@@ -6369,13 +6770,15 @@ viewer.addEventListener('geometry-loaded', () => {
     if (restore) {
       // joint edit reload: keep the camera, put the pose back
       let n = 0;
-      for (const [name, v] of Object.entries(restore.angles)) {
-        const j = viewer.robot.joints[name];
-        if (j && j.jointType !== 'fixed' && !j.mimicJoint) {
-          viewer.setJointValue(name, v);
-          n += 1;
+      withJointOpSuppressed(() => {
+        for (const [name, v] of Object.entries(restore.angles)) {
+          const j = viewer.robot.joints[name];
+          if (j && j.jointType !== 'fixed' && !j.mimicJoint) {
+            viewer.setJointValue(name, v);
+            n += 1;
+          }
         }
-      }
+      });
       if (restore.linkWorlds) {
         // the model jumped in scene space (re-root / root frame change):
         // move the CAMERA by the same rigid transform so the view looks
@@ -6426,11 +6829,16 @@ viewer.addEventListener('urdf-error', e => {
 });
 
 function resetPose() {
-  for (const j of Object.values(viewer.robot?.joints ?? {})) {
-    if (j.jointType !== 'fixed' && !j.mimicJoint) {
-      viewer.setJointValue(j.name, 0);
+  let n = 0;
+  withJointOpSuppressed(() => {
+    for (const j of Object.values(viewer.robot?.joints ?? {})) {
+      if (j.jointType !== 'fixed' && !j.mimicJoint) {
+        viewer.setJointValue(j.name, 0);
+        n += 1;
+      }
     }
-  }
+  });
+  if (n) { op('resetPose', { n }); }   // one action, not n joint edits
 }
 document.getElementById('reset').addEventListener('click', resetPose);
 
@@ -6492,6 +6900,7 @@ function clearViewer() {
   document.title = 'sw2robot';
   statusEl.textContent = t('view.cleared');
   viewer.redraw();
+  _resetSessionLogs();           // emptied the viewer -> start a fresh recording
   log(t('view.cleared'), 'ok');
 }
 document.getElementById('clearview').addEventListener('click', clearViewer);
@@ -6499,6 +6908,9 @@ document.getElementById('clearview').addEventListener('click', clearViewer);
 // ---- loading entry points -----------------------------------------------
 function loadRobot(info, { drop = false, keepPose = false,
                            followCamera = false } = {}) {
+  // a keepPose reload is the SAME session (edit rebuild); anything else is a
+  // fresh package -> drop the old actions/camera so they can't replay onto it
+  if (!keepPose) { _resetSessionLogs(); }
   op('loadRobot', { name: info?.name, keepPose, drop });
   cancelEndcoords();        // a rebuild invalidates any open placement session
   document.getElementById('emptyprompt').style.display = 'none';
@@ -7058,6 +7470,15 @@ window.sw2robot = {
   boxSelected: () => [...boxSelected],
   bulkType: t => bulkSetType(t),
   select: n => selectLink(n),
+  actionLogText,                         // ③ readable log (for tests / tooling)
+  exportLog: kind => downloadActionLog(kind),
+  oplog: () => oplog.slice(),            // ② a copy of the raw action stream
+  timeline: () => fullTimeline(),        // actions + camera keyframes, time-ordered
+  replay: (entries, opts) => replayLog(entries ?? fullTimeline(), opts),
+  cancelReplay: replayCancel,
+  record: () => startScreenRecording(),  // 🎥 screen recording (for tooling/tests)
+  stopRecord: stopScreenRecording,
+  isRecording: () => !!_rec,
   axisGlyphs: () => [...axisGlyphs.entries()].map(([name, g]) => ({
     name, visible: g.visible, children: g.children.length,
     inScene: !!g.parent })),
@@ -7080,6 +7501,36 @@ window.sw2robot = {
 };
 document.getElementById('bug').addEventListener('click',
   () => window.sw2robot.report());
+document.getElementById('savelog').addEventListener('click',
+  e => downloadActionLog(e.shiftKey ? 'json' : 'txt'));
+document.getElementById('replay').addEventListener('click', e => {
+  if (_replaying) { replayCancel(); return; }          // click again = stop
+  if (e.shiftKey) { replayLog(fullTimeline()); return; } // replay live session
+  document.getElementById('replayfile').click();        // else load a saved .json
+});
+document.getElementById('replayfile').addEventListener('change', async ev => {
+  const file = ev.target.files?.[0];
+  ev.target.value = '';                                 // allow re-picking same file
+  if (!file) { return; }
+  try {
+    const entries = JSON.parse(await file.text());
+    replayLog(entries);
+  } catch (e) {
+    log(t('replay.badFile', { e: e.message ?? e }), 'err');
+  }
+});
+document.getElementById('record').addEventListener('click', async e => {
+  if (_rec) { stopScreenRecording(); return; }           // click again = stop
+  // Shift = auto-record a replay -- but only when one isn't already running,
+  // else replayLog() would return immediately (re-entrancy guard) and we'd
+  // stop the capture at once, saving an empty video
+  const wantReplay = e.shiftKey && !_replaying && (oplog.length || camlog.length);
+  const started = await startScreenRecording();          // asks to share the tab
+  if (started && wantReplay) {                            // Shift = record a replay
+    await replayLog(fullTimeline());
+    stopScreenRecording();
+  }
+});
 
 // re-render the dynamic (JS-built) UI in the new language when toggled.
 // data-i18n static chrome is handled by applyStaticI18n in the loader script.
@@ -7119,7 +7570,6 @@ document.querySelectorAll('#langbar button').forEach(b =>
     'ArrowUp': '↑', 'ArrowDown': '↓', 'ArrowLeft': '←', 'ArrowRight': '→',
     'Control': 'Ctrl', 'Meta': 'Cmd',
   };
-  const MOUSE = { 0: 'L-Click', 1: 'M-Click', 2: 'R-Click' };
   const isMod = k => k === 'Control' || k === 'Shift' || k === 'Alt' ||
                      k === 'Meta';
 
@@ -7142,7 +7592,7 @@ document.querySelectorAll('#langbar button').forEach(b =>
       return;
     }
     const el = document.createElement('span');
-    el.className = 'keycap' + (kind === 'mouse' ? ' mouse' : '');
+    el.className = 'keycap' + (kind && kind !== 'key' ? ' ' + kind : '');
     el.append(document.createTextNode(label));
     const m = document.createElement('span');
     m.className = 'mult';
@@ -7175,25 +7625,16 @@ document.querySelectorAll('#langbar button').forEach(b =>
     if (!on || e.repeat) return;
     show(chord(e, e.key), 'key');
   }
-  function onMouse(e) {
-    if (!on) return;
-    const name = MOUSE[e.button];
-    if (!name) return;
-    const mods = [];
-    if (e.ctrlKey)  mods.push('Ctrl');
-    if (e.altKey)   mods.push('Alt');
-    if (e.shiftKey) mods.push('Shift');
-    show([...mods, name].join(' + '), 'mouse');
-  }
-  function onWheel(e) {
-    if (!on) return;
-    show(e.deltaY < 0 ? 'Scroll ↑' : 'Scroll ↓', 'mouse');
-  }
 
-  // capture phase so we see the event before any field/control consumes it
+  // Semantic actions come from the op() stream, NOT from raw mouse/wheel
+  // events -- so a click that only orbits/pans/zooms the camera produces
+  // nothing, while a click that selects a link, adds a port, re-roots, etc.
+  // shows its meaning ("Select: base_link").  Keyboard is still read raw
+  // above, because a keypress is almost always an intentional command.
+  onOp(e => { if (on) show(opLabel(e), 'op'); });
+
+  // capture phase so we see the keypress before any field/control consumes it
   window.addEventListener('keydown', onKey, true);
-  window.addEventListener('mousedown', onMouse, true);
-  window.addEventListener('wheel', onWheel, { capture: true, passive: true });
 
   toggle.addEventListener('click', () => {
     on = toggle.classList.toggle('active');
