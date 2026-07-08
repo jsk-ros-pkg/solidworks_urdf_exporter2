@@ -164,6 +164,19 @@ def _sw_mass_props(mp):
     return mass, [float(x) for x in com], inertia6
 
 
+def _sw_mass_overridden(mp):
+    """Did the user manually override mass properties on this part in the
+    SolidWorks "Override Mass Properties" dialog?
+
+    When true, the reported ``Mass`` is a deliberate user value rather than the
+    material/geometry default, so the mass editor must not flag it as unset.
+    The override booleans live on different interface versions under different
+    names, so probe each defensively (``safe_prop`` returns None on a missing
+    attribute); any one being set counts as an override."""
+    return any(bool(safe_prop(mp, a)) for a in (
+        "OverrideMass", "OverrideCenterOfMass", "OverrideMomentsOfInertia"))
+
+
 @dataclass
 class Component:
     name: str
@@ -183,9 +196,17 @@ class Component:
     sw_mass: float | None = None              # kg
     sw_com: list | None = None                # centre of mass [x,y,z] (m)
     sw_inertia: list | None = None            # (ixx,ixy,ixz,iyy,iyz,izz) about COM
+    # True when the user manually overrode mass properties in SolidWorks'
+    # "Override Mass Properties" dialog: the sw_mass is then a deliberate value,
+    # not the material/geometry default -- so the mass editor must not flag it.
+    sw_mass_overridden: bool = False
     # set when a per-link density override (config / web editor) should drive
     # the inertial from the mesh, overriding the SolidWorks-native values
     density_override: bool = False
+    # per-link target mass (kg): the inertial is rescaled to this exact weight
+    # (config `masses:` / the web editor), mutually exclusive with a density
+    # override -- see exporter.inertia.rescale_to_mass
+    mass_target: float | None = None
     # standard hardware (screw/bolt/nut/washer/pin): weld it FIXED to whatever it
     # fastens and never let it be a tree parent -- see is_fastener_part
     is_fastener: bool = False
@@ -412,6 +433,12 @@ def extract_components(doc, exclude=None, progress=None):
                     mass, com, inertia6 = _sw_mass_props(mp)
                     if mass is not None:
                         sw = {"mass": mass, "com": com, "inertia": inertia6}
+                    # a manual SW mass-properties override means the mass is a
+                    # deliberate value, not the material/geometry default -- the
+                    # mass editor must not flag it (see _sw_mass_overridden)
+                    if _sw_mass_overridden(mp):
+                        sw = (sw or {})
+                        sw["overridden"] = True
                 except Exception:
                     pass
         except Exception:
@@ -463,7 +490,8 @@ def extract_components(doc, exclude=None, progress=None):
                                fixed=fixed, dof=dof,
                                material=material, density=density,
                                sw_mass=sw.get("mass"), sw_com=sw.get("com"),
-                               sw_inertia=sw.get("inertia")))
+                               sw_inertia=sw.get("inertia"),
+                               sw_mass_overridden=sw.get("overridden", False)))
     if n_skipped or n_excluded:
         print(f"      (skipped {n_skipped} suppressed/unnamed, "
               f"excluded {n_excluded} components)")
@@ -2518,7 +2546,9 @@ def _component_states(comps):
             world=[float(x) for x in c.world.flatten()],
             fixed=c.fixed, dof=c.dof, mesh_file=c.mesh_file,
             material=c.material, density=c.density,
-            sw_mass=c.sw_mass, sw_com=c.sw_com, sw_inertia=c.sw_inertia)
+            sw_mass=c.sw_mass, sw_com=c.sw_com, sw_inertia=c.sw_inertia,
+            sw_mass_overridden=c.sw_mass_overridden,
+            mass_target=c.mass_target)
             for c in comps]
 
 
@@ -2675,6 +2705,8 @@ def from_graph(graph, exclude=None, expand=None, no_expand=None):
             fixed=cs.fixed, dof=cs.dof, mesh_file=cs.mesh_file,
             material=cs.material, density=cs.density,
             sw_mass=cs.sw_mass, sw_com=cs.sw_com, sw_inertia=cs.sw_inertia,
+            sw_mass_overridden=getattr(cs, "sw_mass_overridden", False),
+            mass_target=getattr(cs, "mass_target", None),
             mass_only=getattr(cs, "mass_only", False)))
     names = {c.name for c in comps}
     adjacency = {}
@@ -2787,7 +2819,9 @@ def _expand_one(inst, sub, comps, adjacency, ground, deep=None, hidden=None):
             is_subassembly=cs.is_subassembly, world=world,
             fixed=False, dof=None, mesh_file=cs.mesh_file,
             material=cs.material, density=cs.density,
-            sw_mass=cs.sw_mass, sw_com=cs.sw_com, sw_inertia=cs.sw_inertia))
+            sw_mass=cs.sw_mass, sw_com=cs.sw_com, sw_inertia=cs.sw_inertia,
+            sw_mass_overridden=getattr(cs, "sw_mass_overridden", False),
+            mass_target=getattr(cs, "mass_target", None)))
         name_map[cs.name] = gname
         local_of[cs.name] = local
         world_of[cs.name] = world
@@ -3026,6 +3060,30 @@ def build_model(graph, robot_name=None, base_hint=None, config=None,
                 c.density_override = True
             else:
                 print(f"      WARN: densities: '{k}' matched no link")
+
+    if config and config.get("masses"):
+        # per-link target mass (kg) -- the web editor's direct-weight setting.
+        # Same name matching as densities.  Mutually exclusive with a density
+        # override: a target mass rescales the inertial to an exact weight, so
+        # clear any density override on the same link (mass wins).  Consumed in
+        # urdf_writer._inertial_xml via exporter.inertia.rescale_to_mass.
+        by_ln = {c.link_name: c for c in comps}
+        by_nm = {c.name: c for c in comps}
+        for k, v in config["masses"].items():
+            c = by_ln.get(str(k)) or by_nm.get(str(k))
+            if c is not None:
+                try:
+                    m = float(v)
+                except (TypeError, ValueError):
+                    print(f"      WARN: masses: '{k}' -> {v!r} is not a number")
+                    continue
+                if not (m > 0):
+                    print(f"      WARN: masses: '{k}' -> {m} is not positive")
+                    continue
+                c.mass_target = m
+                c.density_override = False   # mass wins over any density override
+            else:
+                print(f"      WARN: masses: '{k}' matched no link")
 
     if config and config.get("mass_only"):
         # mass-only links: keep the weight, drop the geometry.  Same name
