@@ -1140,6 +1140,72 @@ def _set_subassembly_mode_yaml(txt, graph, name, mode):
     return txt, {"expand": exp_members, "no_expand": noexp_members}
 
 
+def _canonical_tree_payload(graph, yml_txt=""):
+    """Fully-expanded tree plus CAD sub-assembly membership.
+
+    This is a read-only planning payload for the sub-assembly collapse work:
+    always expand CAD sub-assemblies, keep the user's directed tree edits where
+    possible, and report which expanded links/joints belong to each top-level
+    CAD sub-assembly instance.
+    """
+    import yaml as _yaml
+
+    from sw2robot.exporter import model as _M
+
+    try:
+        cfg = _yaml.safe_load(yml_txt) or {}
+        if not isinstance(cfg, dict):
+            cfg = {}
+    except Exception:
+        cfg = {}
+    full_cfg = dict(cfg)
+    full_cfg["expand"] = [""]       # substring override: force every subasm
+    full_cfg["no_expand"] = []
+    model = _M.build_model(graph, config=full_cfg)
+
+    links = [{"name": c.name, "link_name": c.link_name}
+             for c in model.components]
+    joints = [{"name": j.name, "parent": j.parent, "child": j.child,
+               "type": j.jtype}
+              for j in model.joints]
+    link_to_name = {c.link_name: c.name for c in model.components}
+    link_by_name = {c.name: c.link_name for c in model.components}
+
+    subassemblies = []
+    for c in getattr(graph, "components", []) or []:
+        if not (getattr(c, "is_subassembly", False) and c.part_path):
+            continue
+        prefix = c.name + "/"
+        member_names = sorted(n for n in link_by_name if n.startswith(prefix))
+        member_links = [link_by_name[n] for n in member_names]
+        member_set = set(member_links)
+        internal, boundary = [], []
+        for j in joints:
+            p_in = j["parent"] in member_set
+            c_in = j["child"] in member_set
+            if p_in and c_in:
+                internal.append(j)
+            elif p_in or c_in:
+                boundary.append(j)
+        subassemblies.append({
+            "name": c.name,
+            "link_name": c.link_name,
+            "path": c.part_path,
+            "member_components": member_names,
+            "member_links": member_links,
+            "internal_joints": internal,
+            "boundary_joints": boundary,
+        })
+    subassemblies.sort(key=lambda x: x["name"])
+    return {
+        "base_link": model.base_link,
+        "links": links,
+        "joints": joints,
+        "subassemblies": subassemblies,
+        "link_to_component": link_to_name,
+    }
+
+
 def _upsert_yaml_map(txt, mapkey, key, value):
     """Set ``mapkey: {key: value}`` (block style) in joints.yaml text, replacing
     any existing entry for ``key`` and creating the map if needed."""
@@ -2664,6 +2730,23 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 txt = open(yml, encoding="utf-8").read() \
                     if os.path.exists(yml) else ""
                 payload = _subassemblies_payload(gs, txt)
+                payload["mode"] = "cad"
+                return self._send_json(payload)
+            if path == "/api/canonical_tree":
+                cls = type(self)
+                if not cls.pkg_dir:
+                    return self._send_json({"error": "no package open"}, 400)
+                if not _cad_mode(cls.pkg_dir):
+                    return self._send_json(
+                        {"error": "canonical tree needs the CAD graph.json"},
+                        400)
+                from sw2robot.exporter.state import GraphState
+                gs = GraphState.load(os.path.join(cls.pkg_dir, "graph.json"))
+                name = os.path.splitext(os.path.basename(cls.urdf_rel))[0]
+                yml = os.path.join(cls.pkg_dir, name + ".joints.yaml")
+                txt = open(yml, encoding="utf-8").read() \
+                    if os.path.exists(yml) else ""
+                payload = _canonical_tree_payload(gs, txt)
                 payload["mode"] = "cad"
                 return self._send_json(payload)
             if path == "/api/fs":

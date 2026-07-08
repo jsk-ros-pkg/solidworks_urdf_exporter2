@@ -137,6 +137,48 @@ def test_no_expand_maps_expanded_base_hint_to_preserved_instance():
     assert model.base_link == "servo_1"
 
 
+def test_canonical_tree_payload_ignores_subassembly_modes():
+    from sw2robot.editor.webserver import _canonical_tree_payload
+
+    payload = _canonical_tree_payload(
+        make_graph(), "base: plate-1\nno_expand:\n- servo\n")
+    link_names = {x["link_name"] for x in payload["links"]}
+    assert "servo_1" not in link_names
+    assert {"servo_1__case_1", "servo_1__horn_1"} <= link_names
+
+    sub = payload["subassemblies"][0]
+    assert sub["name"] == "servo-1"
+    assert set(sub["member_links"]) == {"servo_1__case_1",
+                                        "servo_1__horn_1"}
+    assert {j["child"] for j in sub["internal_joints"]} == {
+        "servo_1__horn_1"}
+    assert {j["child"] for j in sub["boundary_joints"]} == {
+        "servo_1__case_1"}
+
+
+def test_canonical_tree_payload_keeps_directed_tree_edits():
+    from sw2robot.editor.webserver import _canonical_tree_payload
+
+    txt = """
+base: plate-1
+no_expand:
+- servo
+joints:
+  - parent: plate-1
+    child:  servo-1/case-1
+    type:   fixed
+  - parent: servo-1/case-1
+    child:  servo-1/horn-1
+    type:   fixed
+"""
+    payload = _canonical_tree_payload(make_graph(), txt)
+    sub = payload["subassemblies"][0]
+    assert [(j["parent"], j["child"], j["type"])
+            for j in sub["internal_joints"]] == [
+        ("servo_1__case_1", "servo_1__horn_1", "fixed")
+    ]
+
+
 def test_subassemblies_payload_reports_expansion_state():
     from sw2robot.editor.webserver import _subassemblies_payload
 
