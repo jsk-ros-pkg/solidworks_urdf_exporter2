@@ -192,6 +192,33 @@ def export_meshes(app, doc, comps, meshes_dir, progress=None, by_path=None):
     return n
 
 
+def export_part_mesh(md, comp, meshes_dir):
+    """Export a single PART doc's geometry to ``meshes/<link>.3dxml`` and set
+    ``comp.mesh_file``; return 1 on success, 0 otherwise.
+
+    ``md`` is the already-open ``IModelDoc2`` of the ``.SLDPRT`` (part-local
+    frame, the same frame its inertial is in), so no re-open is needed.  A fresh
+    cache of real geometry is reused when present (see :func:`_cache_is_fresh`)."""
+    os.makedirs(meshes_dir, exist_ok=True)
+    out = os.path.join(meshes_dir, comp.link_name + ".3dxml")
+    if _cache_is_fresh(out, comp.part_path):
+        comp.mesh_file = os.path.join("meshes", os.path.basename(out))
+        return 1
+    ok = False
+    try:
+        ok = _save_3dxml(md, out)
+    except Exception as e:
+        print(f"  part mesh in-session export failed ({e!r})")
+    if ok:
+        comp.mesh_file = os.path.join("meshes", os.path.basename(out))
+        print(f"  mesh: {comp.link_name} <- {os.path.basename(comp.part_path)} "
+              f"({os.path.getsize(out)} B)")
+        return 1
+    print(f"  FAILED part mesh for {comp.name} "
+          f"({os.path.basename(comp.part_path)})")
+    return 0
+
+
 def export_subgraph_meshes(app, subgraphs, meshes_dir, by_path=None):
     """Meshes for every sub-assembly-internal component, so a build-time
     expansion has per-child visuals.  ``subgraphs`` is

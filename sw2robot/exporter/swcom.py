@@ -577,10 +577,47 @@ class SolidWorks:
               f"{t4 - t3:.1f}s")
         return doc
 
+    def _reference_dirs(self, src_path):
+        """Every folder that actually holds a file this assembly references,
+        read from SolidWorks' own dependency records (``GetDocumentDependencies2``
+        -- from the file, no open required).
+
+        The parent + parent's-subfolders scan below only reaches parts that sit
+        near the .SLDASM.  Assemblies that reference a SHARED library in a distant
+        folder (e.g. ``.../common_parts/servo/Dynamixel/XL430`` while the assembly
+        is under ``.../beetle/asm/subasm``) then open with every component
+        unresolved -- the "no usable components" / widespread "FAILED mesh"
+        failures on the hand and aerial trees.  Feeding those real folders into
+        the search paths lets SolidWorks resolve them by name."""
+        dirs = []
+        try:
+            # (document, Traverseflag=whole tree, SearchSubfolders=off, AddReadOnlyInfo=off)
+            deps = self.app.GetDocumentDependencies2(src_path, True, False, False)
+        except Exception as e:
+            print(f"      WARN: GetDocumentDependencies2 failed ({e!r}); "
+                  f"distant part references may not resolve")
+            return dirs
+        if not deps:
+            return dirs
+        # returns a flat [name, path, name, path, ...] sequence
+        seq = list(deps)
+        seen = set()
+        for p in seq[1::2]:
+            try:
+                d = os.path.dirname(os.path.abspath(str(p)))
+            except Exception:
+                continue
+            key = os.path.normcase(d)
+            if d and key not in seen and os.path.isdir(d):
+                seen.add(key)
+                dirs.append(d)
+        return dirs
+
     def _register_search_folders(self, src_path):
-        """Add the source assembly's folder, its parent and the parent's
-        sub-folders (parts/, commercial/, ...) to the reference search
-        paths of this SolidWorks session.
+        """Add the source assembly's folder, its parent, the parent's sub-folders
+        (parts/, commercial/, ...) AND every folder that actually holds a
+        referenced part (from the assembly's dependency records) to the reference
+        search paths of this SolidWorks session.
 
         The previous user settings are captured ONCE and restored in
         shutdown() -- SolidWorks persists these preferences to the registry
@@ -607,6 +644,13 @@ class SolidWorks:
                         cand.append(p)
             except Exception:
                 pass
+            # the real folders of every referenced part, wherever they live --
+            # this is what lets a DISTANT shared library resolve (parent-subfolder
+            # scan above only reaches parts near the .SLDASM)
+            ref_dirs = self._reference_dirs(src_path)
+            for d in ref_dirs:
+                if d not in cand:
+                    cand.append(d)
             # KEEP the user's existing referenced-document search paths and only
             # ADD ours -- SolidWorks resolves this assembly's parts through those
             # configured paths interactively, so replacing them (the old
@@ -625,7 +669,8 @@ class SolidWorks:
                 pass
             self.app.SetSearchFolders(constants.swDocumentType, folders)
             print(f"      reference search folders set ({len(cand)} dirs "
-                  f"around {os.path.basename(src_dir)} + "
+                  f"around {os.path.basename(src_dir)}, "
+                  f"{len(ref_dirs)} from dependency records + "
                   f"{len(prev_list)} existing)")
         except Exception as e:
             print(f"      WARN: could not set search folders ({e!r}); "
