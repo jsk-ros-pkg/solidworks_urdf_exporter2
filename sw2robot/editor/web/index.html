@@ -4548,6 +4548,13 @@ function fillLinkInfo(name) {
   const el = document.getElementById('linkinfo');
   const link = viewer.robot?.links?.[name];
   if (!link) { el.style.display = 'none'; return; }
+  // the selection bar (name + 👁/🗑/⌂/✕) is folded in as this panel's header so
+  // it is ONE panel, not two overlapping ones.  Park it outside #linkinfo before
+  // the innerHTML rebuild below so the element (and its listeners) survives.
+  const selbar = document.getElementById('selbar');
+  if (selbar && selbar.parentElement === el) {
+    document.getElementById('viewwrap').appendChild(selbar);
+  }
   const j = link.parent?.isURDFJoint ? link.parent : null;
   const box = ownLinkBox(link, new THREE.Box3());
   const size = box.isEmpty() ? null : box.getSize(new THREE.Vector3());
@@ -4690,8 +4697,14 @@ function fillLinkInfo(name) {
       `</td></tr>`);
   }
   const jointHtml = j ? jointPanelHtml(j, jParentLink, name) : '';
-  el.innerHTML = jointHtml +
-    `<h2>🔎 ${name}</h2><table>${rowsHtml.join('')}</table>`;
+  el.innerHTML = jointHtml + `<table>${rowsHtml.join('')}</table>`;
+  // re-insert the selection bar as the panel header (its buttons keep their
+  // listeners since the element was only moved, never recreated)
+  if (selbar) {
+    Object.assign(selbar.style, { position: 'static', border: 'none',
+      background: 'none', padding: '0', margin: '0 0 6px', width: 'auto' });
+    el.insertBefore(selbar, el.firstChild);
+  }
   if (j) { wireJointPanel(el, j); }
   // source toggle: check -> pin an explicit target mass at the current mass;
   // uncheck -> clear it, back to material / density
@@ -4789,6 +4802,7 @@ function fillLinkInfo(name) {
       }
     });
   }
+  dockPanelBelowViews(el);      // sit under the viewer's button row (was 76px)
   el.style.display = 'block';   // '' would fall back to the stylesheet's
                                 // display:none and never show
 }
@@ -4806,7 +4820,7 @@ function selectLink(linkName) {
   if (linkName) {
     _tintLink(linkName, _colorTint(linkName));   // red survives selection
     statusEl.textContent = t('sel.status', { name: linkName });
-    document.getElementById('selname').textContent = linkName;
+    document.getElementById('selname').textContent = '🔎 ' + linkName;
     document.getElementById('seleye').classList.toggle(
       'off', hiddenLinks.has(linkName));
     bar.style.display = 'flex';
