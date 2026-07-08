@@ -739,6 +739,26 @@ def _parse_export_query(cls, query):
     }, None
 
 
+def _export_gate(cls, query):
+    """Block export while CAD-mode links still carry an unreviewed default
+    SolidWorks mass, so a guessed weight never silently reaches the URDF.
+
+    Bypassed with ``?ack=1`` (the client's "export anyway" after showing the
+    list, and the launch_it.sh one-liner).  Returns ``(payload, code)`` to send
+    back, or None to let the export proceed."""
+    if (query.get("ack") or ["0"])[0] == "1":
+        return None
+    if not _cad_mode(cls.pkg_dir):
+        return None
+    flagged = _default_mass_links(cls.pkg_dir, cls.urdf_rel)
+    if not flagged:
+        return None
+    return ({"error": f"{len(flagged)} link(s) still have a default SolidWorks "
+                       "mass (no material / unset). Set a mass or density, or "
+                       "acknowledge them, before export.",
+             "default_mass_links": sorted(flagged)}, 409)
+
+
 def _export_fname(robot_name, pkg, params):
     return (f"{robot_name}_glb.zip"
             if params["visual_fmt"] == "glb" and params["collision_fmt"] == "glb"
@@ -874,6 +894,131 @@ def _read_colors(pkg_dir, urdf_rel):
         return {}
     colors = cfg.get("colors")
     return colors if isinstance(colors, dict) else {}
+
+
+# SolidWorks uses this density (kg/m^3) when a part has no material assigned, so
+# a mass computed from it is a silent guess -- see _default_mass_links.
+_DEFAULT_SW_DENSITY = 1000.0
+
+
+def _default_mass_links(pkg_dir, urdf_rel):
+    """Link names whose mass looks like an unreviewed SolidWorks *default*.
+
+    A part with no material assigned still gets a mass from SolidWorks' default
+    density (~1000 kg/m^3), which then flows into the URDF labelled as an exact
+    value -- a silent error.  A link is flagged when its material is unset OR its
+    density is the SW default, UNLESS the user has resolved it: a per-link mass
+    (`masses:`) or density (`densities:`) override, a manual SolidWorks mass
+    override (``sw_mass_overridden``), or an explicit acknowledgement
+    (`mass_reviewed:`).  Returns an empty set for a non-CAD / missing package."""
+    if not pkg_dir or not urdf_rel:
+        return set()
+    gj = os.path.join(pkg_dir, "graph.json")
+    if not os.path.exists(gj):
+        return set()
+    from sw2robot.exporter.state import GraphState
+    try:
+        gs = GraphState.load(gj)
+    except Exception:
+        return set()
+    name = os.path.splitext(os.path.basename(urdf_rel))[0]
+    yml = os.path.join(pkg_dir, name + ".joints.yaml")
+    cfg = {}
+    if os.path.exists(yml):
+        import yaml as _yaml
+        try:
+            cfg = _yaml.safe_load(open(yml, encoding="utf-8").read()) or {}
+        except Exception:
+            cfg = {}
+    densities = cfg.get("densities") if isinstance(cfg.get("densities"), dict) else {}
+    masses = cfg.get("masses") if isinstance(cfg.get("masses"), dict) else {}
+    reviewed = set(cfg.get("mass_reviewed") or [])
+
+    def _resolved(c):
+        # override / acknowledgement keys may be the link name OR the SW name
+        for k in (c.link_name, c.name):
+            if k in densities or k in masses or k in reviewed:
+                return True
+        return bool(getattr(c, "sw_mass_overridden", False))
+
+    flagged = set()
+    for c in gs.components:
+        if _resolved(c):
+            continue
+        material_unset = not c.material
+        density_default = (c.density is not None
+                           and abs(c.density - _DEFAULT_SW_DENSITY) < 1.0)
+        if material_unset or density_default:
+            flagged.add(c.link_name)
+    return flagged
+
+
+def _urdf_link_masses(pkg_dir, urdf_rel):
+    """``{link name -> mass (kg)}`` parsed from the built URDF's ``<inertial>``.
+
+    This is the *actual* mass each link carries in the output (after SW-native /
+    density / target-mass resolution), so the editor can show the true value
+    rather than the raw CAD estimate.  Empty on any parse failure."""
+    if not pkg_dir or not urdf_rel:
+        return {}
+    path = os.path.join(pkg_dir, urdf_rel)
+    if not os.path.exists(path):
+        return {}
+    import xml.etree.ElementTree as ET
+    out = {}
+    try:
+        root = ET.parse(path).getroot()
+    except Exception:
+        return {}
+    for ln in root.findall("link"):
+        mass = ln.find("inertial/mass")
+        if mass is None:
+            continue
+        try:
+            out[ln.get("name")] = float(mass.get("value"))
+        except (TypeError, ValueError):
+            pass
+    return out
+
+
+def _urdf_child_joint_types(pkg_dir, urdf_rel):
+    """``{child link name -> parent joint type}`` from the built URDF, so the
+    mass editor can offer mass-only only on a fixed child without needing the
+    client's live robot.  Empty on any parse failure."""
+    if not pkg_dir or not urdf_rel:
+        return {}
+    path = os.path.join(pkg_dir, urdf_rel)
+    if not os.path.exists(path):
+        return {}
+    import xml.etree.ElementTree as ET
+    out = {}
+    try:
+        root = ET.parse(path).getroot()
+    except Exception:
+        return {}
+    for j in root.findall("joint"):
+        child = j.find("child")
+        if child is not None and child.get("link"):
+            out[child.get("link")] = j.get("type")
+    return out
+
+
+def _set_number_override(txt, mapkey, key, value):
+    """Add / replace / remove ``key: value`` in a numeric ``mapkey:`` block of
+    joints.yaml text (the shape ``densities:`` and ``masses:`` share).
+
+    ``value`` None (or falsy) removes the entry; the block is dropped entirely
+    once empty.  A freshly created block is prepended.  Returns the new text."""
+    m = re.search(r"(?m)^" + re.escape(mapkey) + r":\n((?:[ \t]+\S+:.*\n)*)", txt)
+    block = m.group(1) if m else ""
+    block = re.sub(r"(?m)^[ \t]+" + re.escape(key) + r":.*\n?", "", block)
+    if value:
+        block += f"  {key}: {float(value):g}\n"
+    if m:
+        return txt[:m.start()] \
+            + (f"{mapkey}:\n{block}" if block else "") \
+            + txt[m.end():]
+    return (f"{mapkey}:\n{block}" + txt) if block else txt
 
 
 def _upsert_yaml_map(txt, mapkey, key, value):
@@ -2297,6 +2442,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 name = os.path.splitext(os.path.basename(cls.urdf_rel))[0]
                 yml = os.path.join(cls.pkg_dir, name + ".joints.yaml")
                 overrides = {}
+                mass_overrides = {}
                 if os.path.exists(yml):
                     txt = open(yml, encoding="utf-8").read()
                     m = re.search(r"(?m)^densities:\n((?:[ \t]+\S+:.*\n)*)",
@@ -2308,14 +2454,58 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                                 overrides[k] = float(v)
                             except ValueError:
                                 pass
+                    m = re.search(r"(?m)^masses:\n((?:[ \t]+\S+:.*\n)*)", txt)
+                    if m:
+                        for ln in m.group(1).splitlines():
+                            k, _, v = ln.strip().partition(":")
+                            try:
+                                mass_overrides[k] = float(v)
+                            except ValueError:
+                                pass
+                reviewed = set()
+                if os.path.exists(yml):
+                    _, reviewed_list = _set_yaml_list_block(
+                        open(yml, encoding="utf-8").read(), "mass_reviewed")
+                    reviewed = set(reviewed_list)
                 colors = _read_colors(cls.pkg_dir, cls.urdf_rel)
+                # the actual per-link mass in the built URDF (after density /
+                # target-mass resolution) + which links still need review
+                urdf_masses = _urdf_link_masses(cls.pkg_dir, cls.urdf_rel)
+                joint_types = _urdf_child_joint_types(cls.pkg_dir, cls.urdf_rel)
+                default_links = _default_mass_links(cls.pkg_dir, cls.urdf_rel)
+                # Key by the FINAL display link name (what the viewer/URDF uses),
+                # and cover EVERY built link -- composed sub-assembly children and
+                # renamed links included -- so the mass editor lists them all, not
+                # just top-level graph components.  Resolve each display name back
+                # through the rename map to its graph component for material etc.
+                yml_txt = (open(yml, encoding="utf-8").read()
+                           if os.path.exists(yml) else "")
+                inv = _link_names_inverse(yml_txt)     # display name -> component key
+                by_ln = {c.link_name: c for c in gs.components}
+                by_nm = {c.name: c for c in gs.components}
+                names = list(urdf_masses) or [c.link_name for c in gs.components]
                 links = {}
-                for c in gs.components:
-                    links[c.link_name] = {
-                        "material": c.material, "density": c.density,
-                        "name": c.name,
-                        "override": overrides.get(c.link_name),
-                        "color": colors.get(c.link_name)}
+                for dl in names:
+                    key = inv.get(dl, dl)
+                    c = by_ln.get(key) or by_nm.get(key)
+                    cur = urdf_masses.get(dl)
+                    if cur is None and c is not None:
+                        cur = c.sw_mass
+                    links[dl] = {
+                        "material": c.material if c else None,
+                        "density": c.density if c else None,
+                        "name": c.name if c else None,
+                        "override": overrides.get(c.link_name) if c else None,
+                        "color": colors.get(c.link_name) if c else colors.get(dl),
+                        "sw_mass": c.sw_mass if c else None,
+                        "current_mass": cur,
+                        "mass": mass_overrides.get(c.link_name) if c else None,
+                        "mass_overridden_in_sw": bool(
+                            getattr(c, "sw_mass_overridden", False)) if c else False,
+                        "default_mass": (c.link_name in default_links) if c else False,
+                        "reviewed": bool(c and (c.link_name in reviewed
+                                                or c.name in reviewed)),
+                        "parent_joint": joint_types.get(dl)}
                 excluded = []
                 if os.path.exists(yml):
                     m = re.search(r"(?m)^exclude:\n((?:- .*\n)*)",
@@ -2333,6 +2523,12 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 return self._send_json({"links": links,
                                         "excluded": excluded,
                                         "colors": colors,
+                                        "default_mass_links": sorted(default_links),
+                                        # actual mass of EVERY built URDF link
+                                        # (incl. composed/merged sub-links that
+                                        # aren't top-level graph components) so
+                                        # the mass editor can list them all
+                                        "urdf_masses": urdf_masses,
                                         "mass_only": sorted(
                                             _read_mass_only(cls.pkg_dir))})
             if path == "/api/fs":
@@ -2588,6 +2784,9 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 params, err = _parse_export_query(cls, query)
                 if err:
                     return self._send_json({"error": err[0]}, err[1])
+                gate = _export_gate(cls, query)
+                if gate:
+                    return self._send_json(gate[0], gate[1])
                 try:
                     colors = (_read_colors(cls.pkg_dir, cls.urdf_rel)
                               if _cad_mode(cls.pkg_dir)
@@ -2613,6 +2812,9 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 params, err = _parse_export_query(cls, query)
                 if err:
                     return self._send_json({"error": err[0]}, err[1])
+                gate = _export_gate(cls, query)
+                if gate:
+                    return self._send_json(gate[0], gate[1])
                 gen = _prog_start("export", _EXPORT_STAGES)
                 if gen is None:
                     return self._send_json(
@@ -2670,7 +2872,9 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 pkg_name = (query.get("name") or [""])[0].strip() or None
                 pkg = ros_pkg_name(cls.robot_name, pkg_name)
                 host = self.headers.get("Host") or "localhost:8090"
-                zip_q = "ros=2&meshes=dae"
+                # ack=1: the one-liner is fire-and-forget and can't act on the
+                # default-mass gate's 409, so it always bypasses it
+                zip_q = "ros=2&meshes=dae&ack=1"
                 if pkg_name:
                     zip_q += "&name=" + pkg_name
                 zip_url = f"http://{host}/api/export/zip?{zip_q}"
@@ -3340,19 +3544,11 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                     txt = f.read()
                 link = _link_names_inverse(txt).get(link, link)
                 _snapshot(cls.pkg_dir, yml, f"material of {link[:30]}")
-                m = re.search(r"(?m)^densities:\n((?:[ \t]+\S+:.*\n)*)", txt)
-                block = m.group(1) if m else ""
-                pat = re.compile(r"(?m)^[ \t]+" + re.escape(link)
-                                 + r":.*\n?")
-                block = pat.sub("", block)
+                txt = _set_number_override(txt, "densities", link, density)
                 if density:
-                    block += f"  {link}: {float(density):g}\n"
-                if m:
-                    txt = txt[:m.start()] \
-                        + (f"densities:\n{block}" if block else "") \
-                        + txt[m.end():]
-                elif block:
-                    txt = f"densities:\n{block}" + txt
+                    # a density and a target mass are two ways to define the
+                    # same weight -- keep them mutually exclusive per link
+                    txt = _set_number_override(txt, "masses", link, None)
                 with open(yml, "w", encoding="utf-8") as f:
                     f.write(txt)
                 from sw2robot.exporter.export import build
@@ -3363,6 +3559,126 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                         {"error": f"rebuild failed: {e}"}, 500)
                 print(f"[sw2robot.web] set_material: {link} -> {density}")
                 return self._send_json({"link": link, "density": density})
+            if parsed.path == "/api/set_masses":
+                # per-link TARGET mass (kg): rescales the inertial to an exact
+                # weight (issue #29).  Mirrors set_material but writes a `masses:`
+                # block; mutually exclusive with a density override, so setting a
+                # mass clears any `densities:` entry for the link.  None removes it.
+                cls = type(self)
+                n = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(n) or b"{}")
+                link = body.get("link")
+                mass = body.get("mass")           # None = remove override
+                if not cls.pkg_dir or not link:
+                    return self._send_json({"error": "no package/link"}, 400)
+                if mass is not None:
+                    try:
+                        mass = float(mass)
+                    except (TypeError, ValueError):
+                        return self._send_json(
+                            {"error": f"mass {body.get('mass')!r} is not a number"},
+                            400)
+                    if not (mass > 0):
+                        return self._send_json(
+                            {"error": "mass must be positive"}, 400)
+                if not _cad_mode(cls.pkg_dir):
+                    return self._send_json(
+                        {"error": "target mass is only editable in CAD mode; "
+                                  "use set_inertial in URDF-input mode"}, 400)
+                name = os.path.splitext(os.path.basename(cls.urdf_rel))[0]
+                yml = os.path.join(cls.pkg_dir, name + ".joints.yaml")
+                if not os.path.exists(yml):
+                    return self._send_json(
+                        {"error": "joints.yaml not found"}, 400)
+                with open(yml, encoding="utf-8") as f:
+                    txt = f.read()
+                link = _link_names_inverse(txt).get(link, link)
+                _snapshot(cls.pkg_dir, yml, f"mass of {link[:30]}")
+                txt = _set_number_override(txt, "masses", link, mass)
+                if mass is not None:
+                    txt = _set_number_override(txt, "densities", link, None)
+                with open(yml, "w", encoding="utf-8") as f:
+                    f.write(txt)
+                from sw2robot.exporter.export import build
+                try:
+                    build(cls.pkg_dir, config_path=yml)
+                except Exception as e:
+                    return self._send_json(
+                        {"error": f"rebuild failed: {e}"}, 500)
+                print(f"[sw2robot.web] set_masses: {link} -> {mass}")
+                return self._send_json({"link": link, "mass": mass})
+            if parsed.path == "/api/set_mass_reviewed":
+                # acknowledge (or un-acknowledge) that a link's default SW mass
+                # has been reviewed -- clears the export gate for it WITHOUT
+                # changing any geometry, so no rebuild is needed.  Stored as a
+                # `mass_reviewed:` list block in joints.yaml.
+                cls = type(self)
+                n = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(n) or b"{}")
+                link = body.get("link")
+                on = bool(body.get("reviewed", True))
+                if not cls.pkg_dir or not link:
+                    return self._send_json({"error": "no package/link"}, 400)
+                if not _cad_mode(cls.pkg_dir):
+                    return self._send_json(
+                        {"error": "mass review is a CAD-mode concept"}, 400)
+                name = os.path.splitext(os.path.basename(cls.urdf_rel))[0]
+                yml = os.path.join(cls.pkg_dir, name + ".joints.yaml")
+                if not os.path.exists(yml):
+                    return self._send_json(
+                        {"error": "joints.yaml not found"}, 400)
+                with open(yml, encoding="utf-8") as f:
+                    txt = f.read()
+                link = _link_names_inverse(txt).get(link, link)
+                _snapshot(cls.pkg_dir, yml, f"review mass of {link[:30]}")
+                txt, reviewed = _set_yaml_list_block(
+                    txt, "mass_reviewed",
+                    add=[link] if on else (), remove=[link])
+                with open(yml, "w", encoding="utf-8") as f:
+                    f.write(txt)
+                print(f"[sw2robot.web] set_mass_reviewed: {link} on={on}")
+                return self._send_json({"link": link, "reviewed": on,
+                                        "mass_reviewed": reviewed})
+            if parsed.path == "/api/set_mass_only":
+                # toggle a link's mass-only flag (keep the weight, drop the
+                # geometry).  Stored in the `mass_only:` list; the build enforces
+                # "fixed child only" and warns otherwise.  Rebuilds.
+                cls = type(self)
+                n = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(n) or b"{}")
+                link = body.get("link")
+                on = bool(body.get("on", True))
+                if not cls.pkg_dir or not link:
+                    return self._send_json({"error": "no package/link"}, 400)
+                if not _cad_mode(cls.pkg_dir):
+                    return self._send_json(
+                        {"error": "mass-only is edited via set_types in "
+                                  "URDF-input mode"}, 400)
+                name = os.path.splitext(os.path.basename(cls.urdf_rel))[0]
+                yml = os.path.join(cls.pkg_dir, name + ".joints.yaml")
+                if not os.path.exists(yml):
+                    return self._send_json(
+                        {"error": "joints.yaml not found"}, 400)
+                with open(yml, encoding="utf-8") as f:
+                    txt = f.read()
+                link = _link_names_inverse(txt).get(link, link)
+                _snapshot(cls.pkg_dir, yml, f"mass-only {link[:30]}")
+                txt = _set_mass_only_members(
+                    txt, {link} if on else set(), set() if on else {link})
+                with open(yml, "w", encoding="utf-8") as f:
+                    f.write(txt)
+                from sw2robot.exporter.export import build
+                try:
+                    build(cls.pkg_dir, config_path=yml)
+                except Exception as e:
+                    return self._send_json(
+                        {"error": f"rebuild failed: {e}"}, 500)
+                from sw2robot.exporter.ros_export import _read_mass_only
+                applied = link in _read_mass_only(cls.pkg_dir)
+                print(f"[sw2robot.web] set_mass_only: {link} on={on} "
+                      f"applied={applied}")
+                return self._send_json({"link": link, "on": on,
+                                        "applied": applied})
             if parsed.path == "/api/set_color":
                 # per-link visual colour override, stored as a `colors:` block in
                 # joints.yaml ({component name -> '#RRGGBB'}).  The viewer paints

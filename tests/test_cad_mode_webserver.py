@@ -109,6 +109,32 @@ def _joints_yaml(pkg):
     return (pkg / "fingertip.joints.yaml").read_text(encoding="utf-8")
 
 
+def _link(root, name):
+    return next(l for l in root.findall("link") if l.get("name") == name)
+
+
+# --------------------------------------------------------------- set_mass_only
+def test_set_mass_only_drops_geometry_in_working_urdf(server):
+    """Toggling mass-only on a fixed child strips its visual/collision from the
+    served URDF straight away (weight kept), and clears it back on toggle-off."""
+    base, _pkg = server
+    assert _link(_served_urdf(base), SCREW_LINK).find("visual") is not None
+
+    code, r = _post(base, "/api/set_mass_only", {"link": SCREW_LINK, "on": True})
+    assert code == 200 and r["applied"] is True
+    scr = _link(_served_urdf(base), SCREW_LINK)
+    assert scr.find("visual") is None and scr.find("collision") is None
+    assert scr.find("inertial") is not None            # weight kept
+    # /api/components reports it mass-only + parent_joint fixed (drives the UI)
+    comp = _get_json(base, "/api/components")
+    assert SCREW_LINK in comp["mass_only"]
+    assert comp["links"][SCREW_LINK]["parent_joint"] == "fixed"
+
+    code, r = _post(base, "/api/set_mass_only", {"link": SCREW_LINK, "on": False})
+    assert code == 200 and r["applied"] is False
+    assert _link(_served_urdf(base), SCREW_LINK).find("visual") is not None
+
+
 # --------------------------------------------------------------- set_limits
 def test_set_limits_reflected_without_rebuild(server):
     base, pkg = server
