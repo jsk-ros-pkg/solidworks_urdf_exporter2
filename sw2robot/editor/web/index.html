@@ -4702,7 +4702,14 @@ function fillLinkInfo(name) {
   // listeners since the element was only moved, never recreated)
   if (selbar) {
     Object.assign(selbar.style, { position: 'static', border: 'none',
-      background: 'none', padding: '0', margin: '0 0 6px', width: 'auto' });
+      background: 'none', padding: '0', margin: '0 0 6px', width: 'auto',
+      flexWrap: 'wrap' });                 // let the buttons drop to a 2nd row
+    // name takes the whole first row (truncated); the action buttons wrap below
+    const nm = document.getElementById('selname');
+    if (nm) {
+      Object.assign(nm.style, { flexBasis: '100%', minWidth: '0',
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' });
+    }
     el.insertBefore(selbar, el.firstChild);
   }
   if (j) { wireJointPanel(el, j); }
