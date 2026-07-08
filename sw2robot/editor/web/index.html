@@ -2875,7 +2875,9 @@ function _renderMassList(data) {
     // computed mass (user then edits it); uncheck -> clear it, back to material
     tr.querySelector('.bm')?.addEventListener('change', e => {
       if (e.target.checked) {
-        const seed = data.links[ln]?.current_mass ?? 0.1;
+        // `||` (not `??`): a 0 / missing current mass falls to 0.1 so the seed
+        // POST is never rejected by the positive-mass check
+        const seed = data.links[ln]?.current_mass || 0.1;
         apply(post('/api/set_masses', { link: ln, mass: seed }),
               { rebuild: true, okMsg: t('mass.setMassOk', { name: ln, m: seed }) });
       } else {
@@ -4699,7 +4701,9 @@ function fillLinkInfo(name) {
     } catch (err) { log(t('mass.fail', { e: err.message ?? err }), 'err'); }
   };
   el.querySelector('#li_bm')?.addEventListener('change', e => {
-    setMass(e.target.checked ? (meta?.current_mass ?? 0.1) : null);
+    // `||` (not `??`): a 0 / missing current mass falls to 0.1 so the seed
+    // POST is never rejected by the positive-mass check
+    setMass(e.target.checked ? (meta?.current_mass || 0.1) : null);
   });
   const sel = el.querySelector('.li_mat');    // matSelectHtml emits a class (density mode only)
   sel?.addEventListener('change', async () => {

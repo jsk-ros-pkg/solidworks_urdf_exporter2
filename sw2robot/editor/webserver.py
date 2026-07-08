@@ -1013,7 +1013,9 @@ def _set_number_override(txt, mapkey, key, value):
     block = m.group(1) if m else ""
     block = re.sub(r"(?m)^[ \t]+" + re.escape(key) + r":.*\n?", "", block)
     if value:
-        block += f"  {key}: {float(value):g}\n"
+        # .10g keeps up to 10 significant figures (a `:g` default of 6 silently
+        # rounded precise target masses) while avoiding trailing-zero noise
+        block += f"  {key}: {float(value):.10g}\n"
     if m:
         return txt[:m.start()] \
             + (f"{mapkey}:\n{block}" if block else "") \
@@ -2441,12 +2443,14 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                     os.path.join(cls.pkg_dir, "graph.json"))
                 name = os.path.splitext(os.path.basename(cls.urdf_rel))[0]
                 yml = os.path.join(cls.pkg_dir, name + ".joints.yaml")
+                # read joints.yaml once and reuse for every block below
+                yml_txt = (open(yml, encoding="utf-8").read()
+                           if os.path.exists(yml) else "")
                 overrides = {}
                 mass_overrides = {}
-                if os.path.exists(yml):
-                    txt = open(yml, encoding="utf-8").read()
+                if yml_txt:
                     m = re.search(r"(?m)^densities:\n((?:[ \t]+\S+:.*\n)*)",
-                                  txt)
+                                  yml_txt)
                     if m:
                         for ln in m.group(1).splitlines():
                             k, _, v = ln.strip().partition(":")
@@ -2454,7 +2458,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                                 overrides[k] = float(v)
                             except ValueError:
                                 pass
-                    m = re.search(r"(?m)^masses:\n((?:[ \t]+\S+:.*\n)*)", txt)
+                    m = re.search(r"(?m)^masses:\n((?:[ \t]+\S+:.*\n)*)", yml_txt)
                     if m:
                         for ln in m.group(1).splitlines():
                             k, _, v = ln.strip().partition(":")
@@ -2463,9 +2467,9 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                             except ValueError:
                                 pass
                 reviewed = set()
-                if os.path.exists(yml):
+                if yml_txt:
                     _, reviewed_list = _set_yaml_list_block(
-                        open(yml, encoding="utf-8").read(), "mass_reviewed")
+                        yml_txt, "mass_reviewed")
                     reviewed = set(reviewed_list)
                 colors = _read_colors(cls.pkg_dir, cls.urdf_rel)
                 # the actual per-link mass in the built URDF (after density /
@@ -2478,8 +2482,6 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 # renamed links included -- so the mass editor lists them all, not
                 # just top-level graph components.  Resolve each display name back
                 # through the rename map to its graph component for material etc.
-                yml_txt = (open(yml, encoding="utf-8").read()
-                           if os.path.exists(yml) else "")
                 inv = _link_names_inverse(yml_txt)     # display name -> component key
                 by_ln = {c.link_name: c for c in gs.components}
                 by_nm = {c.name: c for c in gs.components}
@@ -2507,9 +2509,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                                                 or c.name in reviewed)),
                         "parent_joint": joint_types.get(dl)}
                 excluded = []
-                if os.path.exists(yml):
-                    m = re.search(r"(?m)^exclude:\n((?:- .*\n)*)",
-                                  open(yml, encoding="utf-8").read())
+                if yml_txt:
+                    m = re.search(r"(?m)^exclude:\n((?:- .*\n)*)", yml_txt)
                     if m:
                         excluded = [ln[2:].strip()
                                     for ln in m.group(1).splitlines()]
