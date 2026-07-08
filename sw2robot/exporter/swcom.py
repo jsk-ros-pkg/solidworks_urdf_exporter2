@@ -482,7 +482,12 @@ class SolidWorks:
             # stale then open with almost everything unresolved (home_drone came
             # up as a single component).  Register the original's folder family
             # as document search paths so rule (2) replaces rule (4).
-            self._register_search_folders(path)
+            # resolve the assembly's references to their CURRENT locations (also
+            # recovers a part that was MOVED so the stored path is stale), then
+            # both register those folders and co-locate the parts beside the copy
+            dep_files = (self._dependency_files(path)
+                         if doc_type_for(path) == SW_DOC_ASSEMBLY else [])
+            self._register_search_folders(path, dep_files)
             # Reuse ONE temp dir per source folder: assemblies that share a folder
             # (the common case -- a module's sub-assemblies all sit beside it)
             # then co-locate their sibling CAD files ONCE instead of re-copying
@@ -532,6 +537,24 @@ class SolidWorks:
                 if n_sib:
                     print(f"      co-located {n_sib} sibling CAD file(s) for "
                           f"reference resolution")
+            # Also co-locate this assembly's OWN referenced files, resolved to
+            # their current locations, beside the copy.  This is what recovers a
+            # DISTANT shared library or a MOVED part whose stored path is stale:
+            # a temp copy does not re-resolve an unresolvable stored path through
+            # the search paths (those components then come up suppressed), but the
+            # "same folder as the assembly" rule resolves a co-located part by name.
+            n_dep = 0
+            for s in dep_files:
+                d = os.path.join(tmpdir, os.path.basename(s))
+                if os.path.isfile(s) and not os.path.exists(d):
+                    try:
+                        shutil.copy2(s, d)
+                        n_dep += 1
+                    except OSError:
+                        pass
+            if n_dep:
+                print(f"      co-located {n_dep} referenced file(s) from their "
+                      f"resolved locations")
             t1 = _time.time()
             doc, ecode, wcode = open_doc6(self.app, tmp, doc_type_for(tmp))
             if doc is None:
@@ -577,47 +600,48 @@ class SolidWorks:
               f"{t4 - t3:.1f}s")
         return doc
 
-    def _reference_dirs(self, src_path):
-        """Every folder that actually holds a file this assembly references,
-        read from SolidWorks' own dependency records (``GetDocumentDependencies2``
-        -- from the file, no open required).
+    def _dependency_files(self, src_path):
+        """Every file this assembly references, resolved to its CURRENT location
+        via ``GetDocumentDependencies2`` (from the file, no open required).
 
-        The parent + parent's-subfolders scan below only reaches parts that sit
-        near the .SLDASM.  Assemblies that reference a SHARED library in a distant
-        folder (e.g. ``.../common_parts/servo/Dynamixel/XL430`` while the assembly
-        is under ``.../beetle/asm/subasm``) then open with every component
-        unresolved -- the "no usable components" / widespread "FAILED mesh"
-        failures on the hand and aerial trees.  Feeding those real folders into
-        the search paths lets SolidWorks resolve them by name."""
-        dirs = []
+        SearchSubfolders is ON, which is what recovers a MOVED or relocated part:
+        an assembly saved on another machine bakes in a stale absolute path (a
+        different Drive letter, a ``\\.shortcut-targets-by-id\\`` id, an old
+        folder), so the recorded path no longer exists here.  With the flag on,
+        SolidWorks searches and returns the part's real, current location.  We use
+        these both to seed the reference search paths AND to co-locate the parts
+        beside the throw-away assembly copy (a distant SHARED library -- e.g.
+        ``.../common_parts/servo/...`` while the assembly is under
+        ``.../beetle/asm/subasm`` -- is otherwise never reached, and the assembly
+        opens with every component unresolved: "no usable components")."""
+        files = []
         try:
-            # (document, Traverseflag=whole tree, SearchSubfolders=off, AddReadOnlyInfo=off)
-            deps = self.app.GetDocumentDependencies2(src_path, True, False, False)
+            # (document, Traverseflag=whole tree, SearchSubfolders=ON, AddReadOnlyInfo=off)
+            deps = self.app.GetDocumentDependencies2(src_path, True, True, False)
         except Exception as e:
             print(f"      WARN: GetDocumentDependencies2 failed ({e!r}); "
-                  f"distant part references may not resolve")
-            return dirs
+                  f"distant/relocated part references may not resolve")
+            return files
         if not deps:
-            return dirs
-        # returns a flat [name, path, name, path, ...] sequence
-        seq = list(deps)
+            return files
+        # flat [name, path, name, path, ...]; keep the existing resolved files
         seen = set()
-        for p in seq[1::2]:
+        for p in list(deps)[1::2]:
             try:
-                d = os.path.dirname(os.path.abspath(str(p)))
+                ap = os.path.abspath(str(p))
             except Exception:
                 continue
-            key = os.path.normcase(d)
-            if d and key not in seen and os.path.isdir(d):
+            key = os.path.normcase(ap)
+            if key not in seen and os.path.isfile(ap):
                 seen.add(key)
-                dirs.append(d)
-        return dirs
+                files.append(ap)
+        return files
 
-    def _register_search_folders(self, src_path):
+    def _register_search_folders(self, src_path, dep_files=()):
         """Add the source assembly's folder, its parent, the parent's sub-folders
         (parts/, commercial/, ...) AND every folder that actually holds a
-        referenced part (from the assembly's dependency records) to the reference
-        search paths of this SolidWorks session.
+        referenced part (from ``dep_files``) to the reference search paths of this
+        SolidWorks session.
 
         The previous user settings are captured ONCE and restored in
         shutdown() -- SolidWorks persists these preferences to the registry
@@ -647,10 +671,12 @@ class SolidWorks:
             # the real folders of every referenced part, wherever they live --
             # this is what lets a DISTANT shared library resolve (parent-subfolder
             # scan above only reaches parts near the .SLDASM)
-            ref_dirs = self._reference_dirs(src_path)
-            for d in ref_dirs:
-                if d not in cand:
-                    cand.append(d)
+            ref_dirs = []
+            for f in dep_files:
+                d = os.path.dirname(f)
+                if d and d not in cand and d not in ref_dirs:
+                    ref_dirs.append(d)
+            cand.extend(ref_dirs)
             # KEEP the user's existing referenced-document search paths and only
             # ADD ours -- SolidWorks resolves this assembly's parts through those
             # configured paths interactively, so replacing them (the old
