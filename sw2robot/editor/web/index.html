@@ -2651,14 +2651,23 @@ function attachInlineRename(el, kind, getOld) {
   });
 }
 
+// dock a floating list panel (#renamelist / #masslist) just below the viewer's
+// button row (#views), which may wrap to several rows, instead of overlapping it
+function dockPanelBelowViews(ov) {
+  const v = document.getElementById('views');
+  if (v) { ov.style.top = (v.offsetTop + v.offsetHeight + 6) + 'px'; }
+}
+
 // the ≣ 改名 list: every joint with its (editable) joint name + child link name
 function openRenameList() {
   if (!viewer.robot) { log(t('common.openFirst'), 'wrn'); return; }
+  document.getElementById('masslist')?.remove();   // the two panels are exclusive
   document.getElementById('renamelist')?.remove();
   const linkOf = (j, tag) => [...(j.urdfNode?.children ?? [])]
     .find(e => e.tagName === tag)?.getAttribute('link') ?? '';
   const ov = document.createElement('div');
   ov.id = 'renamelist';
+  dockPanelBelowViews(ov);          // sit under the viewer's button row
   const card = document.createElement('div');
   card.className = 'card';
   const ttl = t('rename.emptyResetTitle');
@@ -2774,6 +2783,7 @@ async function openMassList() {
 }
 
 function _renderMassList(data) {
+  document.getElementById('renamelist')?.remove();  // the two panels are exclusive
   document.getElementById('masslist')?.remove();
   // link order: base link(s) first (no parent joint), then the rest, matching
   // the tree feel of the rename panel; parent_joint gates mass-only (fixed only)
@@ -2788,6 +2798,7 @@ function _renderMassList(data) {
 
   const ov = document.createElement('div');
   ov.id = 'masslist';
+  dockPanelBelowViews(ov);          // sit under the viewer's button row
   const card = document.createElement('div');
   card.className = 'card';
   const esc = s => String(s).replace(/"/g, '&quot;');
