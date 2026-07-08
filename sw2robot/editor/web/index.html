@@ -85,6 +85,12 @@
   #linkinfo .sw { display: inline-block; width: 10px; height: 10px;
                   border-radius: 2px; vertical-align: -1px;
                   border: 1px solid #555; }
+  /* link-info header (the folded-in selection bar): one tidy row of
+     equal-width, equal-height buttons so the icons and "make root" match */
+  #selbar #selname { color: #55d6ff; font-size: 12px; padding: 1px 0; }
+  #selbar button { flex: 1 1 0; min-width: 0; height: 24px; padding: 0 6px;
+    font-size: 12px; line-height: 1; display: inline-flex;
+    align-items: center; justify-content: center; white-space: nowrap; }
   .jtype { font-size: 10px; padding: 0 4px; border-radius: 3px;
            background: #444; color: #ccc; }
   .joint.dirty { background: #2c2a1e; outline: 1px solid #6b5d2a; }
