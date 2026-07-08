@@ -17,6 +17,7 @@ KEY FACTS about this machine (discovered empirically):
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import sys
@@ -441,9 +442,70 @@ class SolidWorks:
             return True
         return safe_call(self.app, "RevisionNumber") not in (None, "")
 
+    # -- part cache -------------------------------------------------------
+    def _cache_dir(self):
+        """Persistent local cache of CAD files pulled from the source drive.
+        Override the location with ``SW2ROBOT_PART_CACHE``."""
+        d = getattr(self, "_part_cache", None)
+        if d is None:
+            d = (os.environ.get("SW2ROBOT_PART_CACHE")
+                 or os.path.join(os.environ.get("LOCALAPPDATA")
+                                 or os.path.expanduser("~"),
+                                 "sw2robot", "partcache"))
+            self._part_cache = d
+        return d
+
+    def _place(self, src, dst):
+        """Put a copy of ``src`` at ``dst``, sourcing the bytes from a persistent
+        local cache keyed by (path, mtime, size).
+
+        The slow part of opening an assembly off Google Drive is streaming its
+        referenced parts DOWN from the drive; the same shared part (a servo, a
+        bearing) is referenced by many assemblies, so without a cache it is
+        re-downloaded once per assembly.  With the cache each (file, version) is
+        pulled ONCE and every later use is a fast local copy.  Falls back to a
+        direct copy if the cache cannot be used."""
+        try:
+            st = os.stat(src)
+        except OSError:
+            return False
+        h = hashlib.sha1(
+            os.path.normcase(os.path.abspath(src)).encode("utf-8")).hexdigest()
+        tag = f"{int(st.st_mtime)}_{st.st_size}"
+        cdir = os.path.join(self._cache_dir(), h[:2])
+        cname = f"{h}__{tag}__{os.path.basename(src)}"
+        cpath = os.path.join(cdir, cname)
+        try:
+            if not os.path.exists(cpath):
+                os.makedirs(cdir, exist_ok=True)
+                # keep ONE version per file: drop older-mtime entries so the
+                # cache tracks the current drive contents, not every past edit
+                for fn in os.listdir(cdir):
+                    if fn.startswith(h + "__") and fn != cname:
+                        try:
+                            os.remove(os.path.join(cdir, fn))
+                        except OSError:
+                            pass
+                tmp = cpath + f".{os.getpid()}.part"
+                shutil.copy2(src, tmp)          # the drive download -- once
+                os.replace(tmp, cpath)
+            shutil.copy2(cpath, dst)            # fast local copy into the temp dir
+            return True
+        except OSError:
+            try:
+                shutil.copy2(src, dst)          # cache unusable -> straight copy
+                return True
+            except OSError:
+                return False
+
     # -- document handling ------------------------------------------------
-    def open_copy(self, path):
+    def open_copy(self, path, progress=None):
         """Copy ``path`` to a temp dir and open the COPY full (read-write).
+
+        ``progress(msg)`` -- if given -- is pinged as each referenced file is
+        fetched, so a caller's stall watchdog sees a heartbeat during a long
+        co-location download (many parts streamed off a shared drive) and does
+        not mistake it for a hang.
 
         We never open or modify the user's original file.  Crucially we do NOT
         use the read-only open flag: opening an assembly read-only makes
@@ -507,7 +569,7 @@ class SolidWorks:
             stem, ext = os.path.splitext(os.path.basename(path))
             tmp = os.path.join(tmpdir, f"{stem}_{os.path.basename(tmpdir)}{ext}")
             if not os.path.exists(tmp):
-                shutil.copy2(path, tmp)
+                self._place(path, tmp)
             # Co-locate the source folder's sibling CAD files in the SAME temp dir
             # so SolidWorks' "same folder as the assembly" rule resolves them by
             # name -- ONCE per folder (the folder's other sub-assemblies reuse
@@ -529,11 +591,10 @@ class SolidWorks:
                     s = os.path.join(src_dir, fn)
                     d = os.path.join(tmpdir, fn)
                     if os.path.isfile(s) and not os.path.exists(d):
-                        try:
-                            shutil.copy2(s, d)
+                        if progress:
+                            progress(f"fetching {fn}")   # stall-watchdog heartbeat
+                        if self._place(s, d):
                             n_sib += 1
-                        except OSError:
-                            pass
                 if n_sib:
                     print(f"      co-located {n_sib} sibling CAD file(s) for "
                           f"reference resolution")
@@ -547,11 +608,10 @@ class SolidWorks:
             for s in dep_files:
                 d = os.path.join(tmpdir, os.path.basename(s))
                 if os.path.isfile(s) and not os.path.exists(d):
-                    try:
-                        shutil.copy2(s, d)
+                    if progress:
+                        progress(f"fetching {os.path.basename(s)}")  # heartbeat
+                    if self._place(s, d):
                         n_dep += 1
-                    except OSError:
-                        pass
             if n_dep:
                 print(f"      co-located {n_dep} referenced file(s) from their "
                       f"resolved locations")
