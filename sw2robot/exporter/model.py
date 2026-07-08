@@ -336,6 +336,33 @@ def _match_component(comps, ref):
     return None
 
 
+def _collapsed_ref_candidates(comps, ref):
+    """Preserved sub-assemblies whose expanded child name is referenced.
+
+    ``joints.yaml`` is intentionally authored against the fully-expanded tree.
+    When a later build keeps a CAD sub-assembly collapsed with ``no_expand``,
+    entries such as ``arm-1/plate-1`` or ``arm_1__plate_1`` should still point
+    at the preserved ``arm-1`` component instead of being treated as missing.
+    """
+    raw = str(ref)
+    safe = safe_name(raw)
+    out = []
+    for c in comps:
+        prefs = (
+            c.name + "/",
+            safe_name(c.name) + "/",
+            c.link_name + "__",
+        )
+        if raw.startswith(prefs) or safe.startswith(c.link_name + "__"):
+            out.append(c.name)
+    return out
+
+
+def _collapsed_anchor_for(comps, ref):
+    cands = _collapsed_ref_candidates(comps, ref)
+    return sorted(cands, key=lambda c: (-len(c), c))[0] if cands else None
+
+
 def _num(v):
     """Coerce a YAML scalar to float, or None if absent / unparseable."""
     if v is None:
@@ -390,8 +417,10 @@ def resolve_directed(comps, joints_cfg):
             pa, ca = j["between"][0], j["between"][1]
         else:
             continue
-        np_ = _match_component(comps, pa)
-        nc = _match_component(comps, ca)
+        np_ = _match_component(comps, pa) or _collapsed_anchor_for(comps, pa)
+        nc = _match_component(comps, ca) or _collapsed_anchor_for(comps, ca)
+        if np_ and nc and np_ == nc:
+            continue
         if not (np_ and nc):
             print(f"      WARN: joint config '{pa}->{ca}' did not match links")
             continue
@@ -814,6 +843,11 @@ def choose_base(comps, ground, base_hint=None, adjacency=None):
         for c in comps:
             if h in c.name.lower() or h in c.link_name.lower():
                 return c
+        collapsed = _collapsed_anchor_for(comps, base_hint)
+        if collapsed:
+            for c in comps:
+                if c.name == collapsed:
+                    return c
         print(f"      WARN: base hint '{base_hint}' matched nothing; "
               f"falling back to auto")
 

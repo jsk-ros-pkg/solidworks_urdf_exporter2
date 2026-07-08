@@ -101,6 +101,42 @@ def test_no_expand_override_keeps_instance():
     assert {c.name for c in comps} == {"plate-1", "servo-1"}
 
 
+def test_no_expand_reuses_fully_expanded_directed_tree():
+    cfg = {
+        # This is the fully-expanded tree written by the rename/joints panel.
+        # no_expand should collapse only the sub-assembly boundary, not discard
+        # the saved tree and attach the preserved instance somewhere arbitrary.
+        "base": "plate-1",
+        "no_expand": ["servo"],
+        "joints": [
+            {"parent": "plate-1", "child": "servo-1/case-1",
+             "type": "fixed"},
+            {"parent": "servo-1/case-1", "child": "servo-1/horn-1",
+             "type": "revolute"},
+        ],
+    }
+    model = build_model(make_graph(), config=cfg)
+    assert {c.name for c in model.components} == {"plate-1", "servo-1"}
+    assert [(j.parent, j.child, j.jtype) for j in model.joints] == [
+        ("plate_1", "servo_1", "fixed")
+    ]
+
+
+def test_no_expand_maps_expanded_base_hint_to_preserved_instance():
+    cfg = {
+        "base": "servo-1/case-1",
+        "no_expand": ["servo"],
+        "joints": [
+            {"parent": "plate-1", "child": "servo-1/case-1",
+             "type": "fixed"},
+            {"parent": "servo-1/case-1", "child": "servo-1/horn-1",
+             "type": "revolute"},
+        ],
+    }
+    model = build_model(make_graph(), config=cfg)
+    assert model.base_link == "servo_1"
+
+
 def test_subassemblies_payload_reports_expansion_state():
     from sw2robot.editor.webserver import _subassemblies_payload
 
