@@ -1206,6 +1206,86 @@ def _canonical_tree_payload(graph, yml_txt=""):
     }
 
 
+def _collapse_preview_payload(graph, yml_txt=""):
+    """Preview the tree after applying current sub-assembly collapse modes.
+
+    No URDF is rebuilt here.  The payload is the canonical expanded tree with
+    links belonging to each currently-collapsed CAD sub-assembly replaced by
+    that sub-assembly's own link.
+    """
+    canonical = _canonical_tree_payload(graph, yml_txt)
+    states = _subassemblies_payload(graph, yml_txt)
+    by_sub = {s["name"]: s for s in canonical["subassemblies"]}
+    collapse_link = {}
+    collapsed = []
+    for row in states["subassemblies"]:
+        if row.get("expanded", True):
+            continue
+        sub = by_sub.get(row["name"])
+        if not sub or not sub["member_links"]:
+            continue
+        info = {
+            "name": row["name"],
+            "link_name": row["link_name"],
+            "override": row["override"],
+            "reason": row["reason"],
+            "member_links": sub["member_links"],
+            "member_components": sub["member_components"],
+            "internal_joints": sub["internal_joints"],
+            "boundary_joints": sub["boundary_joints"],
+        }
+        collapsed.append(info)
+        for link in sub["member_links"]:
+            collapse_link[link] = row["link_name"]
+
+    links = []
+    inserted = set()
+    for link in canonical["links"]:
+        ln = link["link_name"]
+        repl = collapse_link.get(ln)
+        if repl:
+            if repl not in inserted:
+                sub = next(s for s in collapsed if s["link_name"] == repl)
+                links.append({
+                    "name": sub["name"],
+                    "link_name": repl,
+                    "collapsed": True,
+                    "member_links": sub["member_links"],
+                })
+                inserted.add(repl)
+            continue
+        links.append({**link, "collapsed": False})
+
+    joints, dropped = [], []
+    for j in canonical["joints"]:
+        parent = collapse_link.get(j["parent"], j["parent"])
+        child = collapse_link.get(j["child"], j["child"])
+        out = {**j, "source_name": j["name"],
+               "parent": parent, "child": child}
+        if parent == child:
+            dropped.append(out)
+            continue
+        out["name"] = f"{parent}__{child}"
+        joints.append(out)
+
+    base = collapse_link.get(canonical["base_link"], canonical["base_link"])
+    return {
+        "base_link": base,
+        "links": links,
+        "joints": joints,
+        "dropped_internal_joints": dropped,
+        "collapsed_subassemblies": collapsed,
+        "canonical_counts": {
+            "links": len(canonical["links"]),
+            "joints": len(canonical["joints"]),
+        },
+        "preview_counts": {
+            "links": len(links),
+            "joints": len(joints),
+        },
+    }
+
+
 def _upsert_yaml_map(txt, mapkey, key, value):
     """Set ``mapkey: {key: value}`` (block style) in joints.yaml text, replacing
     any existing entry for ``key`` and creating the map if needed."""
@@ -2747,6 +2827,23 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 txt = open(yml, encoding="utf-8").read() \
                     if os.path.exists(yml) else ""
                 payload = _canonical_tree_payload(gs, txt)
+                payload["mode"] = "cad"
+                return self._send_json(payload)
+            if path == "/api/collapse_preview":
+                cls = type(self)
+                if not cls.pkg_dir:
+                    return self._send_json({"error": "no package open"}, 400)
+                if not _cad_mode(cls.pkg_dir):
+                    return self._send_json(
+                        {"error": "collapse preview needs the CAD graph.json"},
+                        400)
+                from sw2robot.exporter.state import GraphState
+                gs = GraphState.load(os.path.join(cls.pkg_dir, "graph.json"))
+                name = os.path.splitext(os.path.basename(cls.urdf_rel))[0]
+                yml = os.path.join(cls.pkg_dir, name + ".joints.yaml")
+                txt = open(yml, encoding="utf-8").read() \
+                    if os.path.exists(yml) else ""
+                payload = _collapse_preview_payload(gs, txt)
                 payload["mode"] = "cad"
                 return self._send_json(payload)
             if path == "/api/fs":

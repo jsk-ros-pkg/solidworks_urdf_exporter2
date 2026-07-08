@@ -179,6 +179,36 @@ joints:
     ]
 
 
+def test_collapse_preview_replaces_no_expand_subassembly_members():
+    from sw2robot.editor.webserver import _collapse_preview_payload
+
+    txt = "base: plate-1\nno_expand:\n- servo\n"
+    payload = _collapse_preview_payload(make_graph(), txt)
+    assert payload["canonical_counts"] == {"links": 3, "joints": 2}
+    assert payload["preview_counts"] == {"links": 2, "joints": 1}
+    assert {x["link_name"] for x in payload["links"]} == {
+        "plate_1", "servo_1"}
+    assert payload["collapsed_subassemblies"][0]["name"] == "servo-1"
+    assert set(payload["collapsed_subassemblies"][0]["member_links"]) == {
+        "servo_1__case_1", "servo_1__horn_1"}
+    assert [(j["parent"], j["child"], j["type"])
+            for j in payload["joints"]] == [
+        ("plate_1", "servo_1", "fixed")
+    ]
+    assert [j["source_name"] for j in payload["dropped_internal_joints"]] == [
+        "servo_1__case_1__servo_1__horn_1"
+    ]
+
+
+def test_collapse_preview_keeps_expanded_override():
+    from sw2robot.editor.webserver import _collapse_preview_payload
+
+    txt = "base: plate-1\nexpand:\n- servo\n"
+    payload = _collapse_preview_payload(make_graph(), txt)
+    assert payload["collapsed_subassemblies"] == []
+    assert payload["preview_counts"] == payload["canonical_counts"]
+
+
 def test_subassemblies_payload_reports_expansion_state():
     from sw2robot.editor.webserver import _subassemblies_payload
 
