@@ -70,8 +70,8 @@ def test_writer_rescales_solidworks_inertial_to_target_mass(tmp_path):
 def test_writer_rescales_placeholder_when_no_geometry(tmp_path):
     """With no sw values and no mesh the inertial falls to the placeholder; a
     target mass still rescales it, so the URDF carries the requested weight."""
-    from sw2robot.exporter.model import Component, RobotModel
     from sw2robot.exporter import urdf_writer
+    from sw2robot.exporter.model import Component, RobotModel
     c = Component(name="P-1", link_name="base_link", part_path=None,
                   is_subassembly=False, world=np.eye(4), fixed=True, dof=0,
                   mass_target=0.5)
