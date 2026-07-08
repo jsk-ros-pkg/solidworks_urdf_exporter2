@@ -1003,6 +1003,30 @@ the config and does NOT re-detect). Needs graph.json (CAD mode).">🔗 re-detect
     'rename.resetAllBtn': { en: '↺ reset all to defaults', ja: '↺ 全デフォルト名に戻す' },
     'rename.resetAllBtnTitle': { en: 'revert every joint/link name to its original',
                                  ja: 'すべての joint 名・link 名を元の名前に戻す' },
+    'subasm.btn': { en: 'Sub-assemblies', ja: 'サブアセンブリ' },
+    'subasm.btnTitle': { en: 'show CAD sub-assemblies and whether they are expanded',
+                         ja: 'CADサブアセンブリと展開状態を表示' },
+    'subasm.title': { en: 'CAD sub-assemblies', ja: 'CADサブアセンブリ' },
+    'subasm.help': { en: 'Read-only for now: shows the automatic expansion decision and any expand / no_expand override in joints.yaml.',
+                     ja: '現在は表示のみ: 自動展開の判定と joints.yaml の expand / no_expand 上書きを表示します。' },
+    'subasm.none': { en: 'No CAD sub-assemblies in this package.',
+                     ja: 'このパッケージにはCADサブアセンブリがありません。' },
+    'subasm.urdfMode': { en: 'Sub-assembly data is available for CAD-extracted packages only.',
+                         ja: 'サブアセンブリ情報はCADから抽出したパッケージでのみ利用できます。' },
+    'subasm.fail': { en: a => `sub-assembly list failed: ${a.e}`,
+                     ja: a => `サブアセンブリ一覧の取得に失敗: ${a.e}` },
+    'subasm.thName': { en: 'CAD name', ja: 'CAD名' },
+    'subasm.thLink': { en: 'link', ja: 'link' },
+    'subasm.thChildren': { en: 'children', ja: '子' },
+    'subasm.thEdges': { en: 'mates', ja: 'mate' },
+    'subasm.thState': { en: 'state', ja: '状態' },
+    'subasm.thPath': { en: 'file', ja: 'ファイル' },
+    'subasm.back': { en: '← rename list', ja: '← 改名リスト' },
+    'subasm.stateExpanded': { en: 'expanded', ja: '展開' },
+    'subasm.stateKept': { en: 'kept as one link', ja: '1リンク保持' },
+    'subasm.overrideAuto': { en: 'auto', ja: 'auto' },
+    'subasm.overrideExpand': { en: 'expand', ja: 'expand' },
+    'subasm.overrideNoExpand': { en: 'no_expand', ja: 'no_expand' },
     // joint rows / tree
     'row.jnameTitle': { en: a => `joint: ${a.name}\n${a.parent} → ${a.child}`,
                         ja: a => `関節: ${a.name}\n${a.parent} → ${a.child}` },
@@ -2609,13 +2633,93 @@ function attachInlineRename(el, kind, getOld) {
   });
 }
 
-// the ≣ 改名 list: every joint with its (editable) joint name + child link name
-function openRenameList() {
+function htmlEsc(s) {
+  return String(s ?? '').replace(/[&<>"]/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'
+  }[c]));
+}
+
+function pathBase(p) {
+  const s = String(p ?? '');
+  return s.split(/[\\/]/).pop() || s;
+}
+
+function subasmOverrideLabel(v) {
+  if (v === 'expand') { return t('subasm.overrideExpand'); }
+  if (v === 'no_expand') { return t('subasm.overrideNoExpand'); }
+  return t('subasm.overrideAuto');
+}
+
+async function openSubassemblyList(ov) {
   if (!viewer.robot) { log(t('common.openFirst'), 'wrn'); return; }
-  document.getElementById('renamelist')?.remove();
+  const owned = ov || document.getElementById('renamelist') ||
+    document.createElement('div');
+  owned.id = 'renamelist';
+  try {
+    const resp = await fetch('/api/subassemblies');
+    const r = await resp.json();
+    if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
+    const card = document.createElement('div');
+    card.className = 'card';
+    let html =
+      '<div style="font-size:14px;margin-bottom:2px;color:#9fe0a8">' +
+      t('subasm.title') + '</div>' +
+      '<div style="font-size:11px;color:#8a93a3;margin-bottom:8px">' +
+      t('subasm.help') + '</div>';
+    const rows = r.subassemblies || [];
+    if (r.mode === 'urdf') {
+      html += '<div style="color:#d6b36b">' + t('subasm.urdfMode') + '</div>';
+    } else if (!rows.length) {
+      html += '<div style="color:#8a93a3">' + t('subasm.none') + '</div>';
+    } else {
+      html += '<table class="rntable"><thead><tr><th>' +
+        t('subasm.thName') + '</th><th>' + t('subasm.thLink') +
+        '</th><th>' + t('subasm.thChildren') + '</th><th>' +
+        t('subasm.thEdges') + '</th><th>' + t('subasm.thState') +
+        '</th><th>' + t('subasm.thPath') + '</th></tr></thead><tbody>';
+      for (const s of rows) {
+        const state = s.expanded ? t('subasm.stateExpanded')
+                                 : t('subasm.stateKept');
+        const col = s.expanded ? '#9fe0a8' : '#d6b36b';
+        html += `<tr title="${htmlEsc(s.reason)}">` +
+          `<td>${htmlEsc(s.name)}</td>` +
+          `<td style="color:#cfe3ff">${htmlEsc(s.link_name)}</td>` +
+          `<td>${s.children ?? 0}</td>` +
+          `<td>${s.internal_edges ?? 0}</td>` +
+          `<td><span style="color:${col}">${state}</span>` +
+          ` <span style="color:#8a93a3">(${subasmOverrideLabel(s.override)})</span></td>` +
+          `<td title="${htmlEsc(s.path)}">${htmlEsc(pathBase(s.path))}</td></tr>`;
+      }
+      html += '</tbody></table>';
+    }
+    card.innerHTML = html;
+    const bar = document.createElement('div');
+    bar.style.cssText = 'display:flex;gap:8px;margin-top:10px';
+    const back = document.createElement('button');
+    back.textContent = t('subasm.back');
+    back.addEventListener('click', () => openRenameList(owned));
+    const close = document.createElement('button');
+    close.textContent = t('common.close');
+    close.addEventListener('click', () => owned.remove());
+    bar.append(back, close);
+    card.appendChild(bar);
+    owned.replaceChildren(card);
+    if (!owned.parentElement) {
+      (document.getElementById('viewer').parentElement || document.body)
+        .appendChild(owned);
+    }
+  } catch (e) {
+    log(t('subasm.fail', { e: e.message ?? e }), 'err');
+  }
+}
+
+// the ≣ 改名 list: every joint with its (editable) joint name + child link name
+function openRenameList(ov = null) {
+  if (!viewer.robot) { log(t('common.openFirst'), 'wrn'); return; }
+  if (!ov) { document.getElementById('renamelist')?.remove(); }
   const linkOf = (j, tag) => [...(j.urdfNode?.children ?? [])]
     .find(e => e.tagName === tag)?.getAttribute('link') ?? '';
-  const ov = document.createElement('div');
+  ov = ov || document.createElement('div');
   ov.id = 'renamelist';
   const card = document.createElement('div');
   card.className = 'card';
@@ -2648,12 +2752,16 @@ function openRenameList() {
   resetAll.textContent = t('rename.resetAllBtn');
   resetAll.title = t('rename.resetAllBtnTitle');
   resetAll.addEventListener('click', resetAllNames);
+  const subasm = document.createElement('button');
+  subasm.textContent = t('subasm.btn');
+  subasm.title = t('subasm.btnTitle');
+  subasm.addEventListener('click', () => openSubassemblyList(ov));
   const close = document.createElement('button');
   close.textContent = t('common.close');
   close.addEventListener('click', () => ov.remove());
-  bar.append(resetAll, close);
+  bar.append(resetAll, subasm, close);
   card.appendChild(bar);
-  ov.appendChild(card);
+  ov.replaceChildren(card);
   card.querySelectorAll('.rn-input').forEach(inp => {
     inp.addEventListener('change', async () => {
       const v = inp.value.trim(), old = inp.dataset.old;
@@ -2663,11 +2771,13 @@ function openRenameList() {
       else { inp.value = old; }
     });
   });
-  (document.getElementById('viewer').parentElement || document.body)
-    .appendChild(ov);
+  if (!ov.parentElement) {
+    (document.getElementById('viewer').parentElement || document.body)
+      .appendChild(ov);
+  }
 }
 document.getElementById('renamelistbtn')
-  .addEventListener('click', openRenameList);
+  .addEventListener('click', () => openRenameList());
 
 function buildJointRows(robot) {
   jointsEl.innerHTML = '';

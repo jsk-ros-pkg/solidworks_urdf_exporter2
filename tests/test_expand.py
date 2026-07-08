@@ -101,6 +101,30 @@ def test_no_expand_override_keeps_instance():
     assert {c.name for c in comps} == {"plate-1", "servo-1"}
 
 
+def test_subassemblies_payload_reports_expansion_state():
+    from sw2robot.editor.webserver import _subassemblies_payload
+
+    payload = _subassemblies_payload(make_graph())
+    rows = payload["subassemblies"]
+    assert len(rows) == 1
+    assert rows[0]["name"] == "servo-1"
+    assert rows[0]["children"] == 2
+    assert rows[0]["internal_edges"] == 1
+    assert rows[0]["movable"] is True
+    assert rows[0]["expanded"] is True
+    assert rows[0]["override"] == "auto"
+
+
+def test_subassemblies_payload_reports_no_expand_override():
+    from sw2robot.editor.webserver import _subassemblies_payload
+
+    payload = _subassemblies_payload(make_graph(), "no_expand:\n- servo\n")
+    rows = payload["subassemblies"]
+    assert len(rows) == 1
+    assert rows[0]["expanded"] is False
+    assert rows[0]["override"] == "no_expand"
+
+
 def test_rigid_subassembly_not_expanded():
     g = make_graph()
     # make the internals rigid: bolt pair instead of a hinge
