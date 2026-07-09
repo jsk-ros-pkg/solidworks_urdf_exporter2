@@ -757,6 +757,38 @@ def test_collapsed_preview_urdf_lumps_member_visuals():
     assert sub_out.find("origin").get("xyz") == "0 2 3"
 
 
+def test_collapse_preview_http_cache_reuses_identical_input(tmp_path, monkeypatch):
+    from sw2robot.editor import webserver
+
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "graph.json").write_text("{}", encoding="utf-8")
+    yml = pkg / "robot.joints.yaml"
+    yml.write_text("base: a\n", encoding="utf-8")
+    calls = {"n": 0}
+
+    def fake_payload(_graph, txt):
+        calls["n"] += 1
+        return {"txt": txt, "calls": calls["n"]}
+
+    monkeypatch.setattr(webserver, "_collapse_preview_payload", fake_payload)
+    webserver._COLLAPSE_PREVIEW_CACHE.clear()
+
+    first = webserver._collapse_preview_payload_cached(
+        str(pkg), object(), str(yml), yml.read_text(encoding="utf-8"))
+    second = webserver._collapse_preview_payload_cached(
+        str(pkg), object(), str(yml), yml.read_text(encoding="utf-8"))
+
+    assert calls["n"] == 1
+    assert first == second == {"txt": "base: a\n", "calls": 1}
+
+    yml.write_text("base: b\n", encoding="utf-8")
+    third = webserver._collapse_preview_payload_cached(
+        str(pkg), object(), str(yml), yml.read_text(encoding="utf-8"))
+    assert calls["n"] == 2
+    assert third == {"txt": "base: b\n", "calls": 2}
+
+
 def test_validate_collapsed_tree_reports_disconnected_members():
     from sw2robot.editor.webserver import _validate_collapsed_tree
 

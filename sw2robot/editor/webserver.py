@@ -23,6 +23,7 @@ sw2robot.exporter already requires.
 import argparse
 import contextlib
 import copy
+import hashlib
 import http.server
 import json
 import os
@@ -62,6 +63,10 @@ def _app_data_dir():
 
 # repo root in a checkout; %TEMP%\sw2robot in a frozen .exe
 _DATA_DIR = _app_data_dir()
+
+_COLLAPSE_PREVIEW_CACHE = {}
+_COLLAPSE_PREVIEW_CACHE_LOCK = threading.Lock()
+_COLLAPSE_PREVIEW_CACHE_MAX = 8
 
 
 def _default_root():
@@ -1439,6 +1444,41 @@ def _collapse_preview_payload(graph, yml_txt=""):
             "joints": len(joints),
         },
     }
+
+
+def _file_signature(path):
+    try:
+        st = os.stat(path)
+        return (os.path.abspath(path), int(st.st_mtime_ns), int(st.st_size))
+    except OSError:
+        return (os.path.abspath(path), None, None)
+
+
+def _collapse_preview_cache_key(pkg_dir, yml_path, yml_txt):
+    graph_path = os.path.join(pkg_dir, "graph.json")
+    digest = hashlib.sha256((yml_txt or "").encode("utf-8")).hexdigest()
+    return (_file_signature(graph_path), os.path.abspath(yml_path), digest)
+
+
+def _collapse_preview_payload_cached(pkg_dir, graph, yml_path, yml_txt=""):
+    """Cached collapse preview for HTTP calls that repeat the same input.
+
+    The canonical expanded tree is the expensive part.  The preview panel,
+    right-hand subassembly tree, and collapsed robot preview can all request it
+    in quick succession with identical graph/yaml input, so keep a tiny
+    process-local cache keyed by graph.json + joints.yaml content.
+    """
+    key = _collapse_preview_cache_key(pkg_dir, yml_path, yml_txt)
+    with _COLLAPSE_PREVIEW_CACHE_LOCK:
+        cached = _COLLAPSE_PREVIEW_CACHE.get(key)
+        if cached is not None:
+            return copy.deepcopy(cached)
+    payload = _collapse_preview_payload(graph, yml_txt)
+    with _COLLAPSE_PREVIEW_CACHE_LOCK:
+        if len(_COLLAPSE_PREVIEW_CACHE) >= _COLLAPSE_PREVIEW_CACHE_MAX:
+            _COLLAPSE_PREVIEW_CACHE.pop(next(iter(_COLLAPSE_PREVIEW_CACHE)))
+        _COLLAPSE_PREVIEW_CACHE[key] = copy.deepcopy(payload)
+    return payload
 
 
 def _collapse_parent_choices(collapsed, collapse_link, parent_overrides):
@@ -3677,7 +3717,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 yml = os.path.join(cls.pkg_dir, name + ".joints.yaml")
                 txt = open(yml, encoding="utf-8").read() \
                     if os.path.exists(yml) else ""
-                payload = _collapse_preview_payload(gs, txt)
+                payload = _collapse_preview_payload_cached(
+                    cls.pkg_dir, gs, yml, txt)
                 payload["mode"] = "cad"
                 return self._send_json(payload)
             if path == "/api/collapsed_preview_urdf":
@@ -3695,7 +3736,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 yml = os.path.join(cls.pkg_dir, name + ".joints.yaml")
                 txt = open(yml, encoding="utf-8").read() \
                     if os.path.exists(yml) else ""
-                preview = _collapse_preview_payload(gs, txt)
+                preview = _collapse_preview_payload_cached(
+                    cls.pkg_dir, gs, yml, txt)
                 plan = preview.get("collapse_plan") or {}
                 if not plan.get("ready_for_urdf"):
                     return self._send_json({
@@ -4582,7 +4624,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 with open(yml, encoding="utf-8") as f:
                     txt = f.read()
                 try:
-                    preview = _collapse_preview_payload(graph, txt)
+                    preview = _collapse_preview_payload_cached(
+                        cls.pkg_dir, graph, yml, txt)
                     choices = {
                         c.get("subassembly"): c
                         for c in preview.get("parent_choices", [])
@@ -4606,7 +4649,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                           f"sub-assembly parent {name_in} -> {label}")
                 with open(yml, "w", encoding="utf-8") as f:
                     f.write(txt)
-                payload = _collapse_preview_payload(graph, txt)
+                payload = _collapse_preview_payload_cached(
+                    cls.pkg_dir, graph, yml, txt)
                 payload.update({"ok": True, "name": name_in,
                                 "parent": parent, "preview_only": True,
                                 "rebuilt": False})
@@ -4641,7 +4685,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 with open(yml, encoding="utf-8") as f:
                     txt = f.read()
                 try:
-                    preview = _collapse_preview_payload(graph, txt)
+                    preview = _collapse_preview_payload_cached(
+                        cls.pkg_dir, graph, yml, txt)
                     choices = {
                         c.get("subassembly"): c
                         for c in preview.get("group_choices", [])
@@ -4666,7 +4711,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                           f"sub-assembly origin link {name_in} -> {label}")
                 with open(yml, "w", encoding="utf-8") as f:
                     f.write(txt)
-                payload = _collapse_preview_payload(graph, txt)
+                payload = _collapse_preview_payload_cached(
+                    cls.pkg_dir, graph, yml, txt)
                 payload.update({"ok": True, "name": name_in,
                                 "origin_link": origin_link,
                                 "preview_only": True,
@@ -4704,7 +4750,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 with open(yml, encoding="utf-8") as f:
                     txt = f.read()
                 try:
-                    preview = _collapse_preview_payload(graph, txt)
+                    preview = _collapse_preview_payload_cached(
+                        cls.pkg_dir, graph, yml, txt)
                     selected = _subassembly_cycle_break_joints(txt)
                     allowed = set(selected)
                     for choice in preview.get("cycle_break_choices", []):
@@ -4725,7 +4772,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                           f"sub-assembly cycle break {target} -> {label}")
                 with open(yml, "w", encoding="utf-8") as f:
                     f.write(txt)
-                payload = _collapse_preview_payload(graph, txt)
+                payload = _collapse_preview_payload_cached(
+                    cls.pkg_dir, graph, yml, txt)
                 payload.update({"ok": True, "source_joint": source_joint,
                                 "previous_source_joint": previous_source_joint,
                                 "drop": drop, "preview_only": True,
