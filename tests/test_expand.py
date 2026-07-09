@@ -266,7 +266,10 @@ def test_collapse_preview_replaces_no_expand_subassembly_members():
 
 
 def test_collapse_preview_uses_expanded_base_as_collapsed_origin():
-    from sw2robot.editor.webserver import _collapse_preview_payload
+    from sw2robot.editor.webserver import (
+        _collapse_preview_payload,
+        _set_subassembly_origin_link_yaml,
+    )
 
     txt = """
 base: servo-1/case-1
@@ -291,6 +294,14 @@ joints:
     servo_link = next(l for l in plan["links"] if l["link"] == "servo_1")
     assert servo_link["selected_origin_link"] == "servo_1__case_1"
     assert servo_link["selected_origin_source"] == "canonical_base"
+
+    txt = _set_subassembly_origin_link_yaml(
+        txt, make_graph(), "servo-1", "servo_1__horn_1")
+    payload = _collapse_preview_payload(make_graph(), txt)
+    collapsed = payload["collapsed_subassemblies"][0]
+    assert collapsed["configured_origin_link"] == "servo_1__horn_1"
+    assert collapsed["selected_origin_link"] == "servo_1__case_1"
+    assert collapsed["selected_origin_source"] == "canonical_base"
 
 
 def test_collapse_preview_lists_subassembly_driver_joint_candidates():

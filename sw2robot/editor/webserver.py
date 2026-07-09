@@ -1435,9 +1435,10 @@ def _collapse_preview_payload(graph, yml_txt="", current_joints=None):
         sub = by_sub.get(row["name"])
         if not sub or not sub["member_links"]:
             continue
-        selected_origin = origin_links.get(row["name"], "")
+        configured_origin = origin_links.get(row["name"], "")
+        selected_origin = configured_origin
         origin_source = "user" if selected_origin else ""
-        if not selected_origin and canonical_base in sub["member_links"]:
+        if canonical_base in sub["member_links"]:
             selected_origin = canonical_base
             origin_source = "canonical_base"
         info = {
@@ -1452,6 +1453,7 @@ def _collapse_preview_payload(graph, yml_txt="", current_joints=None):
             "selected_parent": "",
             "selected_origin_link": selected_origin,
             "selected_origin_source": origin_source,
+            "configured_origin_link": configured_origin,
             "selected_driver_joint": driver_joints.get(row["name"], ""),
         }
         collapsed.append(info)
@@ -1683,16 +1685,22 @@ def _collapse_group_choices(collapsed, origin_links):
     for sub in collapsed:
         groups = _subassembly_member_groups(sub)
         members = set(sub.get("member_links") or [])
-        raw_selected = origin_links.get(sub.get("name"), "")
-        fallback = sub.get("selected_origin_link", "")
-        selected = raw_selected if raw_selected in members else (
-            fallback if not raw_selected and fallback in members else "")
+        configured = origin_links.get(sub.get("name"), "")
+        effective = sub.get("selected_origin_link", "")
         stale = (
-            raw_selected
-            if raw_selected and raw_selected not in members
+            configured
+            if configured and configured not in members
             else "")
-        source = "user" if raw_selected and selected else (
-            sub.get("selected_origin_source", "") if selected else "")
+        if (sub.get("selected_origin_source") == "canonical_base"
+                and effective in members):
+            selected = effective
+            source = "canonical_base"
+        elif configured in members:
+            selected = configured
+            source = "user"
+        else:
+            selected = ""
+            source = ""
         if len(groups) <= 1 and not selected and not stale:
             continue
         choices.append({
@@ -1700,6 +1708,7 @@ def _collapse_group_choices(collapsed, origin_links):
             "link_name": sub.get("link_name"),
             "selected_origin_link": selected,
             "selected_origin_source": source,
+            "configured_origin_link": configured,
             "stale_origin_link": stale,
             "groups": [
                 {"origin_link": g[0], "links": g, "size": len(g)}
@@ -2147,6 +2156,7 @@ def _collapse_plan_payload(base_link, links, joints, collapsed, collapse_link,
             "selected_parent": sub.get("selected_parent", ""),
             "selected_origin_link": sub.get("selected_origin_link", ""),
             "selected_origin_source": sub.get("selected_origin_source", ""),
+            "configured_origin_link": sub.get("configured_origin_link", ""),
             "selected_driver_joint": sub.get("selected_driver_joint", ""),
         }
 
@@ -2198,6 +2208,7 @@ def _collapse_plan_payload(base_link, links, joints, collapsed, collapse_link,
             "selected_parent": s.get("selected_parent", ""),
             "selected_origin_link": s.get("selected_origin_link", ""),
             "selected_origin_source": s.get("selected_origin_source", ""),
+            "configured_origin_link": s.get("configured_origin_link", ""),
             "selected_driver_joint": s.get("selected_driver_joint", ""),
             "auto_driver_joint": driver_by_sub.get(
                 s.get("name"), {}).get("auto_driver_joint", ""),
