@@ -13,7 +13,31 @@ license-files = ["LICENSE"]
 authors = [{ name = "Iori Yanokura", email = "ab.ioryz@gmail.com" }]
 dependencies = [
     "numpy>=2",
-    "trimesh[easy]>=3.9",
+    # trimesh core + the backends its [easy] extra pulls, listed EXPLICITLY
+    # instead of as `trimesh[easy]` so we can drop exactly ONE of them --
+    # embreex -- on linux-aarch64, the only platform without an embreex wheel.
+    # embreex is just an optional ray/mesh accelerator; trimesh runs without it,
+    # so linux-arm64 loses nothing user-visible.  This mirrors trimesh 4.x's
+    # [easy] set; keep it in sync when bumping trimesh (see release.yml arm job).
+    "trimesh>=3.9",
+    "colorlog",
+    "manifold3d>=2.3.0",
+    "charset-normalizer",
+    "jsonschema",
+    "networkx",
+    "svg.path",
+    "pycollada",
+    "shapely",
+    "xxhash",
+    "rtree",
+    "httpx",
+    "scipy",
+    "pillow",
+    "vhacdx",
+    "mapbox_earcut>=1.0.2",
+    # everywhere EXCEPT linux-aarch64 (PEP 508 has no unary `not`, so this is the
+    # De Morgan form of "not (linux and aarch64)")
+    "embreex; sys_platform != 'linux' or platform_machine != 'aarch64'",
     "lxml",
     "pydantic>=2",
     "pyyaml>=6",

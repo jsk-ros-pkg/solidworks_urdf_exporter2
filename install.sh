@@ -80,11 +80,10 @@ case "$uname_m" in
     *) err "unsupported CPU arch '$uname_m'" ;;
 esac
 
-# The release matrix ships only linux-x64 and macos-arm64 today.  Fail early with
-# a pointer rather than 404'ing on a guessed asset name.  Keep this list in sync
-# with the release matrix in .github/workflows/release.yml.
+# Fail early with a pointer rather than 404'ing on a guessed asset name.  Keep
+# this list in sync with the release matrix in .github/workflows/release.yml.
 case "$OS-$ARCH" in
-    linux-x64|macos-arm64) : ;;
+    linux-x64|linux-arm64|macos-arm64) : ;;
     *) err "no prebuilt binary for $OS-$ARCH yet.
        See the releases page for what's published, or install from source (README):
        https://github.com/$REPO/releases/latest" ;;

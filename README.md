@@ -108,8 +108,9 @@ SW2ROBOT_VERSION=v0.3.2 curl -LsSf https://jsk-ros-pkg.github.io/solidworks_urdf
 SW2ROBOT_INSTALL_DIR=/usr/local/bin SW2ROBOT_NO_MODIFY_PATH=1 curl -LsSf .../install.sh | sh
 ```
 
-Prebuilt binaries currently ship for **Linux x64**, **macOS (Apple Silicon)**,
-and **Windows x64**. Re-running the installer upgrades in place; the editor can
+Prebuilt binaries currently ship for **Linux x64**, **Linux arm64**,
+**macOS (Apple Silicon)**, and **Windows x64**. Re-running the installer upgrades
+in place; the editor can
 also self-update from its own UI. Prefer to grab the file by hand, or need a
 different OS/arch? The per-OS steps below still apply.
 

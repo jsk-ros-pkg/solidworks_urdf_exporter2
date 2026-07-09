@@ -6,10 +6,12 @@ moment the web editor converts the scene to a single mesh.
 
 Two tests, on purpose:
 
-* ``test_pyproject_declares_trimesh_easy_extra`` is the deterministic guard --
-  it reads the declared dependency and fails if anyone reverts ``trimesh[easy]``
-  back to plain ``trimesh``.  This catches the regression even in an environment
-  that happens to have networkx/scipy from some other package.
+* ``test_pyproject_declares_trimesh_mesh_backends`` is the deterministic guard --
+  it reads the declared dependencies and fails if networkx/scipy stop being
+  pulled in, whether via the ``trimesh[easy]`` extra OR as explicit direct deps
+  (we do the latter so embreex -- the one [easy] backend without a linux-aarch64
+  wheel -- can be dropped there).  This catches the regression even in an
+  environment that happens to have networkx/scipy from some other package.
 * ``test_scene_to_single_mesh_works`` exercises the actual code path the robot
   view runs on every load, so the suite also fails outright on a fresh install
   that is genuinely missing the backends.
@@ -24,23 +26,29 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 PYPROJECT = REPO_ROOT / "pyproject.toml"
 
 
-def _trimesh_requirement():
+def _declared_dependencies():
     deps = tomllib.loads(PYPROJECT.read_text())["project"]["dependencies"]
-    for raw in deps:
-        req = Requirement(raw)
-        if req.name == "trimesh":
-            return req
-    raise AssertionError("trimesh is not declared in [project].dependencies")
+    return [Requirement(raw) for raw in deps]
 
 
-def test_pyproject_declares_trimesh_easy_extra():
-    # ``trimesh[easy]`` is what pulls networkx + scipy (and the other mesh
-    # backends) in; a bare ``trimesh`` install is missing them and breaks robot
-    # loading.  Guard against reverting that extra.
-    req = _trimesh_requirement()
-    assert "easy" in req.extras, (
-        f"trimesh must be declared with the 'easy' extra to pull networkx/scipy; "
-        f"got '{req}'"
+def test_pyproject_declares_trimesh_mesh_backends():
+    # networkx + scipy are what trimesh needs the moment a Scene is flattened to a
+    # single mesh (PR #88); a bare ``trimesh`` install is missing them and breaks
+    # robot loading.  They may be pulled EITHER via the ``trimesh[easy]`` extra OR
+    # as explicit direct deps -- we list them explicitly so embreex (the one
+    # [easy] backend without a linux-aarch64 wheel) can be dropped there; see
+    # pyproject.toml.  Guard that networkx/scipy stay declared one way or another.
+    reqs = _declared_dependencies()
+    names = {r.name for r in reqs}
+    assert any(r.name == "trimesh" for r in reqs), (
+        "trimesh is not declared in [project].dependencies"
+    )
+    via_easy = any(r.name == "trimesh" and "easy" in r.extras for r in reqs)
+    via_explicit = {"networkx", "scipy"} <= names
+    assert via_easy or via_explicit, (
+        "networkx + scipy must be pulled in -- either via trimesh[easy] or as "
+        "explicit direct deps -- so Scene->single-mesh doesn't ModuleNotFoundError "
+        f"(PR #88); got dependencies: {sorted(names)}"
     )
 
 
