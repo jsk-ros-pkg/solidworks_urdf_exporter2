@@ -1873,6 +1873,206 @@ def _tree_rows_from_collapse_plan(plan):
     return _tree_rows_payload(plan.get("base_link"), links, joints)
 
 
+def _urdf_vec(s, n=3):
+    vals = [float(x) for x in str(s or "").split()]
+    return vals if len(vals) == n else [0.0] * n
+
+
+def _urdf_origin_matrix(elem):
+    import numpy as _np
+
+    from sw2robot.exporter.geometry import matrix_from_rpy
+
+    xyz = _urdf_vec(elem.get("xyz"), 3) if elem is not None else [0, 0, 0]
+    rpy = _urdf_vec(elem.get("rpy"), 3) if elem is not None else [0, 0, 0]
+    M = matrix_from_rpy(rpy)
+    M[:3, 3] = _np.asarray(xyz, float)
+    return M
+
+
+def _set_urdf_origin(elem, T):
+    import xml.etree.ElementTree as _ET
+
+    from sw2robot.exporter.geometry import matrix_to_xyz_rpy
+    from sw2robot.exporter.urdf_writer import _fmt
+
+    origin = elem.find("origin")
+    if origin is None:
+        origin = _ET.Element("origin")
+        elem.insert(0, origin)
+    xyz, rpy = matrix_to_xyz_rpy(T)
+    origin.set("xyz", _fmt(xyz))
+    origin.set("rpy", _fmt(rpy))
+
+
+def _urdf_link_world_poses(root):
+    """Zero-position link poses from URDF joint origins."""
+    import numpy as _np
+
+    links = {ln.get("name") for ln in root.findall("link") if ln.get("name")}
+    child_links, by_parent = set(), {}
+    for j in root.findall("joint"):
+        p = j.find("parent")
+        c = j.find("child")
+        parent = p.get("link") if p is not None else ""
+        child = c.get("link") if c is not None else ""
+        if not parent or not child:
+            continue
+        by_parent.setdefault(parent, []).append((child, j))
+        child_links.add(child)
+    poses = {}
+
+    def walk(link, T):
+        if link in poses:
+            return
+        poses[link] = T
+        for child, joint in by_parent.get(link, []):
+            walk(child, T @ _urdf_origin_matrix(joint.find("origin")))
+
+    roots = sorted(links - child_links)
+    for root_link in roots:
+        walk(root_link, _np.eye(4))
+    for link in sorted(links):
+        if link not in poses:
+            walk(link, _np.eye(4))
+    return poses
+
+
+def _collapse_plan_name_map(plan, link_elems):
+    """Map plan link names to the current URDF names where they differ."""
+    names = set(link_elems)
+    mapping = {}
+    base = plan.get("base_link")
+    if base and base not in names and "base_link" in names:
+        mapping[base] = "base_link"
+    return mapping
+
+
+def _collapsed_preview_urdf_text(urdf_text, plan, robot_name=None):
+    """Build a dry-run URDF from a collapse_plan without touching normal export.
+
+    This is intentionally conservative: it preserves the current URDF's mesh
+    elements and rewires only the links/joints selected by the preview plan.
+    """
+    import copy as _copy
+    import xml.etree.ElementTree as _ET
+
+    import numpy as _np
+
+    from sw2robot.exporter.geometry import relative_matrix
+
+    if not plan.get("ready_for_urdf"):
+        raise ValueError("collapse plan is not ready for URDF output")
+    root = _ET.fromstring(urdf_text)
+    if robot_name:
+        root.set("name", robot_name)
+    link_elems = {ln.get("name"): ln for ln in root.findall("link")
+                  if ln.get("name")}
+    joint_elems = {j.get("name"): j for j in root.findall("joint")
+                   if j.get("name")}
+    name_map = _collapse_plan_name_map(plan, link_elems)
+
+    def nm(name):
+        return name_map.get(name, name)
+
+    link_poses = _urdf_link_world_poses(root)
+
+    def collapsed_pose(plan_link):
+        selected = plan_link.get("selected_origin_link")
+        candidates = ([selected] if selected else []) + \
+            list(plan_link.get("member_links") or [])
+        for cand in candidates:
+            mapped = nm(cand)
+            if mapped in link_poses:
+                return link_poses[mapped]
+        return link_poses.get(nm(plan_link.get("link")), _np.eye(4))
+
+    plan_links = list(plan.get("links") or [])
+    out_root = _ET.Element("robot", {"name": root.get("name") or "robot"})
+    out_poses = {}
+    for plan_link in plan_links:
+        link_name = nm(plan_link.get("link"))
+        src = link_elems.get(link_name)
+        out_link = _copy.deepcopy(src) if src is not None \
+            else _ET.Element("link", {"name": link_name})
+        out_link.set("name", link_name)
+        if plan_link.get("kind") == "collapsed_subassembly":
+            out_poses[link_name] = collapsed_pose(plan_link)
+            for child in list(out_link):
+                if child.tag in ("visual", "collision", "inertial"):
+                    out_link.remove(child)
+            target_T = out_poses[link_name]
+            for member in plan_link.get("member_links") or []:
+                member_name = nm(member)
+                member_el = link_elems.get(member_name)
+                member_T = link_poses.get(member_name)
+                if member_el is None or member_T is None:
+                    continue
+                for child in member_el:
+                    if child.tag not in ("visual", "collision"):
+                        continue
+                    moved = _copy.deepcopy(child)
+                    old_origin = moved.find("origin")
+                    visual_T = _urdf_origin_matrix(old_origin)
+                    _set_urdf_origin(
+                        moved, relative_matrix(target_T, member_T @ visual_T))
+                    out_link.append(moved)
+        else:
+            out_poses[link_name] = link_poses.get(link_name, _np.eye(4))
+        out_root.append(out_link)
+
+    for row in plan.get("joints") or []:
+        source = row.get("source_joint") or row.get("name")
+        src = joint_elems.get(source)
+        if src is None:
+            src = joint_elems.get(row.get("name"))
+        joint = _copy.deepcopy(src) if src is not None else _ET.Element("joint")
+        joint.set("name", row.get("name") or source or "")
+        joint.set("type", row.get("type") or joint.get("type") or "fixed")
+        parent = nm(row.get("parent"))
+        child = nm(row.get("child"))
+        pe = joint.find("parent")
+        if pe is None:
+            pe = _ET.Element("parent")
+            joint.insert(1, pe)
+        pe.set("link", parent)
+        ce = joint.find("child")
+        if ce is None:
+            ce = _ET.Element("child")
+            joint.insert(2, ce)
+        ce.set("link", child)
+        parent_T = out_poses.get(parent, link_poses.get(parent, _np.eye(4)))
+        child_T = out_poses.get(child, link_poses.get(child, _np.eye(4)))
+        _set_urdf_origin(joint, relative_matrix(parent_T, child_T))
+        out_root.append(joint)
+
+    try:
+        _ET.indent(out_root, space="  ")
+    except AttributeError:
+        pass
+    return '<?xml version="1.0"?>\n' + \
+        _ET.tostring(out_root, encoding="unicode") + "\n"
+
+
+def _write_collapsed_preview_urdf(pkg_dir, urdf_rel, plan):
+    """Write a hidden dry-run collapsed URDF and return (abs_path, rel_path)."""
+    stem = os.path.splitext(os.path.basename(urdf_rel))[0]
+    out_rel = posixpath.join(posixpath.dirname(urdf_rel),
+                             f".{stem}.collapsed-preview.urdf")
+    in_path = os.path.join(pkg_dir, *urdf_rel.split("/"))
+    out_path = os.path.join(pkg_dir, *out_rel.split("/"))
+    with open(in_path, encoding="utf-8") as f:
+        text = f.read()
+    out_text = _collapsed_preview_urdf_text(
+        text, plan, robot_name=f"{stem}_collapsed_preview")
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    tmp = out_path + ".tmp"
+    with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+        f.write(out_text)
+    os.replace(tmp, out_path)
+    return out_path, out_rel
+
+
 def _tree_rows_payload(base_link, links, joints):
     """Flatten a link/joint tree into display rows for preview UIs."""
     link_info = {l["link_name"]: l for l in links}
@@ -3480,6 +3680,46 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 payload = _collapse_preview_payload(gs, txt)
                 payload["mode"] = "cad"
                 return self._send_json(payload)
+            if path == "/api/collapsed_preview_urdf":
+                cls = type(self)
+                if not cls.pkg_dir:
+                    return self._send_json({"error": "no package open"}, 400)
+                if not _cad_mode(cls.pkg_dir):
+                    return self._send_json(
+                        {"error": "collapsed preview URDF needs the CAD "
+                                  "graph.json"},
+                        400)
+                from sw2robot.exporter.state import GraphState
+                gs = GraphState.load(os.path.join(cls.pkg_dir, "graph.json"))
+                name = os.path.splitext(os.path.basename(cls.urdf_rel))[0]
+                yml = os.path.join(cls.pkg_dir, name + ".joints.yaml")
+                txt = open(yml, encoding="utf-8").read() \
+                    if os.path.exists(yml) else ""
+                preview = _collapse_preview_payload(gs, txt)
+                plan = preview.get("collapse_plan") or {}
+                if not plan.get("ready_for_urdf"):
+                    return self._send_json({
+                        "error": "collapse plan has unresolved validation "
+                                 "issues",
+                        "validation": preview.get("validation"),
+                        "collapse_plan": plan,
+                    }, 400)
+                try:
+                    out_path, out_rel = _write_collapsed_preview_urdf(
+                        cls.pkg_dir, cls.urdf_rel, plan)
+                except ValueError as e:
+                    return self._send_json({"error": str(e)}, 400)
+                except Exception as e:
+                    return self._send_json({"error": repr(e)}, 500)
+                return self._send_json({
+                    "ok": True,
+                    "preview_only": True,
+                    "rebuilt": False,
+                    "path": out_path,
+                    "urdf": "/pkg/" + out_rel,
+                    "collapse_plan": plan,
+                    "preview_counts": preview.get("preview_counts"),
+                })
             if path == "/api/fs":
                 # tiny server-side file browser: the OS file dialog cannot
                 # hand a PATH to the page, so the page browses through us

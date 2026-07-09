@@ -676,6 +676,85 @@ def test_cycle_break_shared_candidate_resolves_two_cycles():
 
     kept = [j for j in joints if j["source_name"] != "shared"]
     assert _directed_cycle_reports("base", links, kept) == []
+def test_collapsed_preview_urdf_lumps_member_visuals():
+    import xml.etree.ElementTree as ET
+
+    from sw2robot.editor.webserver import _collapsed_preview_urdf_text
+
+    urdf = """<?xml version="1.0"?>
+<robot name="demo">
+  <link name="base"/>
+  <link name="sub_a">
+    <visual><origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="../meshes/a.stl"/></geometry></visual>
+  </link>
+  <link name="sub_b">
+    <visual><origin xyz="0 0 0.5" rpy="0 0 0"/>
+      <geometry><mesh filename="../meshes/b.stl"/></geometry></visual>
+  </link>
+  <link name="outside"/>
+  <joint name="base__sub_a" type="fixed">
+    <origin xyz="1 0 0" rpy="0 0 0"/>
+    <parent link="base"/><child link="sub_a"/>
+  </joint>
+  <joint name="sub_a__sub_b" type="fixed">
+    <origin xyz="0 2 0" rpy="0 0 0"/>
+    <parent link="sub_a"/><child link="sub_b"/>
+  </joint>
+  <joint name="sub_b__outside" type="fixed">
+    <origin xyz="0 0 3" rpy="0 0 0"/>
+    <parent link="sub_b"/><child link="outside"/>
+  </joint>
+</robot>
+"""
+    plan = {
+        "version": 1,
+        "base_link": "base",
+        "ready_for_urdf": True,
+        "links": [
+            {"link": "base", "name": "base", "kind": "expanded_link"},
+            {"link": "sub", "name": "sub", "kind": "collapsed_subassembly",
+             "member_links": ["sub_a", "sub_b"],
+             "selected_origin_link": "sub_a"},
+            {"link": "outside", "name": "outside", "kind": "expanded_link"},
+        ],
+        "joints": [
+            {"name": "base__sub", "parent": "base", "child": "sub",
+             "type": "fixed", "source_joint": "base__sub_a",
+             "decision": "kept_boundary"},
+            {"name": "sub__outside", "parent": "sub", "child": "outside",
+             "type": "fixed", "source_joint": "sub_b__outside",
+             "decision": "kept_boundary"},
+        ],
+        "dropped_joints": [
+            {"name": "sub_a__sub_b", "parent": "sub", "child": "sub",
+             "type": "fixed", "source_joint": "sub_a__sub_b",
+             "decision": "dropped_internal_to_collapsed_subassembly"},
+        ],
+        "collapsed_subassemblies": [],
+        "link_replacements": [
+            {"source_link": "sub_a", "collapsed_link": "sub"},
+            {"source_link": "sub_b", "collapsed_link": "sub"},
+        ],
+    }
+    root = ET.fromstring(_collapsed_preview_urdf_text(urdf, plan))
+
+    assert {x.get("name") for x in root.findall("link")} == {
+        "base", "sub", "outside"}
+    assert {x.get("name") for x in root.findall("joint")} == {
+        "base__sub", "sub__outside"}
+    sub = next(x for x in root.findall("link") if x.get("name") == "sub")
+    visuals = sub.findall("visual")
+    assert len(visuals) == 2
+    meshes = [v.find(".//mesh").get("filename") for v in visuals]
+    assert meshes == ["../meshes/a.stl", "../meshes/b.stl"]
+    assert visuals[0].find("origin").get("xyz") == "0 0 0"
+    assert visuals[1].find("origin").get("xyz") == "0 2 0.5"
+    sub_out = next(j for j in root.findall("joint")
+                   if j.get("name") == "sub__outside")
+    assert sub_out.find("parent").get("link") == "sub"
+    assert sub_out.find("child").get("link") == "outside"
+    assert sub_out.find("origin").get("xyz") == "0 2 3"
 
 
 def test_validate_collapsed_tree_reports_disconnected_members():

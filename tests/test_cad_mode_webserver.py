@@ -223,6 +223,25 @@ def test_mass_only_folds_in_merged_view_matching_export(server):
     assert FIXED_JOINT not in {j.get("name") for j in merged.findall("joint")}
 
 
+def test_collapsed_preview_urdf_endpoint_is_preview_only(server):
+    base, pkg = server
+
+    r = _get_json(base, "/api/collapsed_preview_urdf")
+    assert r["ok"] is True
+    assert r["preview_only"] is True
+    assert r["rebuilt"] is False
+    assert r["urdf"].endswith(".collapsed-preview.urdf")
+    assert Path(r["path"]).is_file()
+    assert Path(r["path"]).name.startswith(".")
+
+    preview = ET.fromstring(_get(base, r["urdf"]))
+    normal = _served_urdf(base)
+    assert preview.get("name").endswith("_collapsed_preview")
+    assert {l.get("name") for l in preview.findall("link")} == {
+        l.get("name") for l in normal.findall("link")}
+    assert (pkg / "urdf" / "fingertip.urdf").is_file()
+
+
 def test_set_mimic_reflected_without_rebuild(server):
     base, pkg = server
     # make the fixed joint movable first (set_types still uses build() in CAD --
