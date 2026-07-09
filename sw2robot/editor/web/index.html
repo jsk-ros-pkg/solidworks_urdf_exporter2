@@ -743,6 +743,13 @@
                       font-size:11px">
         <span id="jfiltercount" style="color:#8a93a3;font-size:10px;
               white-space:nowrap"></span>
+        <select id="treemode" data-i18n-title="t.treeMode"
+                title="switch the right tree between the editable expanded tree and a read-only sub-assembly tree"
+                style="background:#15171a;color:#cfe3ff;border:1px solid #444;
+                       border-radius:3px;padding:2px 4px;font-size:11px">
+          <option value="expanded">expanded</option>
+          <option value="subassembly">subassembly</option>
+        </select>
       </div>
       <input type="checkbox" id="selall" data-i18n-title="t.selall"
              title="select all">
@@ -1081,6 +1088,18 @@ the config and does NOT re-detect). Needs graph.json (CAD mode).">🔗 re-detect
     'subasm.largeConfirm': {
       en: a => `${a.name} contains ${a.children} children and ${a.edges} mates. Changing a large sub-assembly can take a long time. Continue?`,
       ja: a => `${a.name} は子 ${a.children} 個、mate ${a.edges} 個を含みます。大きいサブアセンブリの切り替えには時間がかかることがあります。続行しますか？` },
+    'tree.modeExpanded': { en: 'expanded', ja: '全展開' },
+    'tree.modeSubassembly': { en: 'subassembly', ja: 'サブアセンブリ' },
+    'tree.subasmLoading': { en: 'loading sub-assembly tree...',
+                            ja: 'サブアセンブリtreeを読み込み中...' },
+    'tree.subasmUnavailable': { en: a => `sub-assembly tree unavailable: ${a.e}`,
+                                ja: a => `サブアセンブリtreeを表示できません: ${a.e}` },
+    'tree.subasmReadonly': { en: 'read-only sub-assembly tree',
+                             ja: '読み取り専用のサブアセンブリtree' },
+    'tree.subasmCount': { en: a => `${a.n} rows`,
+                          ja: a => `${a.n} 行` },
+    'tree.memberCount': { en: a => `${a.n} links`,
+                          ja: a => `${a.n} links` },
     // mass editor (bulk mass / density / mass-only + default-mass guard)
     'mass.listTitle': { en: 'mass editor', ja: '質量エディタ' },
     'mass.listHelp': { en: 'set a target mass (kg) OR a density (kg/m³) per link — one clears the other. ⚠ links use a SolidWorks default mass (no material assigned); set a value or acknowledge them before export.',
@@ -1598,6 +1617,8 @@ the config and does NOT re-detect). Needs graph.json (CAD mode).">🔗 re-detect
     't.jfilter': { en: 'show only joints whose link/joint name contains this text',
                    ja: 'リンク名・関節名にこの文字を含む関節だけ表示' },
     't.jfilterPh': { en: 'Filter joints/links…', ja: '関節/リンクを絞り込み…' },
+    't.treeMode': { en: 'switch the right tree between the editable expanded tree and a read-only sub-assembly tree',
+                    ja: '右側treeを編集可能な全展開tree / 読み取り専用サブアセンブリtreeで切替' },
     'jfilter.count': { en: a => `${a.n} / ${a.total} shown`,
                        ja: a => `${a.n} / ${a.total} 件表示` },
     'ui.bulkDelete': { en: 'Delete', ja: '削除' },
@@ -2616,6 +2637,9 @@ let jointFilter = '';          // substring filter: when set, the tree collapses
                                // to a FLAT list of joints whose link/joint name
                                // matches -- so select-all / Set / Delete scope
                                // to exactly the matches (see buildJointRows)
+let treeViewMode = 'expanded'; // expanded = editable URDF tree; subassembly =
+                               // read-only collapse_preview tree
+let subasmTreeRequest = 0;     // discard stale async preview responses
 const playRows = new Map();    // joint name -> "move" mode slider record
 let playMode = false;          // movable-joints-only panel active
 
@@ -3237,9 +3261,109 @@ document.getElementById('masslistbtn').addEventListener('click', () => {
   if (p) { p.remove(); } else { openMassList(); }
 });
 
+function syncTreeModeControls() {
+  const readonly = treeViewMode === 'subassembly';
+  const treeMode = document.getElementById('treemode');
+  if (treeMode) {
+    treeMode.querySelector('option[value="expanded"]').textContent =
+      t('tree.modeExpanded');
+    treeMode.querySelector('option[value="subassembly"]').textContent =
+      t('tree.modeSubassembly');
+    treeMode.value = treeViewMode;
+  }
+  for (const id of ['selall', 'bulktype', 'bulkset', 'bulkdel']) {
+    const el = document.getElementById(id);
+    if (el) { el.disabled = readonly; }
+  }
+}
+
+function previewTreeLinkSet(row) {
+  const links = new Set([row.link, ...(row.member_links || [])]);
+  return [...links].filter(n => viewer.robot?.links?.[n]);
+}
+
+function highlightPreviewTreeRow(row, on) {
+  for (const link of previewTreeLinkSet(row)) {
+    highlightLink(link, on);
+  }
+}
+
+async function renderSubassemblyTreeRows(robot, movable) {
+  const req = ++subasmTreeRequest;
+  rows.clear();
+  jointsEl.innerHTML = `<div class="joint" style="color:#8a93a3">` +
+    `${t('tree.subasmLoading')}</div>`;
+  const countEl = document.getElementById('jfiltercount');
+  if (countEl) { countEl.textContent = ''; }
+  try {
+    const resp = await fetch('/api/collapse_preview');
+    const r = await resp.json();
+    if (req !== subasmTreeRequest || treeViewMode !== 'subassembly') { return; }
+    if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
+    const q = jointFilter.trim().toLowerCase();
+    const allRows = r.tree_rows || [];
+    const treeRows = q ? allRows.filter(row =>
+      [row.link, row.joint, row.source_joint, row.joint_type]
+        .some(x => String(x || '').toLowerCase().includes(q))) : allRows;
+    jointsEl.innerHTML = '';
+    if (countEl) {
+      countEl.textContent = q
+        ? t('jfilter.count', { n: treeRows.length, total: allRows.length })
+        : t('tree.subasmCount', { n: treeRows.length });
+    }
+    const hint = document.createElement('div');
+    hint.className = 'joint';
+    hint.style.cssText = 'color:#8a93a3;font-size:11px';
+    hint.textContent = t('tree.subasmReadonly');
+    jointsEl.appendChild(hint);
+    for (const row of treeRows) {
+      const el = document.createElement('div');
+      el.className = 'joint subasmrow';
+      el.style.marginLeft = (Math.max(0, Number(row.depth || 0)) * 14) + 'px';
+      const marker = row.root ? '⌂' : '·';
+      const memberLinks = row.member_links || [];
+      const collapsedTag = row.collapsed
+        ? `<span class="jtype" style="background:#4b3d24;color:#d6b36b">` +
+          `${t('subasm.collapsedTag')}</span>` +
+          `<span style="color:#6b7480;font-size:10px">` +
+          `${t('tree.memberCount', { n: memberLinks.length })}</span>`
+        : '';
+      const title = row.collapsed
+        ? `${row.link}\n${memberLinks.join('\n')}` : row.link;
+      el.innerHTML =
+        `<div class="row1">` +
+        `<span class="caret">${marker}</span>` +
+        `<span class="jname" title="${htmlEsc(title)}">${htmlEsc(row.link)}` +
+        `</span>` +
+        collapsedTag +
+        `<span class="jtype">${htmlEsc(row.joint_type || '')}</span>` +
+        `<span style="color:#6b7480;font-size:10px;overflow:hidden;` +
+        `text-overflow:ellipsis;white-space:nowrap">` +
+        `${htmlEsc(row.joint || '')}</span>` +
+        `</div>`;
+      const visibleLinks = previewTreeLinkSet(row);
+      if (visibleLinks.length) {
+        el.querySelector('.jname').style.cursor = 'pointer';
+        el.querySelector('.jname').addEventListener('click', () =>
+          selectLink(visibleLinks[0]));
+        el.addEventListener('mouseenter', () => highlightPreviewTreeRow(row, true));
+        el.addEventListener('mouseleave', () => highlightPreviewTreeRow(row, false));
+      }
+      jointsEl.appendChild(el);
+    }
+  } catch (e) {
+    if (req !== subasmTreeRequest || treeViewMode !== 'subassembly') { return; }
+    jointsEl.innerHTML = `<div class="joint" style="color:#ffb4b4">` +
+      `${htmlEsc(t('tree.subasmUnavailable', { e: e.message ?? e }))}</div>`;
+    if (countEl) { countEl.textContent = ''; }
+  }
+  return movable;
+}
+
 function buildJointRows(robot) {
   jointsEl.innerHTML = '';
   rows.clear();
+  syncTreeModeControls();
   // kinematic tree: parent link -> [joint, ...]; root = never a child
   const linkOf = (j, tag) => [...(j.urdfNode?.children ?? [])]
     .find(el => el.tagName === tag)?.getAttribute('link') ?? '';
@@ -3259,6 +3383,10 @@ function buildJointRows(robot) {
   // status summary stays accurate regardless of collapse / filter view state.
   const movable = Object.values(robot.joints)
     .filter(j => j.jointType !== 'fixed').length;
+  if (treeViewMode === 'subassembly') {
+    renderSubassemblyTreeRows(robot, movable);
+    return movable;
+  }
 
   function jointRow(j, depth, flat) {
     const isMimic = !!j.mimicJoint;
@@ -5326,6 +5454,14 @@ _jfilterEl.addEventListener('keydown', e => {
     if (viewer.robot) { buildJointRows(viewer.robot); }
   }
 });
+const _treeModeEl = document.getElementById('treemode');
+_treeModeEl?.addEventListener('change', () => {
+  treeViewMode = _treeModeEl.value === 'subassembly'
+    ? 'subassembly' : 'expanded';
+  document.getElementById('selall').checked = false;
+  if (viewer.robot) { buildJointRows(viewer.robot); }
+});
+syncTreeModeControls();
 
 // bulk select / set
 document.getElementById('selall').addEventListener('change', e => {

@@ -203,6 +203,8 @@ def test_collapse_preview_replaces_no_expand_subassembly_members():
         ("plate_1", 0, "root", False),
         ("servo_1", 1, "fixed", True),
     ]
+    assert payload["tree_rows"][1]["member_links"] == [
+        "servo_1__case_1", "servo_1__horn_1"]
 
 
 def test_collapse_preview_keeps_expanded_override():

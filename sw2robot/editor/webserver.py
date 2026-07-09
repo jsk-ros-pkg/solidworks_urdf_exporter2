@@ -1320,6 +1320,7 @@ def _tree_rows_payload(base_link, links, joints):
             "source_joint": joint.get("source_name") if joint else None,
             "joint_type": joint.get("type") if joint else "root",
             "collapsed": bool(info.get("collapsed")),
+            "member_links": info.get("member_links", []),
             "root": joint is None,
         })
         for child_joint in by_parent.get(link, []):
