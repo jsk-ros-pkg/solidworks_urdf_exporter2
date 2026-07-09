@@ -2685,6 +2685,7 @@ let jointFilter = '';          // substring filter: when set, the tree collapses
                                // to exactly the matches (see buildJointRows)
 let treeViewMode = 'expanded'; // expanded = editable URDF tree; subassembly =
                                // read-only collapse_preview tree
+let robotViewMode = 'normal';  // normal | collapsed_preview
 let subasmTreeRequest = 0;     // discard stale async preview responses
 const playRows = new Map();    // joint name -> "move" mode slider record
 let playMode = false;          // movable-joints-only panel active
@@ -3661,19 +3662,26 @@ document.getElementById('masslistbtn').addEventListener('click', () => {
 });
 
 function syncTreeModeControls() {
-  const readonly = treeViewMode === 'subassembly';
+  const effectiveMode = robotViewMode === 'collapsed_preview'
+    ? 'subassembly' : treeViewMode;
+  const readonly = effectiveMode === 'subassembly';
   const treeMode = document.getElementById('treemode');
   if (treeMode) {
     treeMode.querySelector('option[value="expanded"]').textContent =
       t('tree.modeExpanded');
     treeMode.querySelector('option[value="subassembly"]').textContent =
       t('tree.modeSubassembly');
-    treeMode.value = treeViewMode;
+    treeMode.value = effectiveMode;
+    treeMode.disabled = robotViewMode === 'collapsed_preview';
   }
   for (const id of ['selall', 'bulktype', 'bulkset', 'bulkdel']) {
     const el = document.getElementById(id);
     if (el) { el.disabled = readonly; }
   }
+}
+
+function effectiveTreeViewMode() {
+  return robotViewMode === 'collapsed_preview' ? 'subassembly' : treeViewMode;
 }
 
 function previewTreeLinkSet(row) {
@@ -3697,7 +3705,9 @@ async function renderSubassemblyTreeRows(robot, movable) {
   try {
     const resp = await fetch('/api/collapse_preview');
     const r = await resp.json();
-    if (req !== subasmTreeRequest || treeViewMode !== 'subassembly') { return; }
+    if (req !== subasmTreeRequest || effectiveTreeViewMode() !== 'subassembly') {
+      return;
+    }
     if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
     const q = jointFilter.trim().toLowerCase();
     const allRows = r.tree_rows || [];
@@ -3778,7 +3788,9 @@ async function renderSubassemblyTreeRows(robot, movable) {
       jointsEl.appendChild(el);
     }
   } catch (e) {
-    if (req !== subasmTreeRequest || treeViewMode !== 'subassembly') { return; }
+    if (req !== subasmTreeRequest || effectiveTreeViewMode() !== 'subassembly') {
+      return;
+    }
     jointsEl.innerHTML = `<div class="joint" style="color:#ffb4b4">` +
       `${htmlEsc(t('tree.subasmUnavailable', { e: e.message ?? e }))}</div>`;
     if (countEl) { countEl.textContent = ''; }
@@ -3790,6 +3802,12 @@ function buildJointRows(robot) {
   jointsEl.innerHTML = '';
   rows.clear();
   syncTreeModeControls();
+  const movable = Object.values(robot?.joints ?? {})
+    .filter(j => j.jointType !== 'fixed').length;
+  if (effectiveTreeViewMode() === 'subassembly') {
+    renderSubassemblyTreeRows(robot, movable);
+    return movable;
+  }
   // kinematic tree: parent link -> [joint, ...]; root = never a child
   const linkOf = (j, tag) => [...(j.urdfNode?.children ?? [])]
     .find(el => el.tagName === tag)?.getAttribute('link') ?? '';
@@ -3805,15 +3823,6 @@ function buildJointRows(robot) {
     (a, b) => linkOf(a, 'child').localeCompare(linkOf(b, 'child'))));
   const roots = Object.keys(robot.links)
     .filter(n => !childLinks.has(n));
-  // total movable joints in the robot -- counted over the whole model so the
-  // status summary stays accurate regardless of collapse / filter view state.
-  const movable = Object.values(robot.joints)
-    .filter(j => j.jointType !== 'fixed').length;
-  if (treeViewMode === 'subassembly') {
-    renderSubassemblyTreeRows(robot, movable);
-    return movable;
-  }
-
   function jointRow(j, depth, flat) {
     const isMimic = !!j.mimicJoint;
     const isMov = j.jointType !== 'fixed';
@@ -8117,6 +8126,7 @@ function clearViewer() {
   const r = viewer.robot;
   if (r && r.parent) { r.parent.remove(r); }
   viewer.robot = null;
+  robotViewMode = 'normal';
   jointsEl.innerHTML = '';
   rows.clear();
   document.getElementById('selbar').style.display = 'none';
@@ -8141,6 +8151,7 @@ function loadRobot(info, { drop = false, keepPose = false,
   // fresh package -> drop the old actions/camera so they can't replay onto it
   if (!keepPose) { _resetSessionLogs(); }
   op('loadRobot', { name: info?.name, keepPose, drop, previewOnly });
+  robotViewMode = previewOnly ? 'collapsed_preview' : 'normal';
   cancelEndcoords();        // a rebuild invalidates any open placement session
   document.getElementById('emptyprompt').style.display = 'none';
   if (((keepPose || followCamera) && viewer.robot) || restoreAngles) {
