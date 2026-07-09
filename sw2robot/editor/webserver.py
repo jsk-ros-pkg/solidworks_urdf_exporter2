@@ -1167,6 +1167,34 @@ def _set_subassembly_parent_override_yaml(txt, graph, name, parent):
     return _remove_yaml_map_entry(txt, "subassembly_parent_overrides", name)
 
 
+def _subassembly_origin_links(yml_txt):
+    """Preview-only representative member links for collapsed sub-assemblies."""
+    import yaml as _yaml
+
+    try:
+        cfg = _yaml.safe_load(yml_txt) or {}
+        if not isinstance(cfg, dict):
+            return {}
+    except Exception:
+        return {}
+    raw = cfg.get("subassembly_origin_links") or {}
+    if not isinstance(raw, dict):
+        return {}
+    return {str(k): str(v) for k, v in raw.items() if v is not None}
+
+
+def _set_subassembly_origin_link_yaml(txt, graph, name, origin_link):
+    """Set/reset one preview-only collapsed sub-assembly origin link."""
+    names = _subassembly_names(graph)
+    if name not in names:
+        raise ValueError(f"no CAD sub-assembly '{name}'")
+    if origin_link:
+        return _upsert_yaml_map(
+            txt, "subassembly_origin_links", name,
+            _yaml_scalar(origin_link))
+    return _remove_yaml_map_entry(txt, "subassembly_origin_links", name)
+
+
 def _canonical_tree_payload(graph, yml_txt=""):
     """Fully-expanded tree plus CAD sub-assembly membership.
 
@@ -1243,6 +1271,7 @@ def _collapse_preview_payload(graph, yml_txt=""):
     canonical = _canonical_tree_payload(graph, yml_txt)
     states = _subassemblies_payload(graph, yml_txt)
     parent_overrides = _subassembly_parent_overrides(yml_txt)
+    origin_links = _subassembly_origin_links(yml_txt)
     by_sub = {s["name"]: s for s in canonical["subassemblies"]}
     collapse_link = {}
     collapsed = []
@@ -1262,6 +1291,7 @@ def _collapse_preview_payload(graph, yml_txt=""):
             "internal_joints": sub["internal_joints"],
             "boundary_joints": sub["boundary_joints"],
             "selected_parent": "",
+            "selected_origin_link": origin_links.get(row["name"], ""),
         }
         collapsed.append(info)
         for link in sub["member_links"]:
@@ -1276,6 +1306,7 @@ def _collapse_preview_payload(graph, yml_txt=""):
     for sub in collapsed:
         sub["selected_parent"] = selected_parent_by_subassembly.get(
             sub["name"], "")
+    group_choices = _collapse_group_choices(collapsed, origin_links)
 
     links = []
     inserted = set()
@@ -1327,6 +1358,7 @@ def _collapse_preview_payload(graph, yml_txt=""):
         "dropped_internal_joints": dropped,
         "collapsed_subassemblies": collapsed,
         "parent_choices": parent_choices,
+        "group_choices": group_choices,
         "canonical_counts": {
             "links": len(canonical["links"]),
             "joints": len(canonical["joints"]),
@@ -1364,6 +1396,56 @@ def _collapse_parent_choices(collapsed, collapse_link, parent_overrides):
             "parents": [
                 {"link": p, "joints": sorted(x for x in js if x)}
                 for p, js in sorted(by_parent.items())
+            ],
+        })
+    return choices
+
+
+def _subassembly_member_groups(sub):
+    """Connected components of a collapsed sub-assembly's expanded members."""
+    members = list(sub.get("member_links") or [])
+    if not members:
+        return []
+    member_set = set(members)
+    internal_adj = {m: set() for m in members}
+    for j in sub.get("internal_joints") or []:
+        p, c = j.get("parent"), j.get("child")
+        if p in member_set and c in member_set:
+            internal_adj[p].add(c)
+            internal_adj[c].add(p)
+    comps = []
+    todo = set(members)
+    while todo:
+        start = todo.pop()
+        comp = [start]
+        q = [start]
+        while q:
+            cur = q.pop()
+            for nxt in internal_adj.get(cur, ()):
+                if nxt in todo:
+                    todo.remove(nxt)
+                    comp.append(nxt)
+                    q.append(nxt)
+        comps.append(sorted(comp))
+    comps.sort(key=lambda x: (x[0] if x else "", len(x)))
+    return comps
+
+
+def _collapse_group_choices(collapsed, origin_links):
+    """List origin link candidates for disconnected collapsed member groups."""
+    choices = []
+    for sub in collapsed:
+        groups = _subassembly_member_groups(sub)
+        selected = origin_links.get(sub.get("name"), "")
+        if len(groups) <= 1 and not selected:
+            continue
+        choices.append({
+            "subassembly": sub.get("name"),
+            "link_name": sub.get("link_name"),
+            "selected_origin_link": selected,
+            "groups": [
+                {"origin_link": g[0], "links": g, "size": len(g)}
+                for g in groups
             ],
         })
     return choices
@@ -1427,35 +1509,25 @@ def _validate_collapsed_tree(base_link, links, joints, collapsed,
             dfs(root)
 
     for sub in collapsed:
-        members = list(sub.get("member_links") or [])
-        if len(members) <= 1:
+        comps = _subassembly_member_groups(sub)
+        if len(comps) <= 1:
             continue
-        member_set = set(members)
-        internal_adj = {m: set() for m in members}
-        for j in sub.get("internal_joints") or []:
-            p, c = j.get("parent"), j.get("child")
-            if p in member_set and c in member_set:
-                internal_adj[p].add(c)
-                internal_adj[c].add(p)
-        comps = []
-        todo = set(members)
-        while todo:
-            start = todo.pop()
-            comp = [start]
-            q = [start]
-            while q:
-                cur = q.pop()
-                for nxt in internal_adj.get(cur, ()):
-                    if nxt in todo:
-                        todo.remove(nxt)
-                        comp.append(nxt)
-                        q.append(nxt)
-            comps.append(sorted(comp))
-        # ``todo`` is a set, so the discovery order of the groups is not
-        # deterministic across platforms/hash seeds -- sort the groups (each
-        # already sorted internally) so the payload is stable.
-        comps.sort()
-        if len(comps) > 1:
+        selected_origin_link = sub.get("selected_origin_link")
+        if selected_origin_link and any(selected_origin_link in comp for comp in comps):
+            pass
+        elif selected_origin_link:
+            issues.append({
+                "severity": "warning",
+                "code": "invalid_origin_link",
+                "subassembly": sub.get("name"),
+                "link": sub.get("link_name"),
+                "origin_link": selected_origin_link,
+                "components": comps,
+                "message": (
+                    f"{sub.get('name')} uses stale origin link "
+                    f"{selected_origin_link}"),
+            })
+        else:
             issues.append({
                 "severity": "warning",
                 "code": "disconnected_members",
@@ -3998,6 +4070,67 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                                 "parent": parent, "preview_only": True,
                                 "rebuilt": False})
                 print(f"[sw2robot.web] set_subassembly_parent: "
+                      f"{name_in} -> {label} (preview only)")
+                return self._send_json(payload)
+            if parsed.path == "/api/set_subassembly_origin_link":
+                cls = type(self)
+                n = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(n) or b"{}")
+                name_in = (body.get("name") or "").strip()
+                origin_link = (body.get("origin_link") or "").strip()
+                if origin_link == "auto":
+                    origin_link = ""
+                if not cls.pkg_dir:
+                    return self._send_json({"error": "no package open"}, 400)
+                if not _cad_mode(cls.pkg_dir):
+                    return self._send_json(
+                        {"error": "sub-assembly origin links need the CAD "
+                                  "graph.json"},
+                        400)
+                if not name_in:
+                    return self._send_json({"error": "name required"}, 400)
+                from sw2robot.exporter.state import GraphState
+                graph = GraphState.load(os.path.join(cls.pkg_dir, "graph.json"))
+                name = os.path.splitext(os.path.basename(cls.urdf_rel))[0]
+                yml = os.path.join(cls.pkg_dir, name + ".joints.yaml")
+                if not os.path.exists(yml):
+                    return self._send_json(
+                        {"error": "joints.yaml not found -- re-extract once"},
+                        400)
+                with open(yml, encoding="utf-8") as f:
+                    txt = f.read()
+                try:
+                    preview = _collapse_preview_payload(graph, txt)
+                    choices = {
+                        c.get("subassembly"): c
+                        for c in preview.get("group_choices", [])
+                    }
+                    if origin_link:
+                        allowed = {
+                            link
+                            for group in choices.get(name_in, {}).get("groups", [])
+                            for link in group.get("links", [])
+                        }
+                        if origin_link not in allowed:
+                            return self._send_json(
+                                {"error": f"'{origin_link}' is not a member "
+                                          f"origin link candidate for {name_in}"},
+                                400)
+                    txt = _set_subassembly_origin_link_yaml(
+                        txt, graph, name_in, origin_link)
+                except ValueError as e:
+                    return self._send_json({"error": str(e)}, 400)
+                label = origin_link or "auto"
+                _snapshot(cls.pkg_dir, yml,
+                          f"sub-assembly origin link {name_in} -> {label}")
+                with open(yml, "w", encoding="utf-8") as f:
+                    f.write(txt)
+                payload = _collapse_preview_payload(graph, txt)
+                payload.update({"ok": True, "name": name_in,
+                                "origin_link": origin_link,
+                                "preview_only": True,
+                                "rebuilt": False})
+                print(f"[sw2robot.web] set_subassembly_origin_link: "
                       f"{name_in} -> {label} (preview only)")
                 return self._send_json(payload)
             if parsed.path == "/api/set_base":

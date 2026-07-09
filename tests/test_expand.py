@@ -225,6 +225,7 @@ def test_collapse_preview_keeps_expanded_override():
 def test_collapse_preview_applies_subassembly_parent_override():
     from sw2robot.editor.webserver import (
         _collapse_preview_payload,
+        _set_subassembly_origin_link_yaml,
         _set_subassembly_parent_override_yaml,
     )
 
@@ -252,7 +253,8 @@ joints:
         "bracket_1", "plate_1"]
     assert {
         i["code"] for i in payload["validation"]["issues"]
-    } >= {"multiple_parents", "multiple_boundary_parents"}
+    } >= {"multiple_parents", "multiple_boundary_parents",
+          "disconnected_members"}
 
     txt = _set_subassembly_parent_override_yaml(
         txt, graph, "servo-1", "bracket_1")
@@ -263,6 +265,21 @@ joints:
         ("plate_1", "bracket_1"),
     ]
     assert "multiple_boundary_parents" not in {
+        i["code"] for i in payload["validation"]["issues"]
+    }
+    assert payload["group_choices"][0]["subassembly"] == "servo-1"
+    assert [g["origin_link"] for g in payload["group_choices"][0]["groups"]] == [
+        "servo_1__case_1", "servo_1__horn_1"]
+    assert "disconnected_members" in {
+        i["code"] for i in payload["validation"]["issues"]
+    }
+
+    txt = _set_subassembly_origin_link_yaml(
+        txt, graph, "servo-1", "servo_1__horn_1")
+    payload = _collapse_preview_payload(graph, txt)
+    assert payload["group_choices"][0]["selected_origin_link"] == \
+        "servo_1__horn_1"
+    assert "disconnected_members" not in {
         i["code"] for i in payload["validation"]["issues"]
     }
 
