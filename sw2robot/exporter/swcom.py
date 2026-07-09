@@ -660,35 +660,42 @@ class SolidWorks:
               f"{t4 - t3:.1f}s")
         return doc
 
-    def _dependency_files(self, src_path):
-        """Every file this assembly references, resolved to its CURRENT location
-        via ``GetDocumentDependencies2`` (from the file, no open required).
-
-        SearchSubfolders is ON, which is what recovers a MOVED or relocated part:
-        an assembly saved on another machine bakes in a stale absolute path (a
-        different Drive letter, a ``\\.shortcut-targets-by-id\\`` id, an old
-        folder), so the recorded path no longer exists here.  With the flag on,
-        SolidWorks searches and returns the part's real, current location.  We use
-        these both to seed the reference search paths AND to co-locate the parts
-        beside the throw-away assembly copy (a distant SHARED library -- e.g.
-        ``.../common_parts/servo/...`` while the assembly is under
-        ``.../beetle/asm/subasm`` -- is otherwise never reached, and the assembly
-        opens with every component unresolved: "no usable components")."""
-        files = []
+    def _deps(self, src_path, search_subfolders):
+        """``GetDocumentDependencies2`` -> list of referenced file paths (from the
+        file, no open required).  ``[name, path, name, path, ...]`` -> the paths."""
         try:
-            # (document, Traverseflag=whole tree, SearchSubfolders=ON, AddReadOnlyInfo=off)
-            deps = self.app.GetDocumentDependencies2(src_path, True, True, False)
+            deps = self.app.GetDocumentDependencies2(
+                src_path, True, bool(search_subfolders), False)
         except Exception as e:
             print(f"      WARN: GetDocumentDependencies2 failed ({e!r}); "
                   f"distant/relocated part references may not resolve")
-            return files
-        if not deps:
-            return files
-        # flat [name, path, name, path, ...]; keep the existing resolved files
-        seen = set()
-        for p in list(deps)[1::2]:
+            return None
+        return [str(p) for p in list(deps or [])[1::2]]
+
+    def _dependency_files(self, src_path):
+        """Every file this assembly references, resolved to its CURRENT location.
+
+        Fast path first: ``GetDocumentDependencies2`` with SearchSubfolders OFF
+        just reads the recorded paths and returns instantly.  Only if some of
+        those paths are STALE (a part was moved -- saved on another machine, a
+        different Drive letter, a ``\\.shortcut-targets-by-id\\`` id) do we pay
+        the SLOW subfolder search (ON), which walks the drive to find the part's
+        current location.  Turning the flag ON unconditionally made SolidWorks
+        scan the whole subtree for every assembly -- minutes over a shared drive,
+        long enough to look like a hang on a big reference tree (e.g. tiger_8link)."""
+        recorded = self._deps(src_path, False)
+        if recorded is None:
+            return []
+        paths = recorded
+        if any(not os.path.isfile(os.path.abspath(p)) for p in recorded):
+            # a recorded path points nowhere here -> resolve via the slow search
+            resolved = self._deps(src_path, True)
+            if resolved:
+                paths = resolved
+        files, seen = [], set()
+        for p in paths:
             try:
-                ap = os.path.abspath(str(p))
+                ap = os.path.abspath(p)
             except Exception:
                 continue
             key = os.path.normcase(ap)
