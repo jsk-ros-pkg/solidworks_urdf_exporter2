@@ -2769,10 +2769,47 @@ function htmlEsc(s) {
 function validationIssuesHtml(validation) {
   const issues = validation?.issues || [];
   if (!issues.length) { return ''; }
+  function previewList(values, limit = 5) {
+    const arr = (values || []).filter(v => v !== null && v !== undefined);
+    if (!arr.length) { return ''; }
+    const head = arr.slice(0, limit).map(htmlEsc).join(', ');
+    const more = arr.length > limit ? `, +${arr.length - limit} more` : '';
+    return head + more;
+  }
+  function issueDetailHtml(issue) {
+    const parts = [];
+    const parents = previewList(issue.parents);
+    if (parents) {
+      parts.push(`<div>candidates: ${parents}</div>`);
+    }
+    const joints = previewList(issue.source_joints || issue.joints);
+    if (joints) {
+      parts.push(`<div>joints: ${joints}</div>`);
+    }
+    const links = previewList(issue.links, 8);
+    if (links) {
+      parts.push(`<div>links: ${links}</div>`);
+    }
+    const comps = issue.components || [];
+    if (comps.length) {
+      const rows = comps.slice(0, 3).map((comp, i) => {
+        const label = previewList(comp, 4);
+        return `<div>group ${i + 1} (${comp.length}): ${label}</div>`;
+      });
+      if (comps.length > 3) {
+        rows.push(`<div>+${comps.length - 3} groups</div>`);
+      }
+      parts.push(rows.join(''));
+    }
+    if (!parts.length) { return ''; }
+    return `<div style="color:#c6ad79;margin:2px 0 5px 12px">` +
+      parts.join('') + `</div>`;
+  }
   const rows = issues.slice(0, 6).map(issue =>
     `<div style="margin-top:2px">` +
     `<span style="color:#d6b36b">${htmlEsc(issue.code || 'warning')}</span>` +
-    `: ${htmlEsc(issue.message || '')}</div>`).join('');
+    `: ${htmlEsc(issue.message || '')}</div>` +
+    issueDetailHtml(issue)).join('');
   const more = issues.length > 6
     ? `<div style="color:#8a93a3;margin-top:2px">+${issues.length - 6}</div>`
     : '';

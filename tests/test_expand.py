@@ -237,6 +237,12 @@ def test_validate_collapsed_tree_reports_multiple_parents_and_cycles():
     payload = _validate_collapsed_tree("base", links, joints, [])
     codes = {i["code"] for i in payload["issues"]}
     assert {"multiple_parents", "cycle"} <= codes
+    multi = next(i for i in payload["issues"]
+                 if i["code"] == "multiple_parents")
+    assert multi["parents"] == ["alt", "base"]
+    assert multi["source_joints"] == ["j1", "j2"]
+    cycle = next(i for i in payload["issues"] if i["code"] == "cycle")
+    assert cycle["links"] == ["base", "arm", "base"]
     assert payload["ok"] is False
 
 
@@ -259,6 +265,7 @@ def test_validate_collapsed_tree_reports_disconnected_members():
     issue = payload["issues"][0]
     assert issue["code"] == "disconnected_members"
     assert issue["subassembly"] == "sub-1"
+    assert issue["components"] == [["sub_1__a"], ["sub_1__b"]]
 
 
 def test_subassemblies_payload_reports_expansion_state():
