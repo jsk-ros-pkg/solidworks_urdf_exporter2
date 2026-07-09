@@ -1097,6 +1097,9 @@ the config and does NOT re-detect). Needs graph.json (CAD mode).">🔗 re-detect
                                   ja: a => `サブアセンブリ原点linkの保存に失敗: ${a.e}` },
     'subasm.driverJointChoicesTitle': { en: 'Motion driver joints',
                                         ja: 'motion代表joint' },
+    'subasm.driverJointChoicesHelp': {
+      en: 'Normal joints provide type, axis, and limits for preview joints; the preview robot moves its own collapsed joints.',
+      ja: 'normal joint は preview joint の type / axis / limit のコピー元です。実際に動かすのは畳み込みロボット内の preview joint です。' },
     'subasm.driverJointAuto': { en: 'auto', ja: 'auto' },
     'subasm.driverJointSetOk': { en: a => `${a.name}: driver joint ${a.sourceJoint} ✓`,
                                  ja: a => `${a.name}: driver joint ${a.sourceJoint} ✓` },
@@ -1140,8 +1143,9 @@ the config and does NOT re-detect). Needs graph.json (CAD mode).">🔗 re-detect
                               ja: '通常ロボットを読み込みました' },
     'subasm.previewSlidersTitle': { en: 'Collapsed preview joints',
                                     ja: '畳み込みpreview joint' },
-    'subasm.previewSlidersHelp': { en: 'Preview-only controls for the currently displayed collapsed robot.',
-                                   ja: '表示中の畳み込みロボットだけを動かすpreview専用操作です。' },
+    'subasm.previewSlidersHelp': {
+      en: 'These sliders move preview joints in the displayed collapsed robot. Source normal joints only supply type, axis, and limits.',
+      ja: 'このスライダーは表示中の畳み込みロボットの preview joint を動かします。source normal joint は type / axis / limit のコピー元です。' },
     'subasm.previewSlidersEmpty': { en: 'No movable preview joints.',
                                     ja: '動かせるpreview jointがありません。' },
     'subasm.largeConfirm': {
@@ -2729,6 +2733,25 @@ function previewJoint(name, val) {
   if (jpSync && jpSync.name === name) { jpSync.set(val); }
 }
 
+function jointLinkOf(j, tag) {
+  return [...(j?.urdfNode?.children ?? [])]
+    .find(el => el.tagName === tag)?.getAttribute('link') ?? '';
+}
+
+function parentJointForLink(linkName) {
+  const link = viewer.robot?.links?.[linkName];
+  return link?.parent?.isURDFJoint ? link.parent : null;
+}
+
+function previewJointForPlanRow(row) {
+  const byName = viewer.robot?.joints?.[row?.name || ''];
+  if (byName) { return byName; }
+  const byChild = parentJointForLink(row?.child || '');
+  if (byChild) { return byChild; }
+  return Object.values(viewer.robot?.joints ?? {})
+    .find(j => jointLinkOf(j, 'child') === row?.child) || null;
+}
+
 const collapsed = new Set();    // link names folded in the tree (persists
                                 // across rebuilds within the session)
 let rootBaseName = null;        // which COMPONENT is base_link right now
@@ -3079,6 +3102,8 @@ function driverJointChoicesHtml(driverChoices) {
   return `<div style="border:1px solid #3d5244;background:#1f2a25;` +
     `border-radius:4px;padding:6px 8px;margin:8px 0;font-size:11px">` +
     `<div style="color:#9bd6ad">${t('subasm.driverJointChoicesTitle')}</div>` +
+    `<div style="color:#8a93a3;margin:2px 0 5px">` +
+    `${htmlEsc(t('subasm.driverJointChoicesHelp'))}</div>` +
     rows + `</div>`;
 }
 
@@ -3247,7 +3272,6 @@ async function loadCollapsedPreviewRobot() {
     }, {
       keepPose: false,
       previewOnly: true,
-      restoreAngles: captureJointAngles(viewer.robot),
     });
     const meshIssues = (r.mesh_report || []).filter(x =>
       Number(x.missing_count || 0) || Number(x.visuals || 0) === 0);
@@ -3829,10 +3853,10 @@ function collapsedPreviewSlidersHtml(plan) {
   const joints = [];
   for (const row of (plan?.joints || [])) {
     const name = row.name || '';
-    if (!name || seen.has(name)) { continue; }
-    seen.add(name);
-    const j = viewer.robot?.joints?.[name];
+    const j = previewJointForPlanRow(row);
     if (!j || j.jointType === 'fixed' || j.mimicJoint) { continue; }
+    if (!name || seen.has(j.name)) { continue; }
+    seen.add(j.name);
     joints.push({ row, joint: j });
   }
   const card = document.createElement('div');
@@ -3859,20 +3883,22 @@ function collapsedPreviewSlidersHtml(plan) {
     };
     const item = document.createElement('div');
     item.style.cssText = 'margin-top:6px';
-    const label = row.child || joint.name;
+    const label = row.child || jointLinkOf(joint, 'child') || joint.name;
     const source = row.driver_source_joint || row.source_joint || '';
-    const sourcePrefix = row.driver_source_joint ? 'driver: ' : '';
+    const previewName = joint.name;
     const nativeStep = um.pris ? 0.0005 : 0.01;
     item.innerHTML =
       `<div class="row1">` +
       `<span class="caret">·</span>` +
-      `<span class="jname" title="${htmlEsc(joint.name)}">${htmlEsc(label)}</span>` +
+      `<span class="jname" title="${htmlEsc(previewName)}">` +
+      `${htmlEsc(label)}</span>` +
       `<span class="jtype">${htmlEsc(joint.jointType)}</span>` +
       `<span class="jval">${htmlEsc(fmtDisp(Number(joint.angle) || 0))}</span>` +
       `</div>` +
       `<div style="color:#6b7480;font-size:10px;overflow:hidden;` +
       `text-overflow:ellipsis;white-space:nowrap;margin-left:17px">` +
-      `${htmlEsc(sourcePrefix + (source || joint.name))}</div>` +
+      `${htmlEsc('preview: ' + previewName)}` +
+      `${source ? htmlEsc(' / source normal: ' + source) : ''}</div>` +
       `<div class="jslider" style="margin-left:17px">` +
       `<input type="range" min="${lo}" max="${hi}" step="${nativeStep}" ` +
       `value="${Number(joint.angle) || 0}"></div>`;
@@ -3882,9 +3908,13 @@ function collapsedPreviewSlidersHtml(plan) {
       previewJoint(joint.name, parseFloat(slider.value));
     });
     item.querySelector('.jname')?.addEventListener('click', () => {
-      if (row.child && viewer.robot?.links?.[row.child]) { selectLink(row.child); }
+      const child = jointLinkOf(joint, 'child') || row.child;
+      if (child && viewer.robot?.links?.[child]) { selectLink(child); }
     });
-    rows.set(joint.name, { joint, row: item, slider, val, fmtDisp });
+    rows.set(joint.name, {
+      joint, row: item, slider, val, fmtDisp,
+      child: jointLinkOf(joint, 'child') || row.child,
+    });
     card.appendChild(item);
   }
   return card;
@@ -4014,26 +4044,23 @@ function buildJointRows(robot) {
     renderSubassemblyTreeRows(robot, movable);
     return movable;
   }
-  // kinematic tree: parent link -> [joint, ...]; root = never a child
-  const linkOf = (j, tag) => [...(j.urdfNode?.children ?? [])]
-    .find(el => el.tagName === tag)?.getAttribute('link') ?? '';
   const byParent = new Map();
   const childLinks = new Set();
   for (const j of Object.values(robot.joints)) {
-    const p = linkOf(j, 'parent') || (j.parent?.name ?? '');
-    childLinks.add(linkOf(j, 'child'));
+    const p = jointLinkOf(j, 'parent') || (j.parent?.name ?? '');
+    childLinks.add(jointLinkOf(j, 'child'));
     if (!byParent.has(p)) { byParent.set(p, []); }
     byParent.get(p).push(j);
   }
   byParent.forEach(list => list.sort(
-    (a, b) => linkOf(a, 'child').localeCompare(linkOf(b, 'child'))));
+    (a, b) => jointLinkOf(a, 'child').localeCompare(jointLinkOf(b, 'child'))));
   const roots = Object.keys(robot.links)
     .filter(n => !childLinks.has(n));
   function jointRow(j, depth, flat) {
     const isMimic = !!j.mimicJoint;
     const isMov = j.jointType !== 'fixed';
-    const parent = linkOf(j, 'parent');
-    const child = linkOf(j, 'child');
+    const parent = jointLinkOf(j, 'parent');
+    const child = jointLinkOf(j, 'child');
     const kids = byParent.get(child) ?? [];
     const row = document.createElement('div');
     row.className = 'joint';
@@ -4345,7 +4372,9 @@ viewer.addEventListener('angle-change', e => {
   const rec = rows.get(e.detail);
   if (rec && rec.slider) {
     rec.slider.value = Number(rec.joint.angle);
-    rec.val.textContent = fmt(Number(rec.joint.angle));
+    rec.val.textContent = rec.fmtDisp
+      ? rec.fmtDisp(Number(rec.joint.angle))
+      : fmt(Number(rec.joint.angle));
   }
   const pr = playRows.get(e.detail);
   if (pr) {
@@ -8415,9 +8444,9 @@ function loadRobot(info, { drop = false, keepPose = false,
   document.getElementById('linkinfo').style.display = 'none';
   document.getElementById('title').textContent = info.name;
   document.title = `${info.name} — sw2robot`;
-  if (!drop && !previewOnly) {
+  if (!drop) {
     refreshRootBox({ resetBaseline: true });
-    refreshCompMeta();
+    if (!previewOnly) { refreshCompMeta(); }
   }
   statusEl.textContent = t('status.loadingUrdf');
   log(t('urdf.loading', { urdf: info.urdf }));
