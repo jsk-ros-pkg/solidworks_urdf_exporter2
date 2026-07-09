@@ -64,6 +64,55 @@ Which one fits depends on your workflow, not on which is "better":
 | Edit an existing URDF | — | ✓ (any URDF, not just its own) |
 | Install | SolidWorks add-in | single prebuilt binary (no Python) |
 
+## Install in one line (no Python, no clone)
+
+A single command downloads the prebuilt editor for your OS, drops it on your
+`PATH` as `sw2robot-web`, and you're done. No Python, no cloning this repo.
+
+**Linux / macOS** — with `curl`:
+
+```bash
+curl -LsSf https://jsk-ros-pkg.github.io/solidworks_urdf_exporter2/install.sh | sh
+```
+
+…or with `wget` if you don't have `curl`:
+
+```bash
+wget -qO- https://jsk-ros-pkg.github.io/solidworks_urdf_exporter2/install.sh | sh
+```
+
+**Windows** — in PowerShell:
+
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://jsk-ros-pkg.github.io/solidworks_urdf_exporter2/install.ps1 | iex"
+```
+
+Then launch the editor (it opens `http://localhost:8090` in your browser —
+`xdg-open` on Linux, the default browser elsewhere):
+
+```bash
+sw2robot-web
+```
+
+The installer picks the matching `sw2robot-web-<os>-<arch>` asset from the
+[latest release](https://github.com/jsk-ros-pkg/solidworks_urdf_exporter2/releases/latest),
+installs it to `~/.local/bin` (Windows: `%LOCALAPPDATA%\sw2robot\bin`), and adds
+that dir to `PATH` if needed. Knobs:
+
+```bash
+# pin a version instead of latest
+SW2ROBOT_VERSION=v0.3.2 curl -LsSf https://jsk-ros-pkg.github.io/solidworks_urdf_exporter2/install.sh | sh
+# or, when piping:  ... | sh -s -- --version v0.3.2 --bin-dir /usr/local/bin
+
+# choose the install dir / don't touch any shell rc
+SW2ROBOT_INSTALL_DIR=/usr/local/bin SW2ROBOT_NO_MODIFY_PATH=1 curl -LsSf .../install.sh | sh
+```
+
+Prebuilt binaries currently ship for **Linux x64**, **macOS (Apple Silicon)**,
+and **Windows x64**. Re-running the installer upgrades in place; the editor can
+also self-update from its own UI. Prefer to grab the file by hand, or need a
+different OS/arch? The per-OS steps below still apply.
+
 ## Quick start — download the Windows `.exe` (no Python)
 
 If you just want to convert a SolidWorks assembly, you don't need to install
