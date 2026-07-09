@@ -2327,6 +2327,17 @@ def _collapse_plan_name_map(plan, link_elems):
     return mapping
 
 
+def _urdf_root_link_names(root):
+    links = {ln.get("name") for ln in root.findall("link") if ln.get("name")}
+    child_links = set()
+    for j in root.findall("joint"):
+        c = j.find("child")
+        child = c.get("link") if c is not None else ""
+        if child:
+            child_links.add(child)
+    return sorted(links - child_links)
+
+
 def _collapsed_preview_urdf_text(urdf_text, plan, robot_name=None,
                                  driver_urdf_text=None):
     """Build a dry-run URDF from a collapse_plan without touching normal export.
@@ -2357,6 +2368,15 @@ def _collapsed_preview_urdf_text(urdf_text, plan, robot_name=None,
         if j.get("name")
     }
     name_map = _collapse_plan_name_map(plan, link_elems)
+    source_roots = _urdf_root_link_names(root)
+    source_root = source_roots[0] if len(source_roots) == 1 else ""
+    if source_root:
+        for plan_link in plan.get("links") or []:
+            if plan_link.get("selected_origin_source") != "canonical_base":
+                continue
+            selected = plan_link.get("selected_origin_link")
+            if selected and selected not in link_elems:
+                name_map[selected] = source_root
 
     def nm(name):
         return name_map.get(name, name)

@@ -945,6 +945,56 @@ def test_collapsed_preview_urdf_lumps_member_visuals():
     assert base_sub.find("limit").get("lower") == "-0.5"
 
 
+def test_collapsed_preview_urdf_maps_canonical_base_origin_to_urdf_root():
+    import xml.etree.ElementTree as ET
+
+    from sw2robot.editor.webserver import _collapsed_preview_urdf_text
+
+    expanded_urdf = """<?xml version="1.0"?>
+<robot name="demo">
+  <link name="base_link">
+    <visual><origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="../meshes/base.stl"/></geometry></visual>
+  </link>
+  <link name="sub_b">
+    <visual><origin xyz="0 0 0.5" rpy="0 0 0"/>
+      <geometry><mesh filename="../meshes/b.stl"/></geometry></visual>
+  </link>
+  <joint name="base_link__sub_b" type="fixed">
+    <origin xyz="0 2 0" rpy="0 0 0"/>
+    <parent link="base_link"/><child link="sub_b"/>
+  </joint>
+</robot>
+"""
+    plan = {
+        "version": 1,
+        "base_link": "sub",
+        "ready_for_urdf": True,
+        "links": [
+            {"link": "sub", "name": "sub", "kind": "collapsed_subassembly",
+             "member_links": ["sub_a", "sub_b"],
+             "selected_origin_link": "sub_a",
+             "selected_origin_source": "canonical_base"},
+        ],
+        "joints": [],
+        "dropped_joints": [],
+        "collapsed_subassemblies": [],
+        "link_replacements": [
+            {"source_link": "sub_a", "collapsed_link": "sub"},
+            {"source_link": "sub_b", "collapsed_link": "sub"},
+        ],
+    }
+
+    root = ET.fromstring(_collapsed_preview_urdf_text(expanded_urdf, plan))
+    link = next(x for x in root.findall("link")
+                if x.get("name") == "base_link")
+    visuals = link.findall("visual")
+    assert [v.find(".//mesh").get("filename") for v in visuals] == [
+        "../meshes/base.stl", "../meshes/b.stl"]
+    assert visuals[0].find("origin").get("xyz") == "0 0 0"
+    assert visuals[1].find("origin").get("xyz") == "0 2 0.5"
+
+
 def test_collapsed_preview_urdf_uses_normal_driver_joint_source():
     import xml.etree.ElementTree as ET
 
