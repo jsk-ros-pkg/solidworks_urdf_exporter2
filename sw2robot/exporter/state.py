@@ -35,6 +35,14 @@ class ComponentState(BaseModel):
     sw_mass: float | None = None              # kg
     sw_com: list[float] | None = None         # centre of mass [x,y,z] (m)
     sw_inertia: list[float] | None = None     # (ixx,ixy,ixz,iyy,iyz,izz) about COM
+    # True when the user manually overrode mass properties in SolidWorks (the
+    # "Override Mass Properties" dialog): sw_mass is then a deliberate value, not
+    # the material/geometry default. False on older extracts.
+    sw_mass_overridden: bool = False
+    # per-link target mass (kg): the inertial is rescaled to this exact weight
+    # (config `masses:` / the web editor). Mutually exclusive with a density
+    # override. None on older extracts / when no target is set.
+    mass_target: float | None = None
     # mass-only: keep the part's weight but drop its visual/collision geometry.
     # Valid only on a fixed child -- its inertial is lumped into the fixed parent
     # on export, so the parent's mass/inertia accounts for it without a mesh.

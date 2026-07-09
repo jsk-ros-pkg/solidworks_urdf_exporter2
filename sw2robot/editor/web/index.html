@@ -85,6 +85,12 @@
   #linkinfo .sw { display: inline-block; width: 10px; height: 10px;
                   border-radius: 2px; vertical-align: -1px;
                   border: 1px solid #555; }
+  /* link-info header (the folded-in selection bar): one tidy row of
+     equal-width, equal-height buttons so the icons and "make root" match */
+  #selbar #selname { color: #55d6ff; font-size: 12px; padding: 1px 0; }
+  #selbar button { height: 24px; padding: 0 8px; font-size: 12px;
+    line-height: 1; display: inline-flex; align-items: center;
+    justify-content: center; white-space: nowrap; }
   .jtype { font-size: 10px; padding: 0 4px; border-radius: 3px;
            background: #444; color: #ccc; }
   .joint.dirty { background: #2c2a1e; outline: 1px solid #6b5d2a; }
@@ -220,6 +226,27 @@
   .rn-input { background: #15171a; color: #cfe3ff; border: 1px solid #3a4750;
     border-radius: 3px; font: inherit; padding: 1px 4px; width: 15em; }
   .rn-input:focus { border-color: #6cf; outline: none; }
+  /* mass editor: shares #renamelist's docked-card + .rntable styling */
+  #masslist { position: absolute; top: 8px; right: 8px; bottom: 8px;
+    z-index: 12; display: flex; align-items: flex-start;
+    pointer-events: none; }
+  #masslist .card { pointer-events: auto; background: #1c2228f2;
+    border: 1px solid #456; border-radius: 8px; padding: 14px 16px;
+    max-height: 100%; max-width: 92vw; overflow: auto; color: #dde;
+    box-shadow: 0 8px 30px #000a; }
+  .mass-num { width: 6.5em; text-align: right; }
+  /* truncate long link names so the panel stays narrow (full name on hover) */
+  #masslist td.mlink { max-width: 10em; overflow: hidden;
+    text-overflow: ellipsis; }
+  /* clearly show a disabled material picker (mutually exclusive with a mass) */
+  #masslist select:disabled, #linkinfo select:disabled {
+    opacity: .4; cursor: not-allowed; text-decoration: line-through; }
+  tr.mass-warn td { background: #3a2c17; }        /* default (unset) SW mass */
+  .mass-flag { color: #e8b84b; }                  /* ⚠ marker */
+  .mass-note { color: #7a8494; font-size: 10px; }
+  .mass-summary { font-size: 11px; margin: 2px 0 8px; }
+  .mass-summary.warn { color: #e8b84b; }
+  .mass-summary.ok { color: #7bd88f; }
   .joint .mimictag { font-size: 10px; padding: 0 4px; border-radius: 3px;
                      background: #3d3556; color: #c5b3ff; }
   .joint .motag { font-size: 10px; padding: 0 4px; border-radius: 3px;
@@ -628,6 +655,9 @@
       <button id="renamelistbtn" data-i18n="ui.renamelist"
               data-i18n-title="t.renamelist"
               title="関節名・リンク名を一覧で改名">≣ 改名</button>
+      <button id="masslistbtn" data-i18n="ui.masslist"
+              data-i18n-title="t.masslist"
+              title="質量を一覧で編集">⚖ 質量</button>
       <button id="bug" data-i18n-title="t.bug"
               title="壊れたらこれ: 操作ログ+状態をサーバーに送る">🐞
       </button>
@@ -1003,6 +1033,39 @@ the config and does NOT re-detect). Needs graph.json (CAD mode).">🔗 re-detect
     'rename.resetAllBtn': { en: '↺ reset all to defaults', ja: '↺ 全デフォルト名に戻す' },
     'rename.resetAllBtnTitle': { en: 'revert every joint/link name to its original',
                                  ja: 'すべての joint 名・link 名を元の名前に戻す' },
+    // mass editor (bulk mass / density / mass-only + default-mass guard)
+    'mass.listTitle': { en: 'mass editor', ja: '質量エディタ' },
+    'mass.listHelp': { en: 'set a target mass (kg) OR a density (kg/m³) per link — one clears the other. ⚠ links use a SolidWorks default mass (no material assigned); set a value or acknowledge them before export.',
+                       ja: 'リンクごとに目標質量(kg)または密度(kg/m³)を設定（片方を設定すると他方は解除）。⚠はSW既定の質量（材質未設定）。エクスポート前に値を設定するか確認してください。' },
+    'mass.thLink': { en: 'link', ja: 'link' },
+    'mass.thMaterial': { en: 'material', ja: '材質' },
+    'mass.thMass': { en: 'mass', ja: '質量' },
+    'mass.thDensity': { en: 'density (kg/m³)', ja: '密度 (kg/m³)' },
+    'mass.thTarget': { en: 'target (kg)', ja: '目標 (kg)' },
+    'mass.thMassOnly': { en: 'mass-only', ja: '質量のみ' },
+    'mass.thReview': { en: 'reviewed', ja: '確認済' },
+    'mass.needReview': { en: a => `⚠ ${a.n} link(s) use a default SolidWorks mass — review before export`,
+                         ja: a => `⚠ ${a.n} 個のリンクがSW既定の質量です — エクスポート前に確認してください` },
+    'mass.allGood': { en: 'all link masses are set or reviewed ✓', ja: 'すべてのリンク質量は設定または確認済み ✓' },
+    'mass.ackAll': { en: '✓ acknowledge all flagged', ja: '✓ 全ての⚠を確認済みに' },
+    'mass.massOnlyFixedOnly': { en: 'mass-only is valid only on a fixed link', ja: '質量のみは固定リンクでのみ有効' },
+    'mass.setMassOk': { en: a => `mass of ${a.name} → ${a.m} kg ✓ (inertia rescaled)`,
+                        ja: a => `${a.name} の質量 → ${a.m} kg ✓（慣性を再計算）` },
+    'mass.setOk': { en: 'updated ✓ (mass/inertia rebuilt)', ja: '更新しました ✓（質量・慣性を再計算）' },
+    'mass.fail': { en: a => `mass edit failed: ${a.e}`, ja: a => `質量編集に失敗: ${a.e}` },
+    'mass.swOverride': { en: 'set in SW', ja: 'SWで設定済' },
+    'mass.thByMass': { en: 'by mass?', ja: '質量指定?' },
+    'mass.thValue': { en: 'material / mass', ja: '材質 / 質量' },
+    'mass.byMass': { en: 'set by target mass', ja: '目標質量で指定' },
+    'mass.byMassTitle': { en: 'tick to set an exact target mass; untick to drive mass from a material / density',
+                          ja: 'チェックで目標質量を指定、外すと材質・密度から質量を算出' },
+    'mass.exportBlockedTitle': { en: a => `${a.n} link(s) still use a default SolidWorks mass:`,
+                                 ja: a => `${a.n} 個のリンクがSW既定の質量のままです：` },
+    'mass.exportAnyway': { en: 'Export anyway? (Cancel opens the mass editor to fix them.)',
+                           ja: 'このままエクスポートしますか？（キャンセルで質量エディタを開きます）' },
+    't.masslist': { en: 'edit per-link mass / density; flags default SolidWorks masses',
+                    ja: 'リンクごとの質量・密度を編集。SW既定の質量を警告' },
+    'ui.masslist': { en: '⚖ mass', ja: '⚖ 質量' },
     // joint rows / tree
     'row.jnameTitle': { en: a => `joint: ${a.name}\n${a.parent} → ${a.child}`,
                         ja: a => `関節: ${a.name}\n${a.parent} → ${a.child}` },
@@ -1139,7 +1202,7 @@ the config and does NOT re-detect). Needs graph.json (CAD mode).">🔗 re-detect
     'li.swUnset': { en: '(unset in SW)', ja: '(SWで未設定)' },
     'li.reextract': { en: '(re-extract to get)', ja: '(再抽出で取得)' },
     'li.setMaterial': { en: 'set material', ja: 'set 材質' },
-    'li.densityPlaceholder': { en: '— override density —', ja: '— 密度を上書き —' },
+    'li.densityPlaceholder': { en: '— set material —', ja: '— 材質を設定 —' },
     'li.densityReset': { en: 'back to SW value (clear override)', ja: 'SW値に戻す (上書き解除)' },
     'li.densityPrompt': { en: 'density (kg/m³):', ja: '密度 (kg/m³):' },
     'li.swValue': { en: '(SW value)', ja: '(SW値)' },
@@ -2250,6 +2313,9 @@ async function refreshCompMeta() {
       chip.style.display = excludedList.length ? '' : 'none';
       chip.textContent = t('excl.chip', { n: excludedList.length });
       chip.title = excludedList.join('\n') + '\n' + t('excl.restoreAll');
+      // keep an open mass-editor popup in sync with mass-only / material edits
+      // made from the main panel (both read the same /api/components data)
+      if (document.getElementById('masslist')) { openMassList(); }
     }
   } catch { /* no package yet */ }
 }
@@ -2609,14 +2675,23 @@ function attachInlineRename(el, kind, getOld) {
   });
 }
 
+// dock a floating list panel (#renamelist / #masslist) just below the viewer's
+// button row (#views), which may wrap to several rows, instead of overlapping it
+function dockPanelBelowViews(ov) {
+  const v = document.getElementById('views');
+  if (v) { ov.style.top = (v.offsetTop + v.offsetHeight + 6) + 'px'; }
+}
+
 // the ≣ 改名 list: every joint with its (editable) joint name + child link name
 function openRenameList() {
   if (!viewer.robot) { log(t('common.openFirst'), 'wrn'); return; }
+  document.getElementById('masslist')?.remove();   // the two panels are exclusive
   document.getElementById('renamelist')?.remove();
   const linkOf = (j, tag) => [...(j.urdfNode?.children ?? [])]
     .find(e => e.tagName === tag)?.getAttribute('link') ?? '';
   const ov = document.createElement('div');
   ov.id = 'renamelist';
+  dockPanelBelowViews(ov);          // sit under the viewer's button row
   const card = document.createElement('div');
   card.className = 'card';
   const ttl = t('rename.emptyResetTitle');
@@ -2668,6 +2743,231 @@ function openRenameList() {
 }
 document.getElementById('renamelistbtn')
   .addEventListener('click', openRenameList);
+
+// shared material/density presets (label -> density kg/m³; 'custom' = prompt),
+// used by both the mass editor and the per-link select popup
+const MAT_PRESETS = [['PLA', '1240'], ['ABS', '1040'], ['PETG', '1270'],
+  ['Nylon', '1140'], ['POM', '1410'], ['FR4', '1850'], ['Aluminum', '2700'],
+  ['Iron/Steel', '7850'], ['Titanium', '4500'], ['custom', 'custom']];
+
+// a material picker <select>: reset + presets + custom.  `disabled` greys it out
+// (used when a target mass is set -- mass and material are mutually exclusive).
+function matSelectHtml(cls, { disabled = false, style = '', selected = null } = {}) {
+  // pre-select the preset matching the current density so the picker shows the
+  // active material instead of resetting to the placeholder; if the density is
+  // a non-preset (custom) value, fall through to the placeholder
+  const sel = selected != null ? String(Math.round(Number(selected))) : null;
+  const known = sel != null && MAT_PRESETS.some(([, v]) => v === sel);
+  return `<select class="${cls}"${disabled ? ' disabled' : ''} style="${style}`
+    + `background:#15171a;color:#ddd;border:1px solid #444;border-radius:3px;`
+    + `font-size:11px">`
+    + `<option value=""${known ? '' : ' selected'}>${t('li.densityPlaceholder')}</option>`
+    + `<option value="__reset__">${t('li.densityReset')}</option>`
+    + MAT_PRESETS.map(([l, v]) =>
+        `<option value="${v}"${v === sel ? ' selected' : ''}>`
+        + `${v === 'custom' ? l : l + ' ' + v}</option>`).join('')
+    + `</select>`;
+}
+
+// map a material <select> value to a density: a number, null (reset to SW), or
+// undefined (placeholder / cancelled custom prompt -> caller should no-op)
+function matPickDensity(val) {
+  if (val === '__reset__') { return null; }
+  if (val === 'custom') {
+    const d = prompt(t('li.densityPrompt'));
+    return d ? Number(d) : undefined;
+  }
+  return val ? Number(val) : undefined;
+}
+
+// the ⚖ 質量 list: per-link mass / density / mass-only, with default-mass ⚠
+const _fmtMass = m => (m == null) ? '—'
+  : (m >= 0.1 ? `${m.toFixed(3)} kg` : `${(m * 1000).toFixed(1)} g`);
+
+async function openMassList() {
+  // Fully data-driven (keyed by the server's final link names): do NOT depend
+  // on viewer.robot, so reopening right after an edit -- while the robot is
+  // still reloading -- always repaints with the freshly-stored values instead
+  // of leaving the stale panel up.
+  let data;
+  try {
+    data = await (await fetch('/api/components')).json();
+  } catch { log(t('common.openFirst'), 'wrn'); return; }
+  if (data.error || !data.links || !Object.keys(data.links).length) {
+    log(t('common.openFirst'), 'wrn'); return;
+  }
+  try {
+    _renderMassList(data);
+  } catch (e) {
+    // never let a render error wedge the panel: drop any half-built one so the
+    // button can always bring a fresh one back up
+    document.getElementById('masslist')?.remove();
+    log(t('mass.fail', { e: e.message ?? e }), 'err');
+  }
+}
+
+function _renderMassList(data) {
+  document.getElementById('renamelist')?.remove();  // the two panels are exclusive
+  document.getElementById('masslist')?.remove();
+  // link order: base link(s) first (no parent joint), then the rest, matching
+  // the tree feel of the rename panel; parent_joint gates mass-only (fixed only)
+  const links = data.links;
+  const order = [...Object.keys(links)].sort((a, b) => {
+    const ra = links[a].parent_joint ? 1 : 0, rb = links[b].parent_joint ? 1 : 0;
+    return ra - rb || a.localeCompare(b);
+  });
+  const urdfMasses = data.urdf_masses ?? {};
+  const massOnly = new Set(data.mass_only ?? []);
+  const flaggedN = (data.default_mass_links ?? []).length;
+
+  const ov = document.createElement('div');
+  ov.id = 'masslist';
+  dockPanelBelowViews(ov);          // sit under the viewer's button row
+  const card = document.createElement('div');
+  card.className = 'card';
+  const esc = s => String(s).replace(/"/g, '&quot;');
+  const rows = order.map(ln => {
+    const m = data.links[ln] ?? {};
+    const resolved = m.name != null;        // maps to a graph component
+    const warn = m.default_mass && !m.reviewed;
+    const matTxt = m.mass_overridden_in_sw ? t('mass.swOverride')
+      : m.material ? m.material
+      : resolved ? `<span class="mass-flag">${t('li.swUnset')}</span>`
+      : '<span class="mass-note">—</span>';
+    const cur = m.current_mass ?? urdfMasses[ln];
+    const fixed = m.parent_joint === 'fixed' || massOnly.has(ln);
+    // per-link source: a target mass OR a material/density -- a checkbox picks
+    // which, and the value cell shows only that control (no disabled elements)
+    const byMass = m.mass != null;
+    const valueCell = byMass
+      ? `<input class="rn-input mass-num mt" type="number" step="any" min="0" `
+        + `placeholder="${cur != null ? cur.toFixed(3) : ''}" `
+        + `value="${m.mass ?? ''}"> kg`
+      : matSelectHtml('md', { style: 'width:9em;', selected: m.override ?? m.density })
+        + (m.override ? `<div class="mass-note">${m.override.toFixed(0)} kg/m³ `
+          + `${t('li.override')}</div>` : '');
+    return `<tr class="${warn ? 'mass-warn' : ''}" data-link="${esc(ln)}">` +
+      `<td class="mlink" title="${esc(ln)}">` +
+      `${warn ? '<span class="mass-flag">⚠ </span>' : ''}${ln}</td>` +
+      `<td class="mass-note">${matTxt}</td>` +
+      `<td>${_fmtMass(cur)}</td>` +
+      `<td style="text-align:center"><input type="checkbox" class="bm" ` +
+      `${byMass ? 'checked' : ''} title="${t('mass.byMassTitle')}"></td>` +
+      `<td>${valueCell}</td>` +
+      `<td style="text-align:center">${fixed
+        ? `<input type="checkbox" class="mo" ${massOnly.has(ln) ? 'checked' : ''}>`
+        : `<span class="mass-note" title="${t('mass.massOnlyFixedOnly')}">—</span>`
+      }</td>` +
+      `<td style="text-align:center">${m.default_mass || m.reviewed
+        ? `<input type="checkbox" class="rv" ${m.reviewed ? 'checked' : ''}>`
+        : ''}</td>` +
+      `</tr>`;
+  }).join('');
+  const summary = flaggedN
+    ? `<div class="mass-summary warn">${t('mass.needReview', { n: flaggedN })}</div>`
+    : `<div class="mass-summary ok">${t('mass.allGood')}</div>`;
+  card.innerHTML =
+    '<div style="font-size:14px;margin-bottom:2px;color:#9fe0a8">' +
+    t('mass.listTitle') + '</div>' +
+    // cap the help width so this long sentence wraps instead of stretching the
+    // shrink-to-fit card wider than the table (which pushed columns off-screen)
+    '<div style="font-size:11px;color:#8a93a3;margin-bottom:8px;max-width:640px">' +
+    t('mass.listHelp') + '</div>' + summary +
+    '<table class="rntable"><thead><tr>' +
+    `<th>${t('mass.thLink')}</th><th>${t('mass.thMaterial')}</th>` +
+    `<th>${t('mass.thMass')}</th><th>${t('mass.thByMass')}</th>` +
+    `<th>${t('mass.thValue')}</th><th>${t('mass.thMassOnly')}</th>` +
+    `<th>${t('mass.thReview')}</th>` +
+    '</tr></thead><tbody>' + rows + '</tbody></table>';
+
+  // one edit -> POST -> (optionally) rebuild the robot -> refresh + reopen
+  const apply = async (fetchArgs, { rebuild, okMsg } = {}) => {
+    try {
+      const resp = await fetch(...fetchArgs);
+      const r = await resp.json();
+      if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
+      log(okMsg ?? t('mass.setOk'), 'ok');
+      if (rebuild) {
+        loadRobot(currentInfo, { keepPose: true });
+        refreshHistory();
+      }
+      await refreshCompMeta();      // repaints this popup (see refreshCompMeta)
+      // sync the main tree so a mass-only toggle shows there too, not just here
+      if (viewer.robot) { buildJointRows(viewer.robot); }
+      return true;
+    } catch (e) {
+      log(t('mass.fail', { e: e.message ?? e }), 'err');
+      return false;
+    }
+  };
+  const post = (path, body) => [path, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body) }];
+
+  card.querySelectorAll('tr[data-link]').forEach(tr => {
+    const ln = tr.dataset.link;
+    // the source toggle: check -> pin an explicit target mass at the current
+    // computed mass (user then edits it); uncheck -> clear it, back to material
+    tr.querySelector('.bm')?.addEventListener('change', e => {
+      if (e.target.checked) {
+        // `||` (not `??`): a 0 / missing current mass falls to 0.1 so the seed
+        // POST is never rejected by the positive-mass check
+        const seed = data.links[ln]?.current_mass || 0.1;
+        apply(post('/api/set_masses', { link: ln, mass: seed }),
+              { rebuild: true, okMsg: t('mass.setMassOk', { name: ln, m: seed }) });
+      } else {
+        apply(post('/api/set_masses', { link: ln, mass: null }), { rebuild: true });
+      }
+    });
+    tr.querySelector('.md')?.addEventListener('change', e => {
+      const d = matPickDensity(e.target.value);
+      if (d === undefined) { e.target.value = ''; return; }   // placeholder / cancelled
+      apply(post('/api/set_material', { link: ln, density: d }), { rebuild: true });
+    });
+    tr.querySelector('.mt')?.addEventListener('change', e => {
+      const v = e.target.value.trim();
+      apply(post('/api/set_masses', { link: ln, mass: v ? Number(v) : null }),
+            { rebuild: true,
+              okMsg: v ? t('mass.setMassOk', { name: ln, m: v }) : undefined });
+    });
+    tr.querySelector('.mo')?.addEventListener('change', e => {
+      apply(post('/api/set_mass_only', { link: ln, on: e.target.checked }),
+            { rebuild: true });
+    });
+    tr.querySelector('.rv')?.addEventListener('change', e => {
+      apply(post('/api/set_mass_reviewed', { link: ln, reviewed: e.target.checked }),
+            { rebuild: false });      // acknowledgement changes no geometry
+    });
+  });
+
+  const bar = document.createElement('div');
+  bar.style.cssText = 'display:flex;gap:8px;margin-top:10px';
+  if (flaggedN) {
+    const ackAll = document.createElement('button');
+    ackAll.textContent = t('mass.ackAll');
+    ackAll.addEventListener('click', async () => {
+      for (const ln of (data.default_mass_links ?? [])) {
+        await fetch(...post('/api/set_mass_reviewed', { link: ln, reviewed: true }));
+      }
+      log(t('mass.setOk'), 'ok');
+      await refreshCompMeta();      // repaints this popup (see refreshCompMeta)
+    });
+    bar.appendChild(ackAll);
+  }
+  const close = document.createElement('button');
+  close.textContent = t('common.close');
+  close.addEventListener('click', () => ov.remove());
+  bar.appendChild(close);
+  card.appendChild(bar);
+  ov.appendChild(card);
+  (document.getElementById('viewer').parentElement || document.body)
+    .appendChild(ov);
+}
+document.getElementById('masslistbtn').addEventListener('click', () => {
+  // toggle: the button always responds -- close an open panel, else (re)open it
+  const p = document.getElementById('masslist');
+  if (p) { p.remove(); } else { openMassList(); }
+});
 
 function buildJointRows(robot) {
   jointsEl.innerHTML = '';
@@ -4272,6 +4572,13 @@ function fillLinkInfo(name) {
   const el = document.getElementById('linkinfo');
   const link = viewer.robot?.links?.[name];
   if (!link) { el.style.display = 'none'; return; }
+  // the selection bar (name + 👁/🗑/⌂/✕) is folded in as this panel's header so
+  // it is ONE panel, not two overlapping ones.  Park it outside #linkinfo before
+  // the innerHTML rebuild below so the element (and its listeners) survives.
+  const selbar = document.getElementById('selbar');
+  if (selbar && selbar.parentElement === el) {
+    document.getElementById('viewwrap').appendChild(selbar);
+  }
   const j = link.parent?.isURDFJoint ? link.parent : null;
   const box = ownLinkBox(link, new THREE.Box3());
   const size = box.isEmpty() ? null : box.getSize(new THREE.Vector3());
@@ -4387,51 +4694,97 @@ function fillLinkInfo(name) {
       : meta ? t('li.swUnset') : t('li.reextract');
   add(t('li.material'), matTxt);
   add(t('li.mesh'), `${meshFile} · ${Math.round(tris)} tris`);
-  // value 'custom' triggers the prompt; everything else is a density number
-  const matChoices = [['PLA', '1240'], ['ABS', '1040'], ['PETG', '1270'],
-    [t('li.matNylon'), '1140'], ['POM', '1410'], [t('li.matFR4'), '1850'],
-    [t('li.matAlu'), '2700'], [t('li.matSteel'), '7850'],
-    [t('li.matTitanium'), '4500'], [t('li.matCustom'), 'custom']];
-  rowsHtml.push(
-    `<tr><td>${t('li.setMaterial')}</td><td><select id="li_mat" style="width:100%;` +
-    `background:#15171a;color:#ddd;border:1px solid #444;` +
-    `border-radius:3px;font-size:11px">` +
-    `<option value="">${t('li.densityPlaceholder')}</option>` +
-    `<option value="">${t('li.densityReset')}</option>` +
-    matChoices.map(([label, val]) =>
-      `<option value="${val}">${val === 'custom' ? label : label + ' ' + val}` +
-      `</option>`).join('') +
-    `</select></td></tr>`);
+  // mass source: a checkbox picks target-mass vs material/density, then only
+  // the relevant control is shown (no disabled fields).  CAD mode only -- a
+  // URDF-input link edits its inertial through the block above.
+  const byMass = meta?.mass != null;
+  if (!urdfMode) {
+    rowsHtml.push(
+      `<tr><td>${t('mass.thByMass')}</td><td>` +
+      `<input type="checkbox" id="li_bm" ${byMass ? 'checked' : ''} ` +
+      `title="${t('mass.byMassTitle')}"> ${t('mass.byMass')}</td></tr>`);
+  }
+  if (byMass && !urdfMode) {
+    rowsHtml.push(
+      `<tr><td>${t('mass.thTarget')}</td><td>` +
+      `<input id="li_masst" type="number" step="any" min="0" ` +
+      `placeholder="${meta?.current_mass != null ? meta.current_mass.toFixed(3) : ''}" ` +
+      `value="${meta?.mass ?? ''}" style="width:80px;background:#15171a;color:#ddd;` +
+      `border:1px solid #444;border-radius:3px;font-size:11px"> kg</td></tr>`);
+  } else {
+    rowsHtml.push(
+      `<tr><td>${t('li.setMaterial')}</td><td>` +
+      matSelectHtml('li_mat', { style: 'width:100%;',
+        selected: meta?.override ?? meta?.density }) +
+      (meta?.override ? `<div class="mass-note">${meta.override.toFixed(0)} kg/m³ `
+        + `${t('li.override')}</div>` : '') +
+      `</td></tr>`);
+  }
   const jointHtml = j ? jointPanelHtml(j, jParentLink, name) : '';
-  el.innerHTML = jointHtml +
-    `<h2>🔎 ${name}</h2><table>${rowsHtml.join('')}</table>`;
+  el.innerHTML = jointHtml + `<table>${rowsHtml.join('')}</table>`;
+  // re-insert the selection bar as the panel header (its buttons keep their
+  // listeners since the element was only moved, never recreated)
+  if (selbar) {
+    Object.assign(selbar.style, { position: 'static', border: 'none',
+      background: 'none', padding: '0', margin: '0 0 6px', width: 'auto',
+      flexWrap: 'wrap' });                 // let the buttons drop to a 2nd row
+    // name takes the whole first row (truncated); the action buttons wrap below
+    const nm = document.getElementById('selname');
+    if (nm) {
+      Object.assign(nm.style, { flexBasis: '100%', minWidth: '0',
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' });
+    }
+    el.insertBefore(selbar, el.firstChild);
+  }
   if (j) { wireJointPanel(el, j); }
-  const sel = el.querySelector('#li_mat');
-  sel.addEventListener('change', async () => {
-    let d = sel.value;
-    if (sel.selectedIndex === 1) { d = null; }            // remove override
-    else if (d === 'custom') {
-      d = prompt(t('li.densityPrompt'));
-      if (!d) { sel.selectedIndex = 0; return; }
-    } else if (!d) { return; }
+  // source toggle: check -> pin an explicit target mass at the current mass;
+  // uncheck -> clear it, back to material / density
+  const setMass = async (mass) => {
+    try {
+      const resp = await fetch('/api/set_masses', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ link: name, mass }) });
+      const r = await resp.json();
+      if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
+      log(mass != null ? t('mass.setMassOk', { name, m: mass }) : t('mass.setOk'), 'ok');
+      // refresh compMeta FIRST so the reselect below re-renders the popup in the
+      // new state (checkbox / override), not the stale pre-edit one
+      await refreshCompMeta();
+      reselectAfterLoad = name;   // reopen this popup when the reload completes
+      loadRobot(currentInfo, { keepPose: true });
+      refreshHistory();
+    } catch (err) { log(t('mass.fail', { e: err.message ?? err }), 'err'); }
+  };
+  el.querySelector('#li_bm')?.addEventListener('change', e => {
+    // `||` (not `??`): a 0 / missing current mass falls to 0.1 so the seed
+    // POST is never rejected by the positive-mass check
+    setMass(e.target.checked ? (meta?.current_mass || 0.1) : null);
+  });
+  const sel = el.querySelector('.li_mat');    // matSelectHtml emits a class (density mode only)
+  sel?.addEventListener('change', async () => {
+    const d = matPickDensity(sel.value);      // number, null (reset), or undefined
+    if (d === undefined) { sel.selectedIndex = 0; return; }
     op('setMaterial', { link: name, density: d });
     log(t('li.settingDensity', { name, d: d ?? t('li.swValue') }));
     try {
       const resp = await fetch('/api/set_material', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ link: name,
-                               density: d ? Number(d) : null }) });
+        body: JSON.stringify({ link: name, density: d }) });
       const r = await resp.json();
       if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
       log(t('li.densityOk'), 'ok');
+      await refreshCompMeta();    // fresh meta so the reselect shows the override
+      reselectAfterLoad = name;   // reopen this popup when the reload completes
       loadRobot(currentInfo, { keepPose: true });
       refreshHistory();
-      const reselect = name;
-      setTimeout(() => selectLink(reselect), 1500);
     } catch (e) {
       log(t('li.densityFail', { e: e.message ?? e }), 'err');
     }
+  });
+  el.querySelector('#li_masst')?.addEventListener('change', (e) => {
+    const v = e.target.value.trim();
+    setMass(v ? Number(v) : null);
   });
   const colInp = el.querySelector('#li_color');
   if (colInp) {
@@ -4480,6 +4833,7 @@ function fillLinkInfo(name) {
       }
     });
   }
+  dockPanelBelowViews(el);      // sit under the viewer's button row (was 76px)
   el.style.display = 'block';   // '' would fall back to the stylesheet's
                                 // display:none and never show
 }
@@ -4497,7 +4851,7 @@ function selectLink(linkName) {
   if (linkName) {
     _tintLink(linkName, _colorTint(linkName));   // red survives selection
     statusEl.textContent = t('sel.status', { name: linkName });
-    document.getElementById('selname').textContent = linkName;
+    document.getElementById('selname').textContent = '🔎 ' + linkName;
     document.getElementById('seleye').classList.toggle(
       'off', hiddenLinks.has(linkName));
     bar.style.display = 'flex';
@@ -5370,7 +5724,16 @@ expLinks.forEach(a => a.addEventListener('click', async ev => {
   try {
     // ASYNC export: start the build (reports into _prog), watch the unified
     // progress panel live, then download the finished bytes
-    const r0 = await (await fetch('/api/export/zip/start?' + query)).json();
+    let r0 = await (await fetch('/api/export/zip/start?' + query)).json();
+    // default-mass gate: some links still use a guessed SolidWorks mass. Let the
+    // user fix them in the mass editor, or knowingly export anyway (&ack=1).
+    if (r0.default_mass_links && r0.default_mass_links.length) {
+      const links = r0.default_mass_links;
+      const msg = t('mass.exportBlockedTitle', { n: links.length })
+        + '\n\n' + links.join('\n') + '\n\n' + t('mass.exportAnyway');
+      if (!confirm(msg)) { openMassList(); return; }
+      r0 = await (await fetch('/api/export/zip/start?' + query + '&ack=1')).json();
+    }
     if (r0.error) { throw new Error(r0.error); }
     setProgressStop(() => {                     // ■ stop -> cooperative cancel
       log(t('export.cancelling'), 'wrn');
@@ -6564,6 +6927,13 @@ bulkMatSel?.addEventListener('change', () => {
   bulkSetDensity(Number(v));
 });
 window.addEventListener('keydown', ev => {
+  // Esc closes the rename / mass-list overlays first -- even when focus is in
+  // one of their fields (which would otherwise swallow the key below)
+  if (ev.key === 'Escape') {
+    const ov = document.getElementById('masslist')
+            || document.getElementById('renamelist');
+    if (ov) { ev.preventDefault(); ev.stopPropagation(); ov.remove(); return; }
+  }
   const ae = document.activeElement;
   const inField = /INPUT|SELECT|TEXTAREA/.test(ae?.tagName)
       || ae?.isContentEditable;

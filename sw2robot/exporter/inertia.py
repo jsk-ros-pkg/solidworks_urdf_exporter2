@@ -143,6 +143,38 @@ def link_inertial_from_sw(mass, com_local, inertia6_local,
     }
 
 
+def rescale_to_mass(info, target_mass):
+    """Rescale a computed inertial dict to an exact target mass (kg).
+
+    ``info`` is a dict as returned by :func:`link_inertial` /
+    :func:`link_inertial_from_sw` (``{mass, com, inertia, method}``).  For a
+    rigid body of fixed geometry, changing the (uniform) density scales the
+    mass and the full inertia tensor by the SAME factor, while the centre of
+    mass is unchanged -- so we multiply ``mass`` and all six inertia components
+    by ``target_mass / mass`` and leave ``com`` alone.  ``method`` is annotated
+    with ``"->mass"`` so the provenance report shows the rescale happened.
+
+    Returns a new dict (does not mutate ``info``).  If ``info`` is falsy or its
+    mass is non-positive/non-finite, returns ``info`` unchanged (nothing sane to
+    scale from)."""
+    if not info:
+        return info
+    try:
+        m0 = float(info["mass"])
+        target = float(target_mass)
+    except (TypeError, ValueError, KeyError):
+        return info
+    if not (np.isfinite(m0) and m0 > 0 and np.isfinite(target) and target > 0):
+        return info
+    factor = target / m0
+    return {
+        "mass": target,
+        "com": list(info["com"]),
+        "inertia": tuple(float(x) * factor for x in info["inertia"]),
+        "method": f'{info.get("method", "?")}->mass',
+    }
+
+
 def validate_inertia(mass, inertia6, rel_tol=1e-6):
     """Physics sanity-check one link's inertial; return a list of problem
     strings (empty list == OK).

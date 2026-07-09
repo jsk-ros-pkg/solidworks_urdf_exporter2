@@ -77,6 +77,10 @@ def _inertial_xml(comp, mesh_dir, density):
        SolidWorks material density winning over the global default.
     3. A small placeholder if neither is usable.
 
+    Finally, if the link carries a per-link target mass (``comp.mass_target``,
+    the ``masses:`` override), whatever inertial the above produced is rescaled
+    to that exact weight (mass + tensor scale together, com unchanged).
+
     Returns ``(xml_lines, method, problems)`` so the caller can report which
     source / approximation each link used and flag any physically invalid
     inertial (``problems`` is a list of sanity-check failures, empty if OK)."""
@@ -102,6 +106,13 @@ def _inertial_xml(comp, mesh_dir, density):
             comp.visual_xyz, comp.visual_rpy, density=d)
     if info is None:
         info = _PLACEHOLDER_INERTIAL
+    # 4. per-link target mass: rescale whatever inertial we derived (SW-native,
+    # mesh, or placeholder) to the exact requested weight -- see the `masses:`
+    # override applied in model.build.  Mass and the full tensor scale together;
+    # the com is unchanged (exporter.inertia.rescale_to_mass).
+    mass_target = getattr(comp, "mass_target", None)
+    if mass_target:
+        info = _inertia.rescale_to_mass(info, mass_target)
     ixx, ixy, ixz, iyy, iyz, izz = info["inertia"]
     lines = [
         "    <inertial>",
