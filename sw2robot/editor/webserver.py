@@ -1962,6 +1962,19 @@ def _collapse_plan_payload(base_link, links, joints, collapsed, collapse_link,
     driver_by_sub = {
         c.get("subassembly"): c for c in (driver_choices or [])
     }
+    driver_by_link = {}
+    for choice in driver_choices or []:
+        link = choice.get("link_name")
+        selected = choice.get("selected_driver_joint") or \
+            choice.get("auto_driver_joint") or ""
+        candidates = {
+            c.get("source_joint"): c for c in choice.get("candidates", [])
+        }
+        if link and selected:
+            driver_by_link[link] = {
+                **candidates.get(selected, {}),
+                "source_joint": selected,
+            }
 
     def plan_link(row):
         link = row.get("link_name")
@@ -1981,7 +1994,7 @@ def _collapse_plan_payload(base_link, links, joints, collapsed, collapse_link,
         }
 
     def plan_joint(row, decision=None):
-        return {
+        out = {
             "name": row.get("name"),
             "parent": row.get("parent"),
             "child": row.get("child"),
@@ -1989,6 +2002,14 @@ def _collapse_plan_payload(base_link, links, joints, collapsed, collapse_link,
             "source_joint": _joint_source_name(row),
             "decision": decision or row.get("decision", ""),
         }
+        driver = driver_by_link.get(row.get("child"))
+        if driver:
+            out.update({
+                "driver_source_joint": driver.get("source_joint", ""),
+                "driver_role": driver.get("role", ""),
+                "driver_type": driver.get("type", ""),
+            })
+        return out
 
     dropped_joints = []
     for row in dropped_internal:
@@ -2222,7 +2243,8 @@ def _collapsed_preview_urdf_text(urdf_text, plan, robot_name=None):
 
     used_joint_names = set()
     for row in plan.get("joints") or []:
-        source = row.get("source_joint") or row.get("name")
+        source = row.get("driver_source_joint") or \
+            row.get("source_joint") or row.get("name")
         src = joint_elems.get(source)
         if src is None:
             src = joint_elems.get(row.get("name"))
@@ -2234,7 +2256,8 @@ def _collapsed_preview_urdf_text(urdf_text, plan, robot_name=None):
             desired_name = f"{base_name}_{i}"
         used_joint_names.add(desired_name)
         joint.set("name", desired_name)
-        joint.set("type", row.get("type") or joint.get("type") or "fixed")
+        joint.set("type", row.get("driver_type") or row.get("type") or
+                  joint.get("type") or "fixed")
         parent = nm(row.get("parent"))
         child = nm(row.get("child"))
         pe = joint.find("parent")

@@ -301,6 +301,10 @@ def test_collapse_preview_lists_subassembly_driver_joint_candidates():
         "plate_1__servo_1__case_1",
         "servo_1__case_1__servo_1__horn_1",
     ]
+    plan_joint = payload["collapse_plan"]["joints"][0]
+    assert plan_joint["driver_source_joint"] == \
+        "servo_1__case_1__servo_1__horn_1"
+    assert plan_joint["driver_type"] == "revolute"
 
 
 def test_set_subassembly_driver_joint_validates_resets_and_saves(tmp_path):
@@ -822,9 +826,11 @@ def test_collapsed_preview_urdf_lumps_member_visuals():
     <origin xyz="1 0 0" rpy="0 0 0"/>
     <parent link="base"/><child link="sub_a"/>
   </joint>
-  <joint name="sub_a__sub_b" type="fixed">
+  <joint name="sub_a__sub_b" type="revolute">
     <origin xyz="0 2 0" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
     <parent link="sub_a"/><child link="sub_b"/>
+    <limit lower="-0.5" upper="0.5" effort="2" velocity="3"/>
   </joint>
   <joint name="sub_b__outside" type="fixed">
     <origin xyz="0 0 3" rpy="0 0 0"/>
@@ -846,6 +852,8 @@ def test_collapsed_preview_urdf_lumps_member_visuals():
         "joints": [
             {"name": "base__sub", "parent": "base", "child": "sub",
              "type": "fixed", "source_joint": "base__sub_a",
+             "driver_source_joint": "sub_a__sub_b",
+             "driver_type": "revolute",
              "decision": "kept_boundary"},
             {"name": "sub__outside", "parent": "sub", "child": "outside",
              "type": "fixed", "source_joint": "sub_b__outside",
@@ -880,6 +888,12 @@ def test_collapsed_preview_urdf_lumps_member_visuals():
     assert sub_out.find("parent").get("link") == "sub"
     assert sub_out.find("child").get("link") == "outside"
     assert sub_out.find("origin").get("xyz") == "0 2 3"
+    base_sub = next(j for j in root.findall("joint")
+                    if j.get("name") == "base__sub")
+    assert base_sub.get("type") == "revolute"
+    assert base_sub.find("origin").get("xyz") == "1 0 0"
+    assert base_sub.find("axis").get("xyz") == "0 0 1"
+    assert base_sub.find("limit").get("lower") == "-0.5"
 
 
 def test_collapse_preview_http_cache_reuses_identical_input(tmp_path, monkeypatch):

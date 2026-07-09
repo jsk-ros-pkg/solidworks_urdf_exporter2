@@ -3844,7 +3844,8 @@ function collapsedPreviewSlidersHtml(plan) {
     const item = document.createElement('div');
     item.style.cssText = 'margin-top:6px';
     const label = row.child || joint.name;
-    const source = row.source_joint || '';
+    const source = row.driver_source_joint || row.source_joint || '';
+    const sourcePrefix = row.driver_source_joint ? 'driver: ' : '';
     const nativeStep = um.pris ? 0.0005 : 0.01;
     item.innerHTML =
       `<div class="row1">` +
@@ -3855,7 +3856,7 @@ function collapsedPreviewSlidersHtml(plan) {
       `</div>` +
       `<div style="color:#6b7480;font-size:10px;overflow:hidden;` +
       `text-overflow:ellipsis;white-space:nowrap;margin-left:17px">` +
-      `${htmlEsc(source || joint.name)}</div>` +
+      `${htmlEsc(sourcePrefix + (source || joint.name))}</div>` +
       `<div class="jslider" style="margin-left:17px">` +
       `<input type="range" min="${lo}" max="${hi}" step="${nativeStep}" ` +
       `value="${Number(joint.angle) || 0}"></div>`;
