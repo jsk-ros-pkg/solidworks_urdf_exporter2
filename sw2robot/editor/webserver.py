@@ -1220,6 +1220,34 @@ def _subassembly_cycle_break_joints(yml_txt):
     return {str(x) for x in raw if x is not None}
 
 
+def _subassembly_driver_joints(yml_txt):
+    """Preview-only source joints that drive collapsed CAD sub-assemblies."""
+    import yaml as _yaml
+
+    try:
+        cfg = _yaml.safe_load(yml_txt) or {}
+        if not isinstance(cfg, dict):
+            return {}
+    except Exception:
+        return {}
+    raw = cfg.get("subassembly_driver_joints") or {}
+    if not isinstance(raw, dict):
+        return {}
+    return {str(k): str(v) for k, v in raw.items() if v is not None}
+
+
+def _set_subassembly_driver_joint_yaml(txt, graph, name, source_joint):
+    """Set/reset one preview-only collapsed sub-assembly driver joint."""
+    names = _subassembly_names(graph)
+    if name not in names:
+        raise ValueError(f"no CAD sub-assembly '{name}'")
+    if source_joint:
+        return _upsert_yaml_map(
+            txt, "subassembly_driver_joints", name,
+            _yaml_scalar(source_joint))
+    return _remove_yaml_map_entry(txt, "subassembly_driver_joints", name)
+
+
 def _set_subassembly_cycle_break_joint_yaml(
         txt, source_joint, drop, previous_source_joint=""):
     """Set/reset one preview-only source joint dropped for cycle breaking."""
@@ -1313,6 +1341,7 @@ def _collapse_preview_payload(graph, yml_txt=""):
     parent_overrides = _subassembly_parent_overrides(yml_txt)
     origin_links = _subassembly_origin_links(yml_txt)
     cycle_break_joints = _subassembly_cycle_break_joints(yml_txt)
+    driver_joints = _subassembly_driver_joints(yml_txt)
     by_sub = {s["name"]: s for s in canonical["subassemblies"]}
     collapse_link = {}
     collapsed = []
@@ -1333,6 +1362,7 @@ def _collapse_preview_payload(graph, yml_txt=""):
             "boundary_joints": sub["boundary_joints"],
             "selected_parent": "",
             "selected_origin_link": origin_links.get(row["name"], ""),
+            "selected_driver_joint": driver_joints.get(row["name"], ""),
         }
         collapsed.append(info)
         for link in sub["member_links"]:
@@ -1358,6 +1388,8 @@ def _collapse_preview_payload(graph, yml_txt=""):
         stale = choice.get("stale_origin_link", "")
         if stale:
             sub["stale_origin_link"] = stale
+    driver_choices = _collapse_driver_joint_choices(
+        collapsed, collapse_link, driver_joints)
 
     links = []
     inserted = set()
@@ -1421,7 +1453,8 @@ def _collapse_preview_payload(graph, yml_txt=""):
                                           collapse_link)
     collapse_plan = _collapse_plan_payload(
         base, links, joints, collapsed, collapse_link, dropped,
-        dropped_parent_override, dropped_cycle_joints, validation)
+        dropped_parent_override, dropped_cycle_joints, validation,
+        driver_choices)
     return {
         "base_link": base,
         "links": links,
@@ -1434,6 +1467,7 @@ def _collapse_preview_payload(graph, yml_txt=""):
         "collapsed_subassemblies": collapsed,
         "parent_choices": parent_choices,
         "group_choices": group_choices,
+        "driver_joint_choices": driver_choices,
         "cycle_break_choices": cycle_break_choices,
         "canonical_counts": {
             "links": len(canonical["links"]),
@@ -1565,6 +1599,99 @@ def _collapse_group_choices(collapsed, origin_links):
                 {"origin_link": g[0], "links": g, "size": len(g)}
                 for g in groups
             ],
+        })
+    return choices
+
+
+def _collapse_driver_joint_choices(collapsed, collapse_link, driver_joints):
+    """List source-joint candidates that can drive collapsed sub-assemblies.
+
+    The selected driver is preview-only metadata for now.  It records which
+    joint from the fully-expanded robot should represent motion of the
+    collapsed sub-assembly in later preview/URDF steps.
+    """
+    driver_joints = driver_joints or {}
+    role_order = {
+        "incoming_boundary": 0,
+        "outgoing_boundary": 1,
+        "internal_motion": 2,
+        "boundary": 3,
+        "stale": 9,
+    }
+    choices = []
+    for sub in collapsed:
+        link_name = sub.get("link_name")
+        selected = driver_joints.get(sub.get("name"), "")
+        seen = set()
+        candidates = []
+
+        def add_candidate(joint, role):
+            source = _joint_source_name(joint)
+            if not source or source in seen:
+                return
+            seen.add(source)
+            parent = collapse_link.get(joint.get("parent"), joint.get("parent"))
+            child = collapse_link.get(joint.get("child"), joint.get("child"))
+            jtype = joint.get("type") or "fixed"
+            candidates.append({
+                "source_joint": source,
+                "joint": joint.get("name"),
+                "parent": parent,
+                "child": child,
+                "source_parent": joint.get("parent"),
+                "source_child": joint.get("child"),
+                "type": jtype,
+                "role": role,
+                "movable": jtype not in ("fixed", ""),
+            })
+
+        for joint in sub.get("boundary_joints") or []:
+            parent = collapse_link.get(joint.get("parent"), joint.get("parent"))
+            child = collapse_link.get(joint.get("child"), joint.get("child"))
+            if child == link_name and parent != child:
+                add_candidate(joint, "incoming_boundary")
+            elif parent == link_name and parent != child:
+                add_candidate(joint, "outgoing_boundary")
+            elif parent != child:
+                add_candidate(joint, "boundary")
+
+        for joint in sub.get("internal_joints") or []:
+            if (joint.get("type") or "fixed") != "fixed":
+                add_candidate(joint, "internal_motion")
+
+        if selected and selected not in seen:
+            candidates.append({
+                "source_joint": selected,
+                "joint": selected,
+                "parent": "",
+                "child": "",
+                "source_parent": "",
+                "source_child": "",
+                "type": "",
+                "role": "stale",
+                "movable": False,
+            })
+
+        candidates.sort(key=lambda c: (
+            role_order.get(c.get("role"), 8),
+            0 if c.get("movable") else 1,
+            c.get("source_joint") or "",
+        ))
+        auto = next((c.get("source_joint") for c in candidates
+                     if c.get("role") == "incoming_boundary"
+                     and c.get("movable")), "")
+        if not auto:
+            auto = next((c.get("source_joint") for c in candidates
+                         if c.get("role") == "incoming_boundary"), "")
+        if not auto:
+            auto = next((c.get("source_joint") for c in candidates
+                         if c.get("movable")), "")
+        choices.append({
+            "subassembly": sub.get("name"),
+            "link_name": link_name,
+            "selected_driver_joint": selected,
+            "auto_driver_joint": auto,
+            "candidates": candidates,
         })
     return choices
 
@@ -1829,9 +1956,12 @@ def _validate_collapsed_tree(base_link, links, joints, collapsed,
 
 def _collapse_plan_payload(base_link, links, joints, collapsed, collapse_link,
                            dropped_internal, dropped_parent_override,
-                           dropped_cycle, validation):
+                           dropped_cycle, validation, driver_choices=None):
     """Stable preview IR shared by the UI and future collapsed URDF output."""
     sub_by_link = {s.get("link_name"): s for s in collapsed}
+    driver_by_sub = {
+        c.get("subassembly"): c for c in (driver_choices or [])
+    }
 
     def plan_link(row):
         link = row.get("link_name")
@@ -1847,6 +1977,7 @@ def _collapse_plan_payload(base_link, links, joints, collapsed, collapse_link,
             "member_components": list(sub.get("member_components") or []),
             "selected_parent": sub.get("selected_parent", ""),
             "selected_origin_link": sub.get("selected_origin_link", ""),
+            "selected_driver_joint": sub.get("selected_driver_joint", ""),
         }
 
     def plan_joint(row, decision=None):
@@ -1887,7 +2018,13 @@ def _collapse_plan_payload(base_link, links, joints, collapsed, collapse_link,
             "member_components": list(s.get("member_components") or []),
             "selected_parent": s.get("selected_parent", ""),
             "selected_origin_link": s.get("selected_origin_link", ""),
+            "selected_driver_joint": s.get("selected_driver_joint", ""),
+            "auto_driver_joint": driver_by_sub.get(
+                s.get("name"), {}).get("auto_driver_joint", ""),
+            "driver_joint_candidates": driver_by_sub.get(
+                s.get("name"), {}).get("candidates", []),
         } for s in collapsed],
+        "driver_joint_choices": list(driver_choices or []),
         "link_replacements": [
             {"source_link": src, "collapsed_link": dst}
             for src, dst in sorted(collapse_link.items())
@@ -4840,6 +4977,69 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                                 "preview_only": True,
                                 "rebuilt": False})
                 print(f"[sw2robot.web] set_subassembly_origin_link: "
+                      f"{name_in} -> {label} (preview only)")
+                return self._send_json(payload)
+            if parsed.path == "/api/set_subassembly_driver_joint":
+                cls = type(self)
+                n = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(n) or b"{}")
+                name_in = (body.get("name") or "").strip()
+                source_joint = (body.get("source_joint") or "").strip()
+                if source_joint == "auto":
+                    source_joint = ""
+                if not cls.pkg_dir:
+                    return self._send_json({"error": "no package open"}, 400)
+                if not _cad_mode(cls.pkg_dir):
+                    return self._send_json(
+                        {"error": "sub-assembly driver joints need the CAD "
+                                  "graph.json"},
+                        400)
+                if not name_in:
+                    return self._send_json({"error": "name required"}, 400)
+                from sw2robot.exporter.state import GraphState
+                graph = GraphState.load(os.path.join(cls.pkg_dir, "graph.json"))
+                name = os.path.splitext(os.path.basename(cls.urdf_rel))[0]
+                yml = os.path.join(cls.pkg_dir, name + ".joints.yaml")
+                if not os.path.exists(yml):
+                    return self._send_json(
+                        {"error": "joints.yaml not found -- re-extract once"},
+                        400)
+                with open(yml, encoding="utf-8") as f:
+                    txt = f.read()
+                try:
+                    preview = _collapse_preview_payload_cached(
+                        cls.pkg_dir, graph, yml, txt)
+                    choices = {
+                        c.get("subassembly"): c
+                        for c in preview.get("driver_joint_choices", [])
+                    }
+                    if source_joint:
+                        allowed = {
+                            c.get("source_joint")
+                            for c in choices.get(name_in, {}).get(
+                                "candidates", [])
+                        }
+                        if source_joint not in allowed:
+                            return self._send_json(
+                                {"error": f"'{source_joint}' is not a driver "
+                                          f"joint candidate for {name_in}"},
+                                400)
+                    txt = _set_subassembly_driver_joint_yaml(
+                        txt, graph, name_in, source_joint)
+                except ValueError as e:
+                    return self._send_json({"error": str(e)}, 400)
+                label = source_joint or "auto"
+                _snapshot(cls.pkg_dir, yml,
+                          f"sub-assembly driver joint {name_in} -> {label}")
+                with open(yml, "w", encoding="utf-8") as f:
+                    f.write(txt)
+                payload = _collapse_preview_payload_cached(
+                    cls.pkg_dir, graph, yml, txt)
+                payload.update({"ok": True, "name": name_in,
+                                "source_joint": source_joint,
+                                "preview_only": True,
+                                "rebuilt": False})
+                print(f"[sw2robot.web] set_subassembly_driver_joint: "
                       f"{name_in} -> {label} (preview only)")
                 return self._send_json(payload)
             if parsed.path == "/api/set_subassembly_cycle_break":

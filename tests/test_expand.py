@@ -252,6 +252,44 @@ def test_collapse_preview_replaces_no_expand_subassembly_members():
     ]
 
 
+def test_collapse_preview_lists_subassembly_driver_joint_candidates():
+    from sw2robot.editor.webserver import (
+        _collapse_preview_payload,
+        _set_subassembly_driver_joint_yaml,
+        _subassembly_driver_joints,
+    )
+
+    graph = make_graph()
+    txt = "base: plate-1\nno_expand:\n- servo\n"
+    payload = _collapse_preview_payload(graph, txt)
+    choices = payload["driver_joint_choices"]
+    assert choices[0]["subassembly"] == "servo-1"
+    assert choices[0]["auto_driver_joint"] == \
+        "plate_1__servo_1__case_1"
+    assert [(c["source_joint"], c["role"], c["type"])
+            for c in choices[0]["candidates"]] == [
+        ("plate_1__servo_1__case_1", "incoming_boundary", "fixed"),
+        ("servo_1__case_1__servo_1__horn_1",
+         "internal_motion", "revolute"),
+    ]
+
+    txt = _set_subassembly_driver_joint_yaml(
+        txt, graph, "servo-1", "servo_1__case_1__servo_1__horn_1")
+    assert _subassembly_driver_joints(txt) == {
+        "servo-1": "servo_1__case_1__servo_1__horn_1"
+    }
+    payload = _collapse_preview_payload(graph, txt)
+    assert payload["driver_joint_choices"][0]["selected_driver_joint"] == \
+        "servo_1__case_1__servo_1__horn_1"
+    plan_sub = payload["collapse_plan"]["collapsed_subassemblies"][0]
+    assert plan_sub["selected_driver_joint"] == \
+        "servo_1__case_1__servo_1__horn_1"
+    assert [c["source_joint"] for c in plan_sub["driver_joint_candidates"]] == [
+        "plate_1__servo_1__case_1",
+        "servo_1__case_1__servo_1__horn_1",
+    ]
+
+
 def test_collapse_preview_keeps_expanded_override():
     from sw2robot.editor.webserver import _collapse_preview_payload
 

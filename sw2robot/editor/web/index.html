@@ -1095,6 +1095,15 @@ the config and does NOT re-detect). Needs graph.json (CAD mode).">🔗 re-detect
                                   ja: a => `サブアセンブリ原点linkを保存中: ${a.name} → ${a.originLink} ...` },
     'subasm.originLinkSetFail': { en: a => `origin link failed: ${a.e}`,
                                   ja: a => `サブアセンブリ原点linkの保存に失敗: ${a.e}` },
+    'subasm.driverJointChoicesTitle': { en: 'Motion driver joints',
+                                        ja: 'motion代表joint' },
+    'subasm.driverJointAuto': { en: 'auto', ja: 'auto' },
+    'subasm.driverJointSetOk': { en: a => `${a.name}: driver joint ${a.sourceJoint} ✓`,
+                                 ja: a => `${a.name}: driver joint ${a.sourceJoint} ✓` },
+    'subasm.driverJointSetting': { en: a => `saving driver joint: ${a.name} → ${a.sourceJoint} ...`,
+                                   ja: a => `motion代表jointを保存中: ${a.name} → ${a.sourceJoint} ...` },
+    'subasm.driverJointSetFail': { en: a => `driver joint failed: ${a.e}`,
+                                   ja: a => `motion代表jointの保存に失敗: ${a.e}` },
     'subasm.cycleBreakChoicesTitle': { en: 'Cycle break joints',
                                        ja: 'cycle解消joint' },
     'subasm.cycleBreakAuto': { en: 'auto', ja: 'auto' },
@@ -3018,6 +3027,90 @@ function bindSubassemblyOriginLinkChoices(root, ov) {
   });
 }
 
+function driverJointChoicesHtml(driverChoices) {
+  const choices = (driverChoices || []).filter(c =>
+    (c.candidates || []).length || c.selected_driver_joint);
+  if (!choices.length) { return ''; }
+  const rows = choices.map(c => {
+    const selected = c.selected_driver_joint || '';
+    const auto = c.auto_driver_joint || '';
+    const opts = [`<option value=""${selected ? '' : ' selected'}>` +
+      `${t('subasm.driverJointAuto')}${auto ? `: ${htmlEsc(auto)}` : ''}` +
+      `</option>`].concat((c.candidates || []).map(j => {
+        const source = j.source_joint || j.joint || '';
+        const edge = j.source_parent && j.source_child
+          ? `${j.source_parent} → ${j.source_child}`
+          : (j.parent && j.child ? `${j.parent} → ${j.child}` : source);
+        const label = `${j.role || 'joint'} ${j.type || ''}: ${edge}`;
+        return `<option value="${htmlEsc(source)}"` +
+          `${selected === source ? ' selected' : ''}>` +
+          `${htmlEsc(label)}</option>`;
+      })).join('');
+    const details = (c.candidates || []).slice(0, 5).map(j => {
+      const source = j.source_joint || j.joint || '';
+      const edge = j.source_parent && j.source_child
+        ? `${j.source_parent} → ${j.source_child}` : '';
+      const mov = j.movable ? 'movable' : 'fixed';
+      return `<div style="color:#6b7480">${htmlEsc(j.role || 'joint')}: ` +
+        `${htmlEsc(source)} ${htmlEsc(j.type || '')} ${htmlEsc(mov)}` +
+        `${edge ? ` (${htmlEsc(edge)})` : ''}</div>`;
+    }).join('');
+    const more = (c.candidates || []).length > 5
+      ? `<div style="color:#6b7480">+${(c.candidates || []).length - 5} more</div>`
+      : '';
+    return `<div style="display:grid;grid-template-columns:minmax(110px,1fr) ` +
+      `minmax(150px,1.7fr);gap:6px;align-items:start;margin-top:5px">` +
+      `<div><div style="color:#cfe3ff">${htmlEsc(c.subassembly)}</div>` +
+      `<div style="color:#6b7480">${htmlEsc(c.link_name)}</div></div>` +
+      `<div><select class="subasm-driver-joint-choice" ` +
+      `data-name="${htmlEsc(c.subassembly)}" data-prev="${htmlEsc(selected)}">` +
+      opts + `</select>${details}${more}</div></div>`;
+  }).join('');
+  return `<div style="border:1px solid #3d5244;background:#1f2a25;` +
+    `border-radius:4px;padding:6px 8px;margin:8px 0;font-size:11px">` +
+    `<div style="color:#9bd6ad">${t('subasm.driverJointChoicesTitle')}</div>` +
+    rows + `</div>`;
+}
+
+async function setSubassemblyDriverJointChoice(name, sourceJoint, ov) {
+  const label = sourceJoint || t('subasm.driverJointAuto');
+  op('subassembly_driver_joint', { name, source_joint: sourceJoint });
+  log(t('subasm.driverJointSetting', { name, sourceJoint: label }));
+  try {
+    const resp = await fetch('/api/set_subassembly_driver_joint', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, source_joint: sourceJoint }) });
+    const r = await resp.json();
+    if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
+    log(t('subasm.driverJointSetOk', { name, sourceJoint: label }), 'ok');
+    refreshHistory();
+    if (ov) {
+      await openSubassemblyPreview(ov);
+    }
+    if (viewer.robot && treeViewMode === 'subassembly') {
+      buildJointRows(viewer.robot);
+    }
+  } catch (e) {
+    log(t('subasm.driverJointSetFail', { e: e.message ?? e }), 'err');
+    if (ov) {
+      await openSubassemblyPreview(ov);
+    }
+  }
+}
+
+function bindSubassemblyDriverJointChoices(root, ov) {
+  root.querySelectorAll('.subasm-driver-joint-choice').forEach(sel => {
+    sel.addEventListener('change', () => {
+      const name = sel.dataset.name;
+      const sourceJoint = sel.value;
+      root.querySelectorAll('.subasm-driver-joint-choice')
+        .forEach(x => { x.disabled = true; });
+      setSubassemblyDriverJointChoice(name, sourceJoint, ov);
+    });
+  });
+}
+
 function cycleBreakChoicesHtml(cycleChoices) {
   const choices = (cycleChoices || []).filter(c =>
     (c.candidates || []).length || c.selected_source_joint);
@@ -3816,6 +3909,13 @@ async function renderSubassemblyTreeRows(robot, movable) {
       groups.innerHTML = groupChoices;
       jointsEl.appendChild(groups);
       bindSubassemblyOriginLinkChoices(groups);
+    }
+    const driverChoices = driverJointChoicesHtml(r.driver_joint_choices);
+    if (driverChoices) {
+      const drivers = document.createElement('div');
+      drivers.innerHTML = driverChoices;
+      jointsEl.appendChild(drivers);
+      bindSubassemblyDriverJointChoices(drivers);
     }
     const cycleChoices = cycleBreakChoicesHtml(r.cycle_break_choices);
     if (cycleChoices) {
