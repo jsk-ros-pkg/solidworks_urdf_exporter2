@@ -2923,13 +2923,15 @@ async function setSubassemblyParentChoice(name, parent, ov) {
     if (ov) {
       await openSubassemblyPreview(ov);
     }
-    if (viewer.robot && treeViewMode === 'subassembly') {
+    if (viewer.robot && effectiveTreeViewMode() === 'subassembly') {
       buildJointRows(viewer.robot);
     }
   } catch (e) {
     log(t('subasm.parentSetFail', { e: e.message ?? e }), 'err');
     if (ov) {
       await openSubassemblyPreview(ov);
+    } else if (viewer.robot && effectiveTreeViewMode() === 'subassembly') {
+      buildJointRows(viewer.robot);
     }
   }
 }
@@ -3001,7 +3003,7 @@ async function setSubassemblyOriginLinkChoice(name, originLink, ov) {
     if (ov) {
       await openSubassemblyPreview(ov);
     }
-    if (viewer.robot && treeViewMode === 'subassembly') {
+    if (viewer.robot && effectiveTreeViewMode() === 'subassembly') {
       buildJointRows(viewer.robot);
     }
   } catch (e) {
@@ -3011,6 +3013,9 @@ async function setSubassemblyOriginLinkChoice(name, originLink, ov) {
     } else {
       document.querySelectorAll('.subasm-origin-link-choice')
         .forEach(x => { x.disabled = false; });
+      if (viewer.robot && effectiveTreeViewMode() === 'subassembly') {
+        buildJointRows(viewer.robot);
+      }
     }
   }
 }
@@ -3091,7 +3096,7 @@ async function setSubassemblyDriverJointChoice(name, sourceJoint, ov) {
       document.querySelectorAll('.subasm-driver-joint-choice')
         .forEach(x => { x.disabled = false; });
     }
-    if (viewer.robot && treeViewMode === 'subassembly') {
+    if (viewer.robot && effectiveTreeViewMode() === 'subassembly') {
       buildJointRows(viewer.robot);
     }
   } catch (e) {
@@ -3101,6 +3106,9 @@ async function setSubassemblyDriverJointChoice(name, sourceJoint, ov) {
     } else {
       document.querySelectorAll('.subasm-driver-joint-choice')
         .forEach(x => { x.disabled = false; });
+      if (viewer.robot && effectiveTreeViewMode() === 'subassembly') {
+        buildJointRows(viewer.robot);
+      }
     }
   }
 }
@@ -3191,7 +3199,7 @@ async function setSubassemblyCycleBreakChoice(sourceJoint, previousSourceJoint, 
       document.querySelectorAll('.subasm-cycle-break-choice')
         .forEach(x => { x.disabled = false; });
     }
-    if (viewer.robot && treeViewMode === 'subassembly') {
+    if (viewer.robot && effectiveTreeViewMode() === 'subassembly') {
       buildJointRows(viewer.robot);
     }
   } catch (e) {
@@ -3201,6 +3209,9 @@ async function setSubassemblyCycleBreakChoice(sourceJoint, previousSourceJoint, 
     } else {
       document.querySelectorAll('.subasm-cycle-break-choice')
         .forEach(x => { x.disabled = false; });
+      if (viewer.robot && effectiveTreeViewMode() === 'subassembly') {
+        buildJointRows(viewer.robot);
+      }
     }
   }
 }
@@ -3279,7 +3290,7 @@ async function setSubassemblyMode(name, mode, ov) {
     log(t('subasm.setPreviewOk', { name, mode }), 'ok');
     refreshHistory();
     await openSubassemblyList(ov);
-    if (viewer.robot && treeViewMode === 'subassembly') {
+    if (viewer.robot && effectiveTreeViewMode() === 'subassembly') {
       buildJointRows(viewer.robot);
     }
   } catch (e) {
