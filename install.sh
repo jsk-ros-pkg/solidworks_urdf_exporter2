@@ -16,10 +16,15 @@
 # that dir isn't on PATH, appends it to your shell rc.  Re-running upgrades in
 # place; the editor can also self-update from its own UI once installed.
 #
+# It also registers a `.urdf` file association so `xdg-open robot.urdf` (Linux) /
+# `open robot.urdf` (macOS) launches the editor with that file, and the app shows
+# up in the menu / "Open With".  Set SW2ROBOT_NO_DESKTOP=1 to skip that.
+#
 # Knobs (env vars):
 #   SW2ROBOT_INSTALL_DIR   where to put the binary   (default: $XDG_BIN_HOME or ~/.local/bin)
 #   SW2ROBOT_VERSION       pin a version, e.g. v0.3.2 (default: latest release)
 #   SW2ROBOT_NO_MODIFY_PATH=1   don't touch any shell rc; just print the PATH hint
+#   SW2ROBOT_NO_DESKTOP=1       don't register the .urdf file association / menu entry
 #
 # Or as flags when piping:  ... | sh -s -- --version v0.3.2 --bin-dir /usr/local/bin
 set -eu
@@ -31,6 +36,7 @@ APP="sw2robot-web"
 VERSION="${SW2ROBOT_VERSION:-}"
 INSTALL_DIR="${SW2ROBOT_INSTALL_DIR:-}"
 NO_MODIFY_PATH="${SW2ROBOT_NO_MODIFY_PATH:-}"
+NO_DESKTOP="${SW2ROBOT_NO_DESKTOP:-}"
 while [ $# -gt 0 ]; do
     case "$1" in
         --version)          VERSION="$2"; shift 2 ;;
@@ -38,8 +44,9 @@ while [ $# -gt 0 ]; do
         --bin-dir)          INSTALL_DIR="$2"; shift 2 ;;
         --bin-dir=*)        INSTALL_DIR="${1#*=}"; shift ;;
         --no-modify-path)   NO_MODIFY_PATH=1; shift ;;
+        --no-desktop)       NO_DESKTOP=1; shift ;;
         -h|--help)
-            sed -n '2,24p' "$0" 2>/dev/null || true
+            sed -n '2,29p' "$0" 2>/dev/null || true
             exit 0 ;;
         *) echo "install.sh: unknown option '$1'" >&2; exit 2 ;;
     esac
@@ -148,6 +155,84 @@ else
 fi
 
 say "installed $APP $VERSION -> $dest"
+
+# ---- register the .urdf file association ("open with" / xdg-open / open) -----
+# Linux and macOS use completely different registries (freedesktop .desktop +
+# shared-mime-info vs Launch Services), so this is per-OS; the UX is the same:
+# `xdg-open robot.urdf` / `open robot.urdf` (and double-click / "Open With")
+# launch the editor with that URDF.  On macOS the .app declares the type + uses
+# argv-emulation at build time (see build_exe.py); here we just re-register it.
+DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}"
+
+register_linux_desktop() {
+    if ! need xdg-mime; then
+        say "note: xdg-utils not found -> skipping .urdf association"
+        say "  (install 'xdg-utils' and re-run install.sh to enable it)"
+        return 0
+    fi
+    apps="$DATA_DIR/applications"
+    mimedir="$DATA_DIR/mime/packages"
+    mkdir -p "$apps" "$mimedir" "$DATA_DIR/sw2robot"
+
+    # best-effort app icon (a missing icon just falls back to a generic one)
+    icon="$DATA_DIR/sw2robot/icon.png"
+    if fetch_quiet "https://raw.githubusercontent.com/$REPO/main/assets/icon.png" \
+            > "$icon" 2>/dev/null && [ -s "$icon" ]; then
+        icon_line="Icon=$icon"
+    else
+        rm -f "$icon"; icon_line="Icon=sw2robot"
+    fi
+
+    # `%f` passes the opened file path as argv to the binary (urdf-input mode).
+    cat > "$apps/sw2robot.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=sw2robot
+Comment=SolidWorks -> URDF editor
+Exec=$dest %f
+$icon_line
+Terminal=false
+Categories=Graphics;Engineering;Science;
+MimeType=application/x-urdf;
+EOF
+
+    # A custom MIME type for *.urdf, as a subclass of application/xml so we don't
+    # hijack every XML/text file (URDF has no registered standard MIME type).
+    cat > "$mimedir/sw2robot.xml" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-urdf">
+    <comment>URDF robot description</comment>
+    <sub-class-of type="application/xml"/>
+    <glob pattern="*.urdf"/>
+    <magic priority="50"><match type="string" value="&lt;robot" offset="0:256"/></magic>
+  </mime-type>
+</mime-info>
+EOF
+
+    if need update-mime-database; then update-mime-database "$DATA_DIR/mime" 2>/dev/null || true; fi
+    if need update-desktop-database; then update-desktop-database "$apps" 2>/dev/null || true; fi
+    xdg-mime default sw2robot.desktop application/x-urdf 2>/dev/null || true
+    say "registered .urdf -> sw2robot.  Open one with:  xdg-open robot.urdf"
+}
+
+register_macos_launch_services() {
+    lsreg="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+    [ -x "$lsreg" ] || lsreg="$(command -v lsregister 2>/dev/null || true)"
+    if [ -n "$lsreg" ] && [ -x "$lsreg" ]; then
+        "$lsreg" -f "$share/$APP.app" 2>/dev/null || true
+        say "registered $APP.app with Launch Services.  Open a URDF with:  open robot.urdf"
+    else
+        say "note: lsregister not found -> skipping .urdf association"
+    fi
+}
+
+if [ -z "$NO_DESKTOP" ]; then
+    case "$OS" in
+        linux) register_linux_desktop ;;
+        macos) register_macos_launch_services ;;
+    esac
+fi
 
 # ---- ensure INSTALL_DIR is on PATH ------------------------------------------
 on_path() {

@@ -114,6 +114,23 @@ in place; the editor can
 also self-update from its own UI. Prefer to grab the file by hand, or need a
 different OS/arch? The per-OS steps below still apply.
 
+### Opening a `.urdf` with sw2robot
+
+The installer also registers a `.urdf` file association, so you can hand a URDF
+straight to the editor the same way on Linux and macOS:
+
+```bash
+xdg-open robot.urdf      # Linux
+open robot.urdf          # macOS
+```
+
+Either launches the editor with that URDF loaded (URDF-input mode). A `.urdf`
+also gets an **Open With → sw2robot** entry in the file manager / Finder, and
+sw2robot shows up in your application menu. Pass `SW2ROBOT_NO_DESKTOP=1` to the
+installer (or `--no-desktop`) to skip this. Linux needs `xdg-utils` installed
+for the association; without it the binary still installs and the step is
+skipped with a note.
+
 ## Quick start — download the Windows `.exe` (no Python)
 
 If you just want to convert a SolidWorks assembly, you don't need to install

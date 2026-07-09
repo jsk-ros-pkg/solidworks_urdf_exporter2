@@ -126,6 +126,45 @@ def _write(path: str, text: str) -> str:
     return path
 
 
+# The URDF file-type identity, shared with the installer's Linux MIME entry
+# (install.sh: application/x-urdf).  On macOS a bundle app only receives the
+# opened file when it BOTH declares the type here AND is frozen with
+# --argv-emulation (which turns the Launch Services open-document Apple Event
+# into an argv entry the web server already reads as its package/URDF arg).
+URDF_UTI = "com.jsk-ros-pkg.sw2robot.urdf"
+
+
+def _add_macos_document_types(app_path: str) -> None:
+    """Declare that the .app opens ``*.urdf`` (Finder 'Open With' + ``open
+    robot.urdf`` route here) by injecting CFBundleDocumentTypes + an exported
+    UTI into the bundle's Info.plist.  PyInstaller's CLI has no flag for this, so
+    we patch the generated plist directly."""
+    import plistlib
+    plist = os.path.join(app_path, "Contents", "Info.plist")
+    try:
+        with open(plist, "rb") as f:
+            pl = plistlib.load(f)
+    except Exception as e:
+        print(f"WARNING: could not read {plist} to add .urdf association: {e!r}",
+              file=sys.stderr)
+        return
+    pl["CFBundleDocumentTypes"] = [{
+        "CFBundleTypeName": "URDF robot description",
+        "CFBundleTypeRole": "Editor",
+        "LSHandlerRank": "Owner",
+        "LSItemContentTypes": [URDF_UTI],
+    }]
+    pl["UTExportedTypeDeclarations"] = [{
+        "UTTypeIdentifier": URDF_UTI,
+        "UTTypeDescription": "URDF robot description",
+        "UTTypeConformsTo": ["public.xml", "public.text"],
+        "UTTypeTagSpecification": {"public.filename-extension": ["urdf"]},
+    }]
+    with open(plist, "wb") as f:
+        plistlib.dump(pl, f)
+    print("Added .urdf file association (CFBundleDocumentTypes) to the .app.")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--target", choices=list(TARGETS), default="web",
@@ -232,6 +271,14 @@ def main() -> int:
         for h in WIN32_HIDDEN:
             pyi_args += ["--hidden-import", h]
 
+    # macOS bundle apps don't get the double-clicked / `open`ed file in argv --
+    # Launch Services delivers it as an Apple Event.  --argv-emulation installs a
+    # bootloader handler that turns that (and open-URL) event into an argv entry,
+    # so the file the user opens reaches the web server's positional arg exactly
+    # like it does on Linux (.desktop %f).  Pairs with _add_macos_document_types.
+    if mac_app:
+        pyi_args += ["--argv-emulation"]
+
     # Embed the app icon.  Windows uses the committed .ico; macOS wants a .icns
     # (PyInstaller rejects a .ico there) and only shows it on the windowed .app.
     # Linux ELF binaries carry no embedded icon (it lives in a .desktop file),
@@ -287,6 +334,11 @@ def main() -> int:
     else:
         suffix = ""
     out = os.path.join(ROOT, "dist", exe_name + suffix)
+    # Teach the freshly built .app that it opens *.urdf (Finder 'Open With' +
+    # `open robot.urdf`); the installer's lsregister picks this up.  Only the
+    # windowed .app carries an Info.plist to patch.
+    if mac_app and args.target == "web":
+        _add_macos_document_types(out)
     print(f"\nBuilt: {out}")
     if args.target == "web":
         if mac_app:
