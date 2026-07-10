@@ -23,7 +23,7 @@ Run it through uv so PyInstaller is available without polluting the project env:
 The default build is the FULL-FEATURE editor: it bundles the optional runtime
 backends the editor/CLI can reach -- skrobot+fcl (live self-collision + auto
 joint-limits) and coacd (CoACD collision decomposition).  --lean drops them for
-a smaller binary; --with-viser also bundles the standalone viser GUI.
+a smaller binary.
 
 Targets (entry points, mirroring [project.scripts] in pyproject.toml):
     web     sw2robot-web  -> the browser editor server (default; does
@@ -73,20 +73,18 @@ WIN32_HIDDEN = [
 #                      joint-limit sweep in the web editor)
 #   COACD     -> [coacd]  CoACD convex decomposition (--collision coacd / the web
 #                      "CoACD collision" box)
-#   STANDALONE_UI -> [ui]  the standalone viser GUI -- a SEPARATE entry point, not
-#                      reachable from the web/cli/export exe targets
 EDITOR_UI_PACKAGES = ["skrobot", "fcl"]
 COACD_PACKAGES = ["coacd"]
-STANDALONE_UI_PACKAGES = ["viser"]
 # The frozen exe is the FULL-FEATURE distribution: every optional backend the
 # web editor / CLI can actually reach at runtime is bundled by default (the user
 # cannot ``pip install`` into a frozen binary, so anything not bundled is dead
-# there).  viser is excluded -- no exe entry point reaches it -- unless asked for.
+# there).
 FULL_FEATURE_PACKAGES = EDITOR_UI_PACKAGES + COACD_PACKAGES
-ALL_OPTIONAL_PACKAGES = EDITOR_UI_PACKAGES + COACD_PACKAGES + STANDALONE_UI_PACKAGES
-# never needed at runtime -- dropping them shaves size / avoids hook noise
+# never needed at runtime -- dropping them shaves size / avoids hook noise.
+# viser arrives transitively via skrobot but no exe entry point reaches it, so it
+# is always excluded.
 BASE_EXCLUDES = ["tkinter", "matplotlib", "pytest", "IPython", "notebook",
-                 "jupyter", "PyQt5", "PyQt6", "PySide2", "PySide6"]
+                 "jupyter", "PyQt5", "PyQt6", "PySide2", "PySide6", "viser"]
 
 # Redirect pywin32's makepy/gencache output to a WRITABLE dir: inside a frozen
 # bundle the default gen_py path is the read-only _MEIPASS, which makes
@@ -177,9 +175,6 @@ def main() -> int:
                          "(skrobot/fcl self-collision + auto joint-limits, coacd "
                          "collision decomposition).  The default exe is the "
                          "FULL-FEATURE build and bundles them.")
-    ap.add_argument("--with-viser", action="store_true",
-                    help="also bundle the standalone viser GUI (a separate entry "
-                         "point, not reached by the web/cli exe; off by default)")
     ap.add_argument("--windowed", action="store_true",
                     help="no console window (default keeps the console so the "
                          "server URL / logs are visible; on macOS the build is "
@@ -298,11 +293,8 @@ def main() -> int:
               file=sys.stderr)
 
     excludes = list(BASE_EXCLUDES)
-    # Default is the full-feature build; --lean drops the optional backends,
-    # --with-viser adds the standalone GUI on top.
+    # Default is the full-feature build; --lean drops the optional backends.
     wanted = [] if args.lean else list(FULL_FEATURE_PACKAGES)
-    if args.with_viser:
-        wanted += STANDALONE_UI_PACKAGES
     # Only --collect-all what is actually installed.  A requested-but-missing
     # backend is reported LOUDLY (never silently dropped) so a "full" exe that is
     # in fact missing a feature is visible at build time, not at the user's first
@@ -315,7 +307,8 @@ def main() -> int:
               f"--lean to build a base exe on purpose).", file=sys.stderr)
     for p in include:
         pyi_args += ["--collect-all", p]
-    excludes += [p for p in ALL_OPTIONAL_PACKAGES if p not in include]
+    # exclude every optional backend we did NOT bundle (all of them under --lean)
+    excludes += [p for p in FULL_FEATURE_PACKAGES if p not in include]
     for e in excludes:
         pyi_args += ["--exclude-module", e]
 

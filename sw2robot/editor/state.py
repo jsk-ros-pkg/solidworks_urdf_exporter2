@@ -1,6 +1,6 @@
 """UI-independent state for a CAD-derived module under configuration.
 
-The View (viser today, React/Three.js later) only *reads* this; the core API
+The View (the web editor today, React/Three.js later) only *reads* this; the core API
 mutates it; export consumes it.  Pydantic so it serializes to JSON for a
 REST/WebSocket payload without change.
 """

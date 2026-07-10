@@ -23,7 +23,7 @@ import sys
 import tempfile
 
 # pywin32 is Windows-only and only needed for the SolidWorks `extract` phase.
-# Guard the imports so the SW-free `build` path (model/urdf_writer/sw2robot.editor.ui)
+# Guard the imports so the SW-free `build` path (model/urdf_writer/editor.core)
 # imports on any OS / a PC without pywin32 -- the COM calls below only run when
 # `SolidWorks()`/`as_iface()` are actually used (i.e. during extract).
 try:
@@ -227,7 +227,6 @@ SW_DOC_DRAWING = 3
 
 # swOpenDocOptions_e
 SW_OPEN_SILENT = 1
-SW_OPEN_READONLY = 4
 
 # swSaveAsOptions_e
 SW_SAVEAS_SILENT = 1
