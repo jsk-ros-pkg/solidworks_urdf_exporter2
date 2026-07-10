@@ -1023,6 +1023,67 @@ def _set_number_override(txt, mapkey, key, value):
     return (f"{mapkey}:\n{block}" + txt) if block else txt
 
 
+def _subassemblies_payload(graph, yml_txt=""):
+    """Read-only summary for the editor's sub-assembly panel.
+
+    This intentionally reports top-level CAD sub-assembly *instances* first:
+    those are the units a user sees in the parent assembly and the same names
+    matched by the existing ``expand:`` / ``no_expand:`` config lists.
+    """
+    import yaml as _yaml
+
+    from sw2robot.exporter.model import _subgraph_is_movable
+
+    try:
+        cfg = _yaml.safe_load(yml_txt) or {}
+    except Exception:
+        cfg = {}
+    expand = [str(x).lower() for x in (cfg.get("expand") or [])]
+    no_expand = [str(x).lower() for x in (cfg.get("no_expand") or [])]
+
+    subs = getattr(graph, "subassemblies", None) or {}
+    out = []
+    for c in getattr(graph, "components", []) or []:
+        if not (getattr(c, "is_subassembly", False) and c.part_path):
+            continue
+        sub = subs.get(c.part_path)
+        nm = c.name.lower()
+        override = "auto"
+        if any(s in nm for s in no_expand):
+            override = "no_expand"
+        elif any(s in nm for s in expand):
+            override = "expand"
+        movable = bool(sub and _subgraph_is_movable(sub, subs))
+        expanded = override != "no_expand" and (
+            override == "expand" or movable)
+        if override == "no_expand":
+            reason = "kept by no_expand"
+        elif override == "expand":
+            reason = "forced expand"
+        elif movable:
+            reason = "auto-expanded: moving internals" if expanded \
+                else "moving internals"
+        else:
+            reason = "kept rigid: no moving internals"
+        out.append({
+            "name": c.name,
+            "link_name": c.link_name,
+            "path": c.part_path,
+            "children": len(sub.components) if sub else 0,
+            "internal_edges": len(sub.edges) if sub else 0,
+            "movable": movable,
+            "override": override,
+            "expanded": expanded,
+            "reason": reason,
+        })
+    out.sort(key=lambda x: x["name"])
+    return {
+        "subassemblies": out,
+        "expand": cfg.get("expand") or [],
+        "no_expand": cfg.get("no_expand") or [],
+    }
+
+
 def _upsert_yaml_map(txt, mapkey, key, value):
     """Set ``mapkey: {key: value}`` (block style) in joints.yaml text, replacing
     any existing entry for ``key`` and creating the map if needed."""
@@ -2532,6 +2593,23 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                                         "urdf_masses": urdf_masses,
                                         "mass_only": sorted(
                                             _read_mass_only(cls.pkg_dir))})
+            if path == "/api/subassemblies":
+                cls = type(self)
+                if not cls.pkg_dir:
+                    return self._send_json({"error": "no package open"}, 400)
+                if not _cad_mode(cls.pkg_dir):
+                    return self._send_json({"subassemblies": [],
+                                            "expand": [], "no_expand": [],
+                                            "mode": "urdf"})
+                from sw2robot.exporter.state import GraphState
+                gs = GraphState.load(os.path.join(cls.pkg_dir, "graph.json"))
+                name = os.path.splitext(os.path.basename(cls.urdf_rel))[0]
+                yml = os.path.join(cls.pkg_dir, name + ".joints.yaml")
+                txt = open(yml, encoding="utf-8").read() \
+                    if os.path.exists(yml) else ""
+                payload = _subassemblies_payload(gs, txt)
+                payload["mode"] = "cad"
+                return self._send_json(payload)
             if path == "/api/fs":
                 # tiny server-side file browser: the OS file dialog cannot
                 # hand a PATH to the page, so the page browses through us
