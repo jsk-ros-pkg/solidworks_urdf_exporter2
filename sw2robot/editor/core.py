@@ -1,6 +1,6 @@
 """Core API for the CAD -> robot-compiler bridge (UI-independent).
 
-Every function here is callable from a CLI, a viser callback, or a FastAPI
+Every function here is callable from a CLI, the web editor, or a FastAPI
 endpoint with no change -- that is the whole point (see the package docstring).
 
 Pipeline:
@@ -60,7 +60,6 @@ __all__ = [
 
 JOINT_TYPES = ("fixed", "revolute", "continuous", "prismatic")
 _SAFE_NAME = re.compile(r"^[A-Za-z_][0-9A-Za-z_]*$")
-_MOVABLE = ("revolute", "continuous", "prismatic")
 
 
 # --------------------------------------------------------------- topology
@@ -180,7 +179,7 @@ def extract_and_import(assembly_path, out_dir=None, robot_name=None,
     """Drive SolidWorks to extract a live assembly, then build it into a state.
 
     This is the *whole* CAD->state pipeline in one call (the slow ``extract``
-    half PLUS the fast ``build`` half), so the viser View can offer a single
+    half PLUS the fast ``build`` half), so the web editor can offer a single
     "Import from SolidWorks" button.  ``extract`` opens a throwaway COPY of
     ``assembly_path`` in its own SolidWorks instance and never touches the
     user's original file (see :class:`sw2robot.exporter.swcom.SolidWorks`).

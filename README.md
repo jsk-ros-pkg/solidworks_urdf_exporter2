@@ -284,7 +284,7 @@ SolidWorks).
 
 ```bash
 pip install -e .            # core: extract / build / web editor (view+edit)
-pip install -e ".[ui]"      # + live collision highlight, auto joint-limits, viser GUI
+pip install -e ".[ui]"      # + live collision highlight, auto joint-limits
 ```
 
 `[ui]` adds `scikit-robot` (FK) and `python-fcl` (collision). The editor's

@@ -47,7 +47,7 @@ dependencies = [
 
 [project.optional-dependencies]
 # the live self-collision highlight + the auto joint-limit sweep (skrobot FK +
-# python-fcl), plus the standalone viser GUI.  scikit-robot also powers the
+# python-fcl).  scikit-robot also powers the
 # `--collision primitive|box|cylinder|sphere` fitting (>=0.3.17 ships the
 # per-mesh primitive API, skrobot.utils.primitive_fitting).  The web editor's
 # view / edit / extract / build all work WITHOUT these; collision + auto-limits
@@ -55,7 +55,6 @@ dependencies = [
 ui = [
     "scikit-robot>=0.3.17",
     "python-fcl>=0.7",
-    "viser",
 ]
 # optional CoACD approximate convex decomposition for <collision> meshes in the
 # ROS export (the `--collision coacd` CLI flag / the web "CoACD collision" box).

@@ -11,7 +11,8 @@ query is ~1-2 ms (the raw CAD mesh is ~200 ms); the baseline is computed with th
 same hulls, so hull-induced static overlaps cancel out.
 
 This module needs skrobot (FK) + trimesh + python-fcl (the ``[ui]`` extra).
-It is UI-independent: ``sw2robot.editor.ui`` calls it, and so can a headless
+It is UI-independent: the web editor (``sw2robot.editor.webserver``) and the
+auto-limit subprocess (``_autolimits_cli``) call it, and so can a headless
 script.
 """
 
@@ -57,7 +58,7 @@ def link_meshes(robot):
     """``{link name -> local-frame trimesh}`` for every link that has visual
     geometry -- the per-link mesh map both :class:`SelfCollision` and
     :func:`sweep_limits` take.  One place so the webserver, the autolimits
-    subprocess and the viser UI build it identically."""
+    subprocess and the web editor build it identically."""
     out = {}
     for l in robot.link_list:
         m = link_visual_mesh(l)

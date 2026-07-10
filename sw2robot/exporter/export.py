@@ -322,7 +322,7 @@ def build(pkg_dir, config_path=None, base_hint=None, exclude=None,
     if not config_path:
         print(f"  Config: {tmpl}  (edit, re-run: "
               "python -m sw2robot.exporter.build with --config)")
-    print(f"  View:   uv run visualize-urdf \"{urdf_path}\" --viewer viser")
+    print(f"  View:   uv run visualize-urdf \"{urdf_path}\"")
     return urdf_path
 
 

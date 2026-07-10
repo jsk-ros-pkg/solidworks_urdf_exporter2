@@ -6,7 +6,7 @@ Design (a standing directive):
   a CAD-derived module being configured.  It serializes to JSON, so it moves to
   a REST/WebSocket payload unchanged.
 - **Core API** (``core``): pure functions that mutate State / produce artifacts.
-  A viser callback or a FastAPI endpoint is a *thin* wrapper over these.
+  A web-editor handler or a FastAPI endpoint is a *thin* wrapper over these.
 - **Headless**: the whole pipeline (CAD build -> edit -> ROS export) runs from
   the CLI (``python -m sw2robot.editor``) with no GUI and no SolidWorks.
 
