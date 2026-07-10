@@ -1269,11 +1269,14 @@ def _collapse_preview_payload(graph, yml_txt=""):
         joints.append(out)
 
     base = collapse_link.get(canonical["base_link"], canonical["base_link"])
+    validation = _validate_collapsed_tree(base, links, joints, collapsed,
+                                          collapse_link)
     return {
         "base_link": base,
         "links": links,
         "joints": joints,
         "tree_rows": _tree_rows_payload(base, links, joints),
+        "validation": validation,
         "dropped_internal_joints": dropped,
         "collapsed_subassemblies": collapsed,
         "canonical_counts": {
@@ -1284,6 +1287,134 @@ def _collapse_preview_payload(graph, yml_txt=""):
             "links": len(links),
             "joints": len(joints),
         },
+    }
+
+
+def _validate_collapsed_tree(base_link, links, joints, collapsed,
+                             collapse_link=None):
+    """Report structural hazards in a collapsed preview tree."""
+    collapse_link = collapse_link or {}
+    link_names = {l["link_name"] for l in links}
+    issues = []
+
+    incoming = {}
+    for j in joints:
+        incoming.setdefault(j["child"], []).append(j)
+    for child, rows in sorted(incoming.items()):
+        parents = sorted({j["parent"] for j in rows})
+        if len(parents) > 1:
+            issues.append({
+                "severity": "warning",
+                "code": "multiple_parents",
+                "link": child,
+                "parents": parents,
+                "joints": [j.get("name") for j in rows],
+                "source_joints": [j.get("source_name") for j in rows],
+                "message": (
+                    f"{child} has {len(parents)} parent candidates after "
+                    "sub-assembly collapse"),
+            })
+
+    adj = {}
+    for j in joints:
+        adj.setdefault(j["parent"], []).append(j["child"])
+    seen_cycles, colour, stack = set(), {}, []
+
+    def dfs(node):
+        colour[node] = "gray"
+        stack.append(node)
+        for child in adj.get(node, []):
+            if colour.get(child) == "gray":
+                i = stack.index(child)
+                cyc = [*stack[i:], child]
+                key = tuple(cyc)
+                if key not in seen_cycles:
+                    seen_cycles.add(key)
+                    issues.append({
+                        "severity": "error",
+                        "code": "cycle",
+                        "links": cyc,
+                        "message": "collapsed tree contains a directed cycle",
+                    })
+            elif colour.get(child) != "black":
+                dfs(child)
+        stack.pop()
+        colour[node] = "black"
+
+    roots = [base_link] if base_link in link_names else []
+    roots.extend(sorted(link_names - set(roots)))
+    for root in roots:
+        if colour.get(root) is None:
+            dfs(root)
+
+    for sub in collapsed:
+        members = list(sub.get("member_links") or [])
+        if len(members) <= 1:
+            continue
+        member_set = set(members)
+        internal_adj = {m: set() for m in members}
+        for j in sub.get("internal_joints") or []:
+            p, c = j.get("parent"), j.get("child")
+            if p in member_set and c in member_set:
+                internal_adj[p].add(c)
+                internal_adj[c].add(p)
+        comps = []
+        todo = set(members)
+        while todo:
+            start = todo.pop()
+            comp = [start]
+            q = [start]
+            while q:
+                cur = q.pop()
+                for nxt in internal_adj.get(cur, ()):
+                    if nxt in todo:
+                        todo.remove(nxt)
+                        comp.append(nxt)
+                        q.append(nxt)
+            comps.append(sorted(comp))
+        # ``todo`` is a set, so the discovery order of the groups is not
+        # deterministic across platforms/hash seeds -- sort the groups (each
+        # already sorted internally) so the payload is stable.
+        comps.sort()
+        if len(comps) > 1:
+            issues.append({
+                "severity": "warning",
+                "code": "disconnected_members",
+                "subassembly": sub.get("name"),
+                "link": sub.get("link_name"),
+                "components": comps,
+                "message": (
+                    f"{sub.get('name')} maps to {len(comps)} disconnected "
+                    "member groups in the expanded tree"),
+            })
+
+        incoming_boundary = []
+        for j in sub.get("boundary_joints") or []:
+            parent = collapse_link.get(j["parent"], j["parent"])
+            child = collapse_link.get(j["child"], j["child"])
+            if child == sub.get("link_name") and parent != child:
+                incoming_boundary.append({
+                    "parent": parent,
+                    "joint": j.get("name"),
+                })
+        parents = sorted({x["parent"] for x in incoming_boundary})
+        if len(parents) > 1:
+            issues.append({
+                "severity": "warning",
+                "code": "multiple_boundary_parents",
+                "subassembly": sub.get("name"),
+                "link": sub.get("link_name"),
+                "parents": parents,
+                "joints": [x["joint"] for x in incoming_boundary],
+                "message": (
+                    f"{sub.get('name')} has {len(parents)} external parent "
+                    "candidates after collapse"),
+            })
+
+    return {
+        "ok": not any(i["severity"] == "error" for i in issues),
+        "issue_count": len(issues),
+        "issues": issues,
     }
 
 

@@ -222,6 +222,52 @@ def test_collapse_preview_keeps_expanded_override():
     ]
 
 
+def test_validate_collapsed_tree_reports_multiple_parents_and_cycles():
+    from sw2robot.editor.webserver import _validate_collapsed_tree
+
+    links = [{"link_name": n} for n in ("base", "alt", "arm")]
+    joints = [
+        {"name": "base__arm", "parent": "base", "child": "arm",
+         "type": "fixed", "source_name": "j1"},
+        {"name": "alt__arm", "parent": "alt", "child": "arm",
+         "type": "fixed", "source_name": "j2"},
+        {"name": "arm__base", "parent": "arm", "child": "base",
+         "type": "fixed", "source_name": "j3"},
+    ]
+    payload = _validate_collapsed_tree("base", links, joints, [])
+    codes = {i["code"] for i in payload["issues"]}
+    assert {"multiple_parents", "cycle"} <= codes
+    multi = next(i for i in payload["issues"]
+                 if i["code"] == "multiple_parents")
+    assert multi["parents"] == ["alt", "base"]
+    assert multi["source_joints"] == ["j1", "j2"]
+    cycle = next(i for i in payload["issues"] if i["code"] == "cycle")
+    assert cycle["links"] == ["base", "arm", "base"]
+    assert payload["ok"] is False
+
+
+def test_validate_collapsed_tree_reports_disconnected_members():
+    from sw2robot.editor.webserver import _validate_collapsed_tree
+
+    collapsed = [{
+        "name": "sub-1",
+        "link_name": "sub_1",
+        "member_links": ["sub_1__a", "sub_1__b"],
+        "internal_joints": [],
+        "boundary_joints": [],
+    }]
+    payload = _validate_collapsed_tree(
+        "base",
+        [{"link_name": "base"}, {"link_name": "sub_1"}],
+        [{"name": "base__sub_1", "parent": "base", "child": "sub_1",
+          "type": "fixed"}],
+        collapsed)
+    issue = payload["issues"][0]
+    assert issue["code"] == "disconnected_members"
+    assert issue["subassembly"] == "sub-1"
+    assert issue["components"] == [["sub_1__a"], ["sub_1__b"]]
+
+
 def test_subassemblies_payload_reports_expansion_state():
     from sw2robot.editor.webserver import _subassemblies_payload
 

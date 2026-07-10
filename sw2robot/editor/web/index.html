@@ -1104,6 +1104,8 @@ the config and does NOT re-detect). Needs graph.json (CAD mode).">🔗 re-detect
                           ja: a => `${a.n} 行` },
     'tree.memberCount': { en: a => `${a.n} links`,
                           ja: a => `${a.n} links` },
+    'tree.validationTitle': { en: a => `collapse validation: ${a.n} issue(s)`,
+                              ja: a => `畳み込み検証: ${a.n} 件` },
     // mass editor (bulk mass / density / mass-only + default-mass guard)
     'mass.listTitle': { en: 'mass editor', ja: '質量エディタ' },
     'mass.listHelp': { en: 'set a target mass (kg) OR a density (kg/m³) per link — one clears the other. ⚠ links use a SolidWorks default mass (no material assigned); set a value or acknowledge them before export.',
@@ -2764,6 +2766,60 @@ function htmlEsc(s) {
   }[c]));
 }
 
+function validationIssuesHtml(validation) {
+  const issues = validation?.issues || [];
+  if (!issues.length) { return ''; }
+  function previewList(values, limit = 5) {
+    const arr = (values || []).filter(v => v !== null && v !== undefined);
+    if (!arr.length) { return ''; }
+    const head = arr.slice(0, limit).map(htmlEsc).join(', ');
+    const more = arr.length > limit ? `, +${arr.length - limit} more` : '';
+    return head + more;
+  }
+  function issueDetailHtml(issue) {
+    const parts = [];
+    const parents = previewList(issue.parents);
+    if (parents) {
+      parts.push(`<div>candidates: ${parents}</div>`);
+    }
+    const joints = previewList(issue.source_joints || issue.joints);
+    if (joints) {
+      parts.push(`<div>joints: ${joints}</div>`);
+    }
+    const links = previewList(issue.links, 8);
+    if (links) {
+      parts.push(`<div>links: ${links}</div>`);
+    }
+    const comps = issue.components || [];
+    if (comps.length) {
+      const rows = comps.slice(0, 3).map((comp, i) => {
+        const label = previewList(comp, 4);
+        return `<div>group ${i + 1} (${comp.length}): ${label}</div>`;
+      });
+      if (comps.length > 3) {
+        rows.push(`<div>+${comps.length - 3} groups</div>`);
+      }
+      parts.push(rows.join(''));
+    }
+    if (!parts.length) { return ''; }
+    return `<div style="color:#c6ad79;margin:2px 0 5px 12px">` +
+      parts.join('') + `</div>`;
+  }
+  const rows = issues.slice(0, 6).map(issue =>
+    `<div style="margin-top:2px">` +
+    `<span style="color:#d6b36b">${htmlEsc(issue.code || 'warning')}</span>` +
+    `: ${htmlEsc(issue.message || '')}</div>` +
+    issueDetailHtml(issue)).join('');
+  const more = issues.length > 6
+    ? `<div style="color:#8a93a3;margin-top:2px">+${issues.length - 6}</div>`
+    : '';
+  return `<div style="border:1px solid #6b5730;background:#2b251b;` +
+    `color:#f0d49a;border-radius:4px;padding:6px 8px;margin:8px 0;` +
+    `font-size:11px">` +
+    `<div>${t('tree.validationTitle', { n: issues.length })}</div>` +
+    rows + more + `</div>`;
+}
+
 function pathBase(p) {
   const s = String(p ?? '');
   return s.split(/[\\/]/).pop() || s;
@@ -2913,7 +2969,8 @@ async function openSubassemblyPreview(ov) {
       t('subasm.previewCounts', {
         cl: cc.links ?? 0, cj: cc.joints ?? 0,
         pl: pc.links ?? 0, pj: pc.joints ?? 0,
-      }) + '</div>';
+      }) + '</div>' +
+      validationIssuesHtml(r.validation);
     const rows = r.collapsed_subassemblies || [];
     if (!rows.length) {
       html += '<div style="color:#8a93a3">' + t('subasm.previewNone') + '</div>';
@@ -3316,6 +3373,12 @@ async function renderSubassemblyTreeRows(robot, movable) {
       countEl.textContent = q
         ? t('jfilter.count', { n: treeRows.length, total: allRows.length })
         : t('tree.subasmCount', { n: treeRows.length });
+    }
+    const validationHtml = validationIssuesHtml(r.validation);
+    if (validationHtml) {
+      const warn = document.createElement('div');
+      warn.innerHTML = validationHtml;
+      jointsEl.appendChild(warn);
     }
     const hint = document.createElement('div');
     hint.className = 'joint';
