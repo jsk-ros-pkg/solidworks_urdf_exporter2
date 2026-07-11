@@ -1261,7 +1261,7 @@ def _collapse_preview_payload(graph, yml_txt=""):
             "member_components": sub["member_components"],
             "internal_joints": sub["internal_joints"],
             "boundary_joints": sub["boundary_joints"],
-            "selected_parent": parent_overrides.get(row["name"], ""),
+            "selected_parent": "",
         }
         collapsed.append(info)
         for link in sub["member_links"]:
@@ -1269,6 +1269,13 @@ def _collapse_preview_payload(graph, yml_txt=""):
 
     parent_choices = _collapse_parent_choices(
         collapsed, collapse_link, parent_overrides)
+    selected_parent_by_subassembly = {
+        c.get("subassembly"): c.get("selected_parent", "")
+        for c in parent_choices
+    }
+    for sub in collapsed:
+        sub["selected_parent"] = selected_parent_by_subassembly.get(
+            sub["name"], "")
 
     links = []
     inserted = set()
@@ -1348,7 +1355,8 @@ def _collapse_parent_choices(collapsed, collapse_link, parent_overrides):
             child = collapse_link.get(j["child"], j["child"])
             if child == link_name and parent != child:
                 by_parent.setdefault(parent, []).append(j.get("name"))
-        selected = parent_overrides.get(sub.get("name"), "")
+        raw_selected = parent_overrides.get(sub.get("name"), "")
+        selected = raw_selected if raw_selected in by_parent else ""
         if len(by_parent) <= 1 and not selected:
             continue
         choices.append({

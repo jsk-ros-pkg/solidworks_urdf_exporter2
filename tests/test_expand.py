@@ -271,6 +271,81 @@ joints:
     }
 
 
+def test_collapse_preview_ignores_stale_subassembly_parent_override():
+    from sw2robot.editor.webserver import _collapse_preview_payload
+
+    graph = make_graph()
+    graph.components.append(_comp("bracket-1", "bracket_1", xyz=(0, 0.1, 0)))
+    txt = """
+base: plate-1
+no_expand:
+- servo
+subassembly_parent_overrides:
+  servo-1: missing_parent
+joints:
+  - parent: plate-1
+    child:  servo-1/case-1
+    type:   fixed
+  - parent: bracket-1
+    child:  servo-1/horn-1
+    type:   fixed
+  - parent: plate-1
+    child:  bracket-1
+    type:   fixed
+"""
+    payload = _collapse_preview_payload(graph, txt)
+    assert payload["parent_choices"][0]["selected_parent"] == ""
+    assert payload["collapsed_subassemblies"][0]["selected_parent"] == ""
+    assert {
+        (j["parent"], j["child"]) for j in payload["joints"]
+    } >= {
+        ("plate_1", "servo_1"),
+        ("bracket_1", "servo_1"),
+    }
+    assert "multiple_boundary_parents" in {
+        i["code"] for i in payload["validation"]["issues"]
+    }
+
+
+def test_collapse_preview_can_reset_subassembly_parent_override_to_auto():
+    from sw2robot.editor.webserver import (
+        _collapse_preview_payload,
+        _set_subassembly_parent_override_yaml,
+        _subassembly_parent_overrides,
+    )
+
+    graph = make_graph()
+    graph.components.append(_comp("bracket-1", "bracket_1", xyz=(0, 0.1, 0)))
+    txt = """
+base: plate-1
+no_expand:
+- servo
+joints:
+  - parent: plate-1
+    child:  servo-1/case-1
+    type:   fixed
+  - parent: bracket-1
+    child:  servo-1/horn-1
+    type:   fixed
+  - parent: plate-1
+    child:  bracket-1
+    type:   fixed
+"""
+    txt = _set_subassembly_parent_override_yaml(
+        txt, graph, "servo-1", "bracket_1")
+    txt = _set_subassembly_parent_override_yaml(txt, graph, "servo-1", "")
+    assert _subassembly_parent_overrides(txt) == {}
+
+    payload = _collapse_preview_payload(graph, txt)
+    assert payload["parent_choices"][0]["selected_parent"] == ""
+    assert {
+        (j["parent"], j["child"]) for j in payload["joints"]
+    } >= {
+        ("plate_1", "servo_1"),
+        ("bracket_1", "servo_1"),
+    }
+
+
 def test_validate_collapsed_tree_reports_multiple_parents_and_cycles():
     from sw2robot.editor.webserver import _validate_collapsed_tree
 
