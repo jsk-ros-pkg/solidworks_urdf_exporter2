@@ -2850,7 +2850,7 @@ function parentChoicesHtml(parentChoices) {
       `<div><div style="color:#cfe3ff">${htmlEsc(c.subassembly)}</div>` +
       `<div style="color:#6b7480">${htmlEsc(c.link_name)}</div></div>` +
       `<div><select class="subasm-parent-choice" ` +
-      `data-name="${htmlEsc(c.subassembly)}" data-prev="${htmlEsc(selected)}">` +
+      `data-name="${htmlEsc(c.subassembly)}">` +
       opts + `</select>${joints}</div></div>`;
   }).join('');
   return `<div style="border:1px solid #3c4654;background:#1f242c;` +
