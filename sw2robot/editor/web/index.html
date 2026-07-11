@@ -2692,6 +2692,7 @@ let jointFilter = '';          // substring filter: when set, the tree collapses
 let treeViewMode = 'expanded'; // expanded = editable URDF tree; subassembly =
                                // read-only collapse_preview tree
 let robotViewMode = 'normal';  // normal | collapsed_preview
+let pendingRobotViewMode = null;
 let subasmTreeRequest = 0;     // discard stale async preview responses
 const playRows = new Map();    // joint name -> "move" mode slider record
 let playMode = false;          // movable-joints-only panel active
@@ -8038,6 +8039,10 @@ gridBtn.addEventListener('click', () => {
 });
 
 viewer.addEventListener('urdf-processed', () => {
+  if (pendingRobotViewMode) {
+    robotViewMode = pendingRobotViewMode;
+    pendingRobotViewMode = null;
+  }
   const n = buildJointRows(viewer.robot);
   if (playMode) { buildPlayRows(viewer.robot); }   // keep the move panel in sync
   log(t('urdf.parsed', { n: Object.keys(viewer.robot.links).length, m: n }), 'ok');
@@ -8139,6 +8144,7 @@ viewer.addEventListener('geometry-loaded', () => {
                          : t('status.summaryOk') });
 });
 viewer.addEventListener('urdf-error', e => {
+  pendingRobotViewMode = null;
   removeLoadCover();
   hideLoadbar();
   document.getElementById('loadbackdrop').style.display = 'none';
@@ -8207,6 +8213,7 @@ function clearViewer() {
   if (r && r.parent) { r.parent.remove(r); }
   viewer.robot = null;
   robotViewMode = 'normal';
+  pendingRobotViewMode = null;
   jointsEl.innerHTML = '';
   rows.clear();
   document.getElementById('selbar').style.display = 'none';
@@ -8231,7 +8238,7 @@ function loadRobot(info, { drop = false, keepPose = false,
   // fresh package -> drop the old actions/camera so they can't replay onto it
   if (!keepPose) { _resetSessionLogs(); }
   op('loadRobot', { name: info?.name, keepPose, drop, previewOnly });
-  robotViewMode = previewOnly ? 'collapsed_preview' : 'normal';
+  pendingRobotViewMode = previewOnly ? 'collapsed_preview' : 'normal';
   cancelEndcoords();        // a rebuild invalidates any open placement session
   document.getElementById('emptyprompt').style.display = 'none';
   if (((keepPose || followCamera) && viewer.robot) || restoreAngles) {
