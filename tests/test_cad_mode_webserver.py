@@ -240,6 +240,23 @@ def test_collapsed_preview_urdf_endpoint_is_preview_only(server):
     assert {l.get("name") for l in preview.findall("link")} == {
         l.get("name") for l in normal.findall("link")}
     assert (pkg / "urdf" / "fingertip.urdf").is_file()
+    assert not list((pkg / "urdf").glob(
+        ".*.expanded-preview-source.urdf"))
+
+
+def test_collapsed_preview_urdf_rejects_invalid_joints_yaml(server):
+    base, pkg = server
+    (pkg / "fingertip.joints.yaml").write_text(
+        "joints: [unterminated\n", encoding="utf-8")
+
+    with pytest.raises(urllib.error.HTTPError) as caught:
+        urllib.request.urlopen(base + "/api/collapsed_preview_urdf")
+
+    assert caught.value.code == 400
+    payload = json.loads(caught.value.read().decode("utf-8"))
+    assert "invalid joints.yaml" in payload["error"]
+    assert not list((pkg / "urdf").glob(
+        ".*.expanded-preview-source.urdf"))
 
 
 def test_set_mimic_reflected_without_rebuild(server):

@@ -25,6 +25,8 @@ tests/e2e/package-lock.json
 # e2e fixtures pristine -- the overlay sidecar + live copy are regenerated)
 tests/e2e/fixtures/**/*.sw2robot.json
 tests/e2e/fixtures/**/.*.live.urdf
+tests/e2e/fixtures/**/.*.expanded-preview-source.urdf
+tests/e2e/fixtures/**/.*.collapsed-preview.urdf
 _server*.txt
 _client_report.json
 _sldasm_index.json

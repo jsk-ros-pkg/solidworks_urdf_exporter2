@@ -2134,7 +2134,9 @@ def _collapsed_preview_urdf_text(urdf_text, plan, robot_name=None):
 
 
 def _expanded_preview_source_urdf_text(pkg_dir, urdf_rel, graph, yml_txt):
-    """Build an all-expanded hidden URDF source for collapsed-preview meshes."""
+    """Build an all-expanded temporary URDF for collapsed-preview meshes."""
+    import tempfile as _tempfile
+
     import yaml as _yaml
 
     from sw2robot.exporter import model as _M
@@ -2142,28 +2144,36 @@ def _expanded_preview_source_urdf_text(pkg_dir, urdf_rel, graph, yml_txt):
 
     try:
         cfg = _yaml.safe_load(yml_txt) or {}
-        if not isinstance(cfg, dict):
-            cfg = {}
-    except Exception:
-        cfg = {}
+    except _yaml.YAMLError as e:
+        raise ValueError(f"invalid joints.yaml: {e}") from e
+    if not isinstance(cfg, dict):
+        raise ValueError("invalid joints.yaml: document root must be a mapping")
     full_cfg = dict(cfg)
     full_cfg["expand"] = [""]
     full_cfg["no_expand"] = []
     model = _M.build_model(graph, config=full_cfg)
 
     stem = os.path.splitext(os.path.basename(urdf_rel))[0]
-    src_rel = posixpath.join(posixpath.dirname(urdf_rel),
-                             f".{stem}.expanded-preview-source.urdf")
-    src_path = os.path.join(pkg_dir, *src_rel.split("/"))
-    os.makedirs(os.path.dirname(src_path), exist_ok=True)
+    urdf_dir = os.path.join(pkg_dir, *posixpath.dirname(urdf_rel).split("/"))
+    os.makedirs(urdf_dir, exist_ok=True)
     kwargs = {}
     if cfg.get("density") is not None:
         kwargs["density"] = float(cfg.get("density"))
     kwargs["link_overrides"] = cfg.get("link_names") or {}
     kwargs["joint_overrides"] = cfg.get("joint_names") or {}
-    write_urdf(model, src_path, **kwargs)
-    with open(src_path, encoding="utf-8") as f:
-        return f.read()
+    fd, src_path = _tempfile.mkstemp(
+        prefix=f".{stem}.", suffix=".expanded-preview-source.urdf",
+        dir=urdf_dir)
+    os.close(fd)
+    try:
+        write_urdf(model, src_path, **kwargs)
+        with open(src_path, encoding="utf-8") as f:
+            return f.read()
+    finally:
+        try:
+            os.unlink(src_path)
+        except FileNotFoundError:
+            pass
 
 
 def _collapsed_preview_mesh_report(urdf_text, plan):
