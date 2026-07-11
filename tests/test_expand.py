@@ -230,6 +230,25 @@ def test_collapse_preview_replaces_no_expand_subassembly_members():
     ]
     assert payload["tree_rows"][1]["member_links"] == [
         "servo_1__case_1", "servo_1__horn_1"]
+    plan = payload["collapse_plan"]
+    assert plan["ready_for_urdf"] is True
+    assert plan["collapsed_subassemblies"] == [{
+        "name": "servo-1",
+        "link": "servo_1",
+        "member_links": ["servo_1__case_1", "servo_1__horn_1"],
+        "member_components": ["servo-1/case-1", "servo-1/horn-1"],
+        "selected_parent": "",
+        "selected_origin_link": "",
+    }]
+    assert plan["link_replacements"] == [
+        {"source_link": "servo_1__case_1", "collapsed_link": "servo_1"},
+        {"source_link": "servo_1__horn_1", "collapsed_link": "servo_1"},
+    ]
+    assert [(j["source_joint"], j["decision"])
+            for j in plan["dropped_joints"]] == [
+        ("servo_1__case_1__servo_1__horn_1",
+         "dropped_internal_to_collapsed_subassembly"),
+    ]
 
 
 def test_collapse_preview_keeps_expanded_override():
@@ -453,9 +472,9 @@ joints:
         i["code"] for i in payload["validation"]["issues"]
     }
     plan = payload["collapse_plan"]
-    assert plan["ready_for_urdf"] is True
+    assert plan["ready_for_urdf"] is False
     servo_link = next(l for l in plan["links"] if l["link"] == "servo_1")
-    assert servo_link["selected_origin_link"] == "servo_1__horn_1"
+    assert servo_link["selected_origin_link"] == ""
 
 
 def test_collapse_preview_can_reset_subassembly_parent_override_to_auto():
@@ -548,6 +567,11 @@ def test_collapse_preview_applies_cycle_break_before_choices(monkeypatch):
         "subassemblies": [],
     })
 
+    unresolved = webserver._collapse_preview_payload(object(), "")
+    assert any(i["code"] == "cycle"
+               for i in unresolved["validation"]["issues"])
+    assert unresolved["collapse_plan"]["ready_for_urdf"] is False
+
     payload = webserver._collapse_preview_payload(
         object(), "subassembly_cycle_break_joints:\n- arm__base\n")
 
@@ -567,6 +591,36 @@ def test_collapse_preview_applies_cycle_break_before_choices(monkeypatch):
             "child": "",
         }],
     }]
+    assert payload["collapse_plan"]["ready_for_urdf"] is True
+    assert [(j["source_joint"], j["decision"])
+            for j in payload["collapse_plan"]["dropped_joints"]] == [
+        ("arm__base", "dropped_cycle_break"),
+    ]
+
+
+def test_collapse_plan_rejects_unreachable_second_root(monkeypatch):
+    from sw2robot.editor import webserver
+
+    monkeypatch.setattr(webserver, "_canonical_tree_payload", lambda *_: {
+        "base_link": "base",
+        "links": [{"name": n, "link_name": n}
+                  for n in ("base", "arm", "orphan")],
+        "joints": [{
+            "name": "base__arm", "parent": "base", "child": "arm",
+            "type": "fixed",
+        }],
+        "subassemblies": [],
+    })
+    monkeypatch.setattr(webserver, "_subassemblies_payload", lambda *_: {
+        "subassemblies": [],
+    })
+
+    payload = webserver._collapse_preview_payload(object(), "")
+
+    issues = {i["code"]: i for i in payload["validation"]["issues"]}
+    assert issues["invalid_roots"]["roots"] == ["base", "orphan"]
+    assert issues["unreachable_links"]["links"] == ["orphan"]
+    assert payload["collapse_plan"]["ready_for_urdf"] is False
 
 
 def test_subassembly_cycle_break_yaml_adds_and_resets_source_joint():

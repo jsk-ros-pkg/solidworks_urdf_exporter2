@@ -1632,6 +1632,56 @@ def _validate_collapsed_tree(base_link, links, joints, collapsed,
     """Report structural hazards in a collapsed preview tree."""
     collapse_link = collapse_link or {}
     issues = []
+    link_names = {row.get("link_name") for row in links
+                  if row.get("link_name")}
+
+    children = {j.get("child") for j in joints
+                if j.get("child") in link_names}
+    roots = sorted(link_names - children)
+    if base_link not in link_names:
+        issues.append({
+            "severity": "error",
+            "code": "invalid_base_link",
+            "base_link": base_link,
+            "message": f"collapsed tree base link {base_link} does not exist",
+        })
+    if roots != [base_link]:
+        issues.append({
+            "severity": "error",
+            "code": "invalid_roots",
+            "base_link": base_link,
+            "roots": roots,
+            "message": (
+                "collapsed tree must have exactly one root matching "
+                f"base_link; found {len(roots)} root(s)"),
+        })
+
+    reachable = set()
+    if base_link in link_names:
+        by_parent = {}
+        for joint in joints:
+            parent = joint.get("parent")
+            child = joint.get("child")
+            if parent in link_names and child in link_names:
+                by_parent.setdefault(parent, []).append(child)
+        todo = [base_link]
+        while todo:
+            link = todo.pop()
+            if link in reachable:
+                continue
+            reachable.add(link)
+            todo.extend(by_parent.get(link, []))
+    unreachable = sorted(link_names - reachable)
+    if unreachable:
+        issues.append({
+            "severity": "error",
+            "code": "unreachable_links",
+            "base_link": base_link,
+            "links": unreachable,
+            "message": (
+                f"{len(unreachable)} collapsed tree link(s) are not reachable "
+                f"from {base_link}"),
+        })
 
     incoming = {}
     for j in joints:
@@ -1781,10 +1831,7 @@ def _collapse_plan_payload(base_link, links, joints, collapsed, collapse_link,
     return {
         "version": 1,
         "base_link": base_link,
-        "ready_for_urdf": (
-            bool(validation.get("ok")) and
-            int(validation.get("issue_count") or 0) == 0
-        ),
+        "ready_for_urdf": int(validation.get("issue_count") or 0) == 0,
         "links": [plan_link(row) for row in links],
         "joints": [plan_joint(row) for row in joints],
         "dropped_joints": dropped_joints,
