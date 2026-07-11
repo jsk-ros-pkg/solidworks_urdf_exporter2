@@ -287,9 +287,10 @@ pip install -e .            # core: extract / build / web editor (view+edit)
 pip install -e ".[ui]"      # + live collision highlight, auto joint-limits
 ```
 
-`[ui]` adds `scikit-robot` (FK) and `python-fcl` (collision). The editor's
-view / edit / extract / build work without it; collision and auto-limits just
-report "not available" until it is installed.
+`[ui]` adds `python-fcl` (collision queries); `scikit-robot` (FK, primitive
+fitting) is a core dependency. The editor's view / edit / extract / build work
+without `[ui]`; collision and auto-limits just report "not available" until it
+is installed.
 
 ## Use
 

@@ -67,13 +67,18 @@ WIN32_HIDDEN = [
     "win32api", "win32con", "win32timezone",
 ]
 
-# Optional feature backends, named by IMPORT name (what PyInstaller --collect-all
-# wants); pyproject lists the matching DIST names per extra:
-#   EDITOR_UI -> [ui]  scikit-robot + python-fcl  (live self-collision + auto
-#                      joint-limit sweep in the web editor)
-#   COACD     -> [coacd]  CoACD convex decomposition (--collision coacd / the web
-#                      "CoACD collision" box)
-EDITOR_UI_PACKAGES = ["skrobot", "fcl"]
+# Packages named by IMPORT name (what PyInstaller --collect-all wants);
+# pyproject lists the matching DIST names.
+#   ALWAYS_BUNDLED -> scikit-robot is a CORE dependency (the exporter's
+#                     rotation math lives there), so every build needs it --
+#                     PyInstaller's static scan pulls it in and it must never
+#                     be excluded, even under --lean.
+#   EDITOR_UI -> [ui]  python-fcl (live self-collision + auto joint-limit
+#                      sweep in the web editor)
+#   COACD     -> [coacd]  CoACD convex decomposition (--collision coacd / the
+#                      web "CoACD collision" box)
+ALWAYS_BUNDLED = ["skrobot"]
+EDITOR_UI_PACKAGES = ["fcl"]
 COACD_PACKAGES = ["coacd"]
 # The frozen exe is the FULL-FEATURE distribution: every optional backend the
 # web editor / CLI can actually reach at runtime is bundled by default (the user
@@ -172,9 +177,10 @@ def main() -> int:
                          "more reliable for the COM/makepy path)")
     ap.add_argument("--lean", action="store_true",
                     help="base build: skip the optional runtime backends "
-                         "(skrobot/fcl self-collision + auto joint-limits, coacd "
+                         "(fcl self-collision + auto joint-limits, coacd "
                          "collision decomposition).  The default exe is the "
-                         "FULL-FEATURE build and bundles them.")
+                         "FULL-FEATURE build and bundles them.  scikit-robot "
+                         "is a core dependency and is always bundled.")
     ap.add_argument("--windowed", action="store_true",
                     help="no console window (default keeps the console so the "
                          "server URL / logs are visible; on macOS the build is "
@@ -245,10 +251,10 @@ def main() -> int:
         # DATA files the ROS-package (.dae) export dies with FileNotFoundError
         "--collect-all", "collada",
         # trimesh imports these LAZILY for mesh load / convert (3dxml parse,
-        # dae/stl export); PyInstaller's static scan of trimesh misses them, so
-        # a base (no-ui) exe dies with ModuleNotFoundError at export time.  The
-        # ui build gets them transitively via skrobot -- name them so EVERY
-        # build bundles them (their hooks then pull the needed bits).
+        # dae/stl export); PyInstaller's static scan of trimesh misses them and
+        # an exe without them dies with ModuleNotFoundError at export time --
+        # name them so EVERY build bundles them (their hooks then pull the
+        # needed bits).
         "--collect-all", "networkx",
         "--collect-all", "scipy",
         "--distpath", os.path.join(ROOT, "dist"),
@@ -294,7 +300,10 @@ def main() -> int:
 
     excludes = list(BASE_EXCLUDES)
     # Default is the full-feature build; --lean drops the optional backends.
-    wanted = [] if args.lean else list(FULL_FEATURE_PACKAGES)
+    # skrobot is a core dependency and is bundled in EVERY build.
+    wanted = list(ALWAYS_BUNDLED)
+    if not args.lean:
+        wanted += list(FULL_FEATURE_PACKAGES)
     # Only --collect-all what is actually installed.  A requested-but-missing
     # backend is reported LOUDLY (never silently dropped) so a "full" exe that is
     # in fact missing a feature is visible at build time, not at the user's first

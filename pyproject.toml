@@ -41,19 +41,21 @@ dependencies = [
     "lxml",
     "pydantic>=2",
     "pyyaml>=6",
+    # rotation/transform math (rpy<->matrix) and FK; >=0.3.17 also ships the
+    # per-mesh primitive API (skrobot.utils.primitive_fitting) used by the
+    # ROS-export --collision fitting.
+    "scikit-robot>=0.3.17",
     # only the EXTRACT step (driving SolidWorks COM) needs this, and only on Windows
     "pywin32>=306; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]
-# the live self-collision highlight + the auto joint-limit sweep (skrobot FK +
-# python-fcl).  scikit-robot also powers the
-# `--collision primitive|box|cylinder|sphere` fitting (>=0.3.17 ships the
-# per-mesh primitive API, skrobot.utils.primitive_fitting).  The web editor's
-# view / edit / extract / build all work WITHOUT these; collision + auto-limits
-# degrade gracefully (clear error if a primitive mode is requested) when absent.
+# the live self-collision highlight + the auto joint-limit sweep.  The FK side
+# (scikit-robot) is now a core dependency; this extra only adds python-fcl for
+# the collision queries.  The web editor's view / edit / extract / build all work
+# WITHOUT it; collision + auto-limits degrade gracefully (clear error if a
+# primitive collision mode is requested) when absent.
 ui = [
-    "scikit-robot>=0.3.17",
     "python-fcl>=0.7",
 ]
 # optional CoACD approximate convex decomposition for <collision> meshes in the
@@ -66,7 +68,8 @@ coacd = [
 ]
 # extra deps the test suite uses to validate exported ROS packages without a ROS
 # install: catkin_pkg parses/validates package.xml the way catkin/colcon do
-# (skrobot, used to load the exported URDF + resolve package:// meshes, is in ui).
+# (skrobot, used to load the exported URDF + resolve package:// meshes, is now a
+# core dependency; python-fcl for the collision checks is in [ui]).
 test = [
     "catkin_pkg",
     "pytest",
