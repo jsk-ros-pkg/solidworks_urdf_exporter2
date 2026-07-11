@@ -1,0 +1,52 @@
+name: Feature request
+description: Propose a change or new capability. Get agreement before writing code.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Implementation PRs must reference an issue a maintainer has labelled
+        `accepted`, so this is the place to align on approach first. Please wait
+        for that label before writing code. Keep it concise — one proposal per
+        issue, and land one before opening the next.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem (2-3 lines)
+      description: What can't you do today, and why does it matter?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change (2-3 lines)
+      description: What should happen? Keep it short; details can follow in discussion.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives / open question (optional)
+      description: One key trade-off or question you'd like a maintainer to weigh in on.
+    validations:
+      required: false
+  - type: dropdown
+    id: ai-usage
+    attributes:
+      label: AI usage disclosure
+      description: Did you use AI to help write this? (See CONTRIBUTING.md.)
+      options:
+        - "No AI was used"
+        - "AI-assisted, reviewed and edited by a human"
+      default: 0
+    validations:
+      required: true
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Confirmation
+      options:
+        - label: This is a single, focused proposal, and I'm not opening several broad discussions at once.
+          required: true
+        - label: I understand implementation PRs need an issue labelled `accepted` first, and I won't send a large drive-by PR.
+          required: true

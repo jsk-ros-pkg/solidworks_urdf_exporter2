@@ -1,0 +1,7 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or open-ended discussion
+    url: https://github.com/jsk-ros-pkg/solidworks_urdf_exporter2/discussions
+    about: >-
+      For open-ended questions and design discussions, please start a Discussion
+      instead of an issue. Open one topic at a time. See CONTRIBUTING.md.

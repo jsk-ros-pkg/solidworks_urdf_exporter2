@@ -29,3 +29,7 @@ _server*.txt
 _client_report.json
 _sldasm_index.json
 _sw_spawned_pids.txt
+
+# A global core.excludesFile ignores dotpaths via ".*"; keep repo meta tracked.
+!.github/
+!.github/**
