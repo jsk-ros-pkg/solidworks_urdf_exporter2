@@ -1044,8 +1044,8 @@ the config and does NOT re-detect). Needs graph.json (CAD mode).">🔗 re-detect
     'subasm.btnTitle': { en: 'show CAD sub-assemblies and whether they are expanded',
                          ja: 'CADサブアセンブリと展開状態を表示' },
     'subasm.title': { en: 'CAD sub-assemblies', ja: 'CADサブアセンブリ' },
-    'subasm.help': { en: 'Sub-assembly mode keeps the normal expanded tree as the baseline, then overrides only selected CAD sub-assemblies.',
-                     ja: 'サブアセンブリモードでは通常の全展開treeを基準にして、選んだCADサブアセンブリだけを上書きします。' },
+    'subasm.help': { en: 'Sub-assembly mode starts with CAD sub-assemblies collapsed while keeping the normal expanded robot unchanged. Select auto or expand where needed.',
+                     ja: '通常の全展開ロボットは変更せず、CADサブアセンブリを畳んだ状態から始めます。必要な箇所だけautoまたはexpandを選択できます。' },
     'subasm.none': { en: 'No CAD sub-assemblies in this package.',
                      ja: 'このパッケージにはCADサブアセンブリがありません。' },
     'subasm.urdfMode': { en: 'Sub-assembly data is available for CAD-extracted packages only.',
@@ -1146,6 +1146,7 @@ the config and does NOT re-detect). Needs graph.json (CAD mode).">🔗 re-detect
     'subasm.overrideAuto': { en: 'auto', ja: 'auto' },
     'subasm.overrideExpand': { en: 'expand', ja: 'expand' },
     'subasm.overrideNoExpand': { en: 'no_expand', ja: 'no_expand' },
+    'subasm.modeDefault': { en: 'default', ja: '初期値' },
     'subasm.setOk': { en: a => `${a.name}: ${a.mode} ✓`,
                       ja: a => `${a.name}: ${a.mode} ✓` },
     'subasm.settingPreview': { en: a => `saving sub-assembly preview mode: ${a.name} → ${a.mode} ...`,
@@ -3444,6 +3445,8 @@ async function openSubassemblyList(ov) {
         const state = s.expanded ? t('subasm.stateExpanded')
                                  : t('subasm.stateKept');
         const col = s.expanded ? '#9fe0a8' : '#d6b36b';
+        const modeSource = s.mode_source === 'default'
+          ? `, ${t('subasm.modeDefault')}` : '';
         const opt = v => `<option value="${v}"${s.override === v ? ' selected' : ''}>` +
           `${subasmOverrideLabel(v)}</option>`;
         html += `<tr title="${htmlEsc(s.reason)}">` +
@@ -3452,7 +3455,8 @@ async function openSubassemblyList(ov) {
           `<td>${s.children ?? 0}</td>` +
           `<td>${s.internal_edges ?? 0}</td>` +
           `<td><span style="color:${col}">${state}</span>` +
-          ` <span style="color:#8a93a3">(${subasmOverrideLabel(s.override)})</span></td>` +
+          ` <span style="color:#8a93a3">` +
+          `(${subasmOverrideLabel(s.override)}${htmlEsc(modeSource)})</span></td>` +
           `<td><select class="subasm-mode" data-name="${htmlEsc(s.name)}" ` +
           `data-prev="${htmlEsc(s.override)}" data-children="${s.children ?? 0}" ` +
           `data-edges="${s.internal_edges ?? 0}">` +
