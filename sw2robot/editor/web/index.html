@@ -655,6 +655,10 @@
       <button id="renamelistbtn" data-i18n="ui.renamelist"
               data-i18n-title="t.renamelist"
               title="関節名・リンク名を一覧で改名">≣ 改名</button>
+      <button id="subassemblybtn" class="btn-ico" disabled
+              data-i18n-title="subasm.directBtnTitle"
+              title="CADサブアセンブリmodeを開く"><span class="ico">▦</span><span
+              data-i18n="subasm.directBtn">サブアセンブリ</span></button>
       <button id="masslistbtn" data-i18n="ui.masslist"
               data-i18n-title="t.masslist"
               title="質量を一覧で編集">⚖ 質量</button>
@@ -1043,6 +1047,9 @@ the config and does NOT re-detect). Needs graph.json (CAD mode).">🔗 re-detect
     'subasm.btn': { en: 'Sub-assemblies', ja: 'サブアセンブリ' },
     'subasm.btnTitle': { en: 'show CAD sub-assemblies and whether they are expanded',
                          ja: 'CADサブアセンブリと展開状態を表示' },
+    'subasm.directBtn': { en: 'sub-assemblies', ja: 'サブアセンブリ' },
+    'subasm.directBtnTitle': { en: 'open CAD sub-assembly mode',
+                               ja: 'CADサブアセンブリmodeを開く' },
     'subasm.title': { en: 'CAD sub-assemblies', ja: 'CADサブアセンブリ' },
     'subasm.help': { en: 'Sub-assembly mode starts with CAD sub-assemblies collapsed while keeping the normal expanded robot unchanged. Select auto or expand where needed.',
                      ja: '通常の全展開ロボットは変更せず、CADサブアセンブリを畳んだ状態から始めます。必要な箇所だけautoまたはexpandを選択できます。' },
@@ -3405,11 +3412,13 @@ async function setSubassemblyMode(name, mode, ov) {
   }
 }
 
-async function openSubassemblyList(ov) {
+async function openSubassemblyList(ov, entrySource = null) {
   if (!viewer.robot && !currentInfo) { log(t('common.openFirst'), 'wrn'); return; }
-  const owned = ov || document.getElementById('renamelist') ||
-    document.createElement('div');
+  document.getElementById('masslist')?.remove();
+  if (!ov) { document.getElementById('renamelist')?.remove(); }
+  const owned = ov || document.createElement('div');
   owned.id = 'renamelist';
+  if (entrySource) { owned.dataset.subassemblyEntry = entrySource; }
   dockPanelBelowViews(owned);
   try {
     const resp = await fetch('/api/subassemblies');
@@ -3468,7 +3477,8 @@ async function openSubassemblyList(ov) {
     const close = document.createElement('button');
     close.textContent = t('common.close');
     close.addEventListener('click', () => owned.remove());
-    bar.append(back, preview, close);
+    if (owned.dataset.subassemblyEntry === 'rename') { bar.appendChild(back); }
+    bar.append(preview, close);
     card.appendChild(bar);
     owned.replaceChildren(card);
     card.querySelectorAll('.subasm-mode').forEach(sel => {
@@ -3632,7 +3642,7 @@ function openRenameList(ov = null) {
   const subasm = document.createElement('button');
   subasm.textContent = t('subasm.btn');
   subasm.title = t('subasm.btnTitle');
-  subasm.addEventListener('click', () => openSubassemblyList(ov));
+  subasm.addEventListener('click', () => openSubassemblyList(ov, 'rename'));
   const close = document.createElement('button');
   close.textContent = t('common.close');
   close.addEventListener('click', () => ov.remove());
@@ -3655,6 +3665,17 @@ function openRenameList(ov = null) {
 }
 document.getElementById('renamelistbtn')
   .addEventListener('click', () => openRenameList());
+
+function syncSubassemblyAccessButton() {
+  const button = document.getElementById('subassemblybtn');
+  const hasPackage = !!currentInfo;
+  const available = hasPackage && currentInfo.mode !== 'urdf';
+  button.disabled = !available;
+  button.style.display = hasPackage && !available ? 'none' : '';
+}
+
+document.getElementById('subassemblybtn')
+  .addEventListener('click', () => openSubassemblyList(null, 'direct'));
 
 // shared material/density presets (label -> density kg/m³; 'custom' = prompt),
 // used by both the mass editor and the per-link select popup
@@ -8447,6 +8468,7 @@ function clearViewer() {
   hideLoadbar();
   document.getElementById('emptyprompt').style.display = '';
   currentInfo = null;
+  syncSubassemblyAccessButton();
   document.getElementById('title').textContent = t('ui.title');
   document.title = 'sw2robot';
   statusEl.textContent = t('view.cleared');
@@ -8489,6 +8511,7 @@ function loadRobot(info, { drop = false, keepPose = false,
       currentInfo = info;
     }
   }
+  syncSubassemblyAccessButton();
   refreshExportName();          // export field placeholder follows the open pkg
   // cover the reload gap with a display-only clone of the current robot
   // (same world pose -> the swap is pixel-invisible); geometry/materials
