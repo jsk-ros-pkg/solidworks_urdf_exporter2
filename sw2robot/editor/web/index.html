@@ -3063,7 +3063,7 @@ function driverJointChoicesHtml(driverChoices) {
       `<div><div style="color:#cfe3ff">${htmlEsc(c.subassembly)}</div>` +
       `<div style="color:#6b7480">${htmlEsc(c.link_name)}</div></div>` +
       `<div><select class="subasm-driver-joint-choice" ` +
-      `data-name="${htmlEsc(c.subassembly)}" data-prev="${htmlEsc(selected)}">` +
+      `data-name="${htmlEsc(c.subassembly)}">` +
       opts + `</select>${details}${more}</div></div>`;
   }).join('');
   return `<div style="border:1px solid #3d5244;background:#1f2a25;` +
@@ -3087,6 +3087,9 @@ async function setSubassemblyDriverJointChoice(name, sourceJoint, ov) {
     refreshHistory();
     if (ov) {
       await openSubassemblyPreview(ov);
+    } else {
+      document.querySelectorAll('.subasm-driver-joint-choice')
+        .forEach(x => { x.disabled = false; });
     }
     if (viewer.robot && treeViewMode === 'subassembly') {
       buildJointRows(viewer.robot);
@@ -3095,6 +3098,9 @@ async function setSubassemblyDriverJointChoice(name, sourceJoint, ov) {
     log(t('subasm.driverJointSetFail', { e: e.message ?? e }), 'err');
     if (ov) {
       await openSubassemblyPreview(ov);
+    } else {
+      document.querySelectorAll('.subasm-driver-joint-choice')
+        .forEach(x => { x.disabled = false; });
     }
   }
 }
@@ -3398,6 +3404,7 @@ async function openSubassemblyPreview(ov) {
       validationIssuesHtml(r.validation) +
       parentChoicesHtml(r.parent_choices) +
       originLinkChoicesHtml(r.group_choices) +
+      driverJointChoicesHtml(r.driver_joint_choices) +
       cycleBreakChoicesHtml(r.cycle_break_choices);
     const rows = r.collapsed_subassemblies || [];
     if (!rows.length) {
@@ -3441,6 +3448,7 @@ async function openSubassemblyPreview(ov) {
     card.innerHTML = html;
     bindSubassemblyParentChoices(card, owned);
     bindSubassemblyOriginLinkChoices(card, owned);
+    bindSubassemblyDriverJointChoices(card, owned);
     bindSubassemblyCycleBreakChoices(card, owned);
     const bar = document.createElement('div');
     bar.style.cssText = 'display:flex;gap:8px;margin-top:10px';
