@@ -1,0 +1,67 @@
+name: Bug report
+description: Something doesn't work as expected. Keep it short and specific.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please keep this focused. A few precise sentences with exact steps are
+        worth more than a long write-up. One bug per issue.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened (2-3 lines)
+      description: What went wrong, and what did you expect instead? Keep it brief.
+      placeholder: When I export ..., I get ..., but I expected ...
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce (numbered, minimal)
+      description: The shortest exact steps that trigger it. Include a sample file if you can.
+      placeholder: |
+        1. Open ...
+        2. Click ...
+        3. See ...
+    validations:
+      required: true
+  - type: textarea
+    id: sample
+    attributes:
+      label: Reproducible sample (.zip)
+      description: >-
+        If a specific assembly/part is involved, drag a .zip of the MINIMAL
+        .sldasm / .sldprt files needed to reproduce it into this box. Replace
+        any confidential CAD with simple dummy stand-ins that still show the
+        problem. See CONTRIBUTING.md. If you truly can't share one, describe the
+        structure precisely here instead.
+      placeholder: Drag & drop a .zip here, or describe the minimal structure.
+    validations:
+      required: false
+  - type: input
+    id: version
+    attributes:
+      label: Version / OS
+      description: sw2robot version and your OS (and SolidWorks version if the extract step is involved).
+      placeholder: "sw2robot 0.3.4, Windows 11, SolidWorks 2024"
+    validations:
+      required: true
+  - type: dropdown
+    id: ai-usage
+    attributes:
+      label: AI usage disclosure
+      description: Did you use AI to help write this report? (See CONTRIBUTING.md.)
+      options:
+        - "No AI was used"
+        - "AI-assisted, reviewed and edited by a human"
+      default: 0
+    validations:
+      required: true
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Confirmation
+      options:
+        - label: This is one bug (not several batched together), and I searched for existing issues.
+          required: true
