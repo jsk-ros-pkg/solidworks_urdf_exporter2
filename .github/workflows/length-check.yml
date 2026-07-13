@@ -1,0 +1,87 @@
+name: Flag long issues and PRs
+
+# Non-blocking nudge: when an issue or PR description is long *on prose*, add a
+# `needs-condensing` label and a friendly comment asking the author to trim it.
+# Code blocks, logs, blockquotes (citations), images, and URLs are excluded from
+# the count, so a detailed bug report with logs is not penalised — only verbose
+# prose is. Editing the description to shorten it clears the label automatically.
+
+on:
+  issues:
+    types: [opened, edited]
+  pull_request_target:
+    types: [opened, edited]
+
+permissions:
+  issues: write
+  pull-requests: write
+
+env:
+  # Prose-word budget (excludes code/logs/quotes/images/URLs). Tune as needed.
+  PROSE_WORD_LIMIT: "400"
+  LABEL: "needs-condensing"
+  # Comma-separated usernames to never nudge (e.g. "iory,other-maintainer").
+  EXEMPT_USERS: ""
+
+jobs:
+  length-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const LIMIT = parseInt(process.env.PROSE_WORD_LIMIT, 10);
+            const LABEL = process.env.LABEL;
+            const exempt = (process.env.EXEMPT_USERS || "")
+              .split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
+
+            const isPR = !!context.payload.pull_request;
+            const obj = context.payload.issue || context.payload.pull_request;
+            const number = obj.number;
+            const author = (obj.user && obj.user.login || "").toLowerCase();
+
+            if (exempt.includes(author)) {
+              core.info(`Author ${author} is exempt; skipping.`);
+              return;
+            }
+
+            // Strip everything that legitimately needs length before counting.
+            const prose = (obj.body || "")
+              .replace(/<!--[\s\S]*?-->/g, " ")        // HTML comments (template hints)
+              .replace(/```[\s\S]*?```/g, " ")         // fenced code / logs
+              .replace(/`[^`]*`/g, " ")                // inline code
+              .replace(/^\s*>.*$/gm, " ")              // blockquotes (citations)
+              .replace(/<[^>]+>/g, " ")                // HTML tags (e.g. <img>)
+              .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")   // markdown images
+              .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")  // links -> keep visible text
+              .replace(/https?:\/\/\S+/g, " ");        // bare URLs
+
+            const words = prose.split(/\s+/).filter(Boolean).length;
+            const hasLabel = (obj.labels || []).some(l => (l.name || l) === LABEL);
+            core.info(`#${number} prose_words=${words} limit=${LIMIT} has_label=${hasLabel}`);
+
+            if (words > LIMIT) {
+              if (hasLabel) return; // already flagged; don't re-comment on every edit
+              await github.rest.issues.addLabels({
+                ...context.repo, issue_number: number, labels: [LABEL],
+              });
+              const kind = isPR ? "pull request" : "issue";
+              const url = `https://github.com/${context.repo.owner}/${context.repo.repo}/blob/main/CONTRIBUTING.md`;
+              const body = [
+                `👋 Thanks for this! Heads up: this ${kind}'s description runs long on prose ` +
+                  `(~**${words} words**, excluding code, logs, quotes, images and URLs; the guideline is **${LIMIT}**).`,
+                ``,
+                `To keep review sustainable, please consider trimming it to the essentials — ` +
+                  `a few precise sentences usually beat a long write-up. Logs, screenshots and ` +
+                  `reproduction steps don't count toward this, so keep those. See [CONTRIBUTING.md](${url}).`,
+                ``,
+                `_Automated, non-blocking nudge. Shorten the description and the \`${LABEL}\` label clears itself._`,
+              ].join("\n");
+              await github.rest.issues.createComment({
+                ...context.repo, issue_number: number, body,
+              });
+            } else if (hasLabel) {
+              await github.rest.issues.removeLabel({
+                ...context.repo, issue_number: number, name: LABEL,
+              }).catch(() => {}); // ignore if already removed
+            }
