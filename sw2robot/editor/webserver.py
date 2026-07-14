@@ -1140,6 +1140,96 @@ def _set_subassembly_mode_yaml(txt, graph, name, mode):
     return txt, {"expand": exp_members, "no_expand": noexp_members}
 
 
+def _subassembly_parent_overrides(yml_txt):
+    """Preview-only parent choices for collapsed CAD sub-assemblies."""
+    import yaml as _yaml
+
+    try:
+        cfg = _yaml.safe_load(yml_txt) or {}
+        if not isinstance(cfg, dict):
+            return {}
+    except Exception:
+        return {}
+    raw = cfg.get("subassembly_parent_overrides") or {}
+    if not isinstance(raw, dict):
+        return {}
+    return {str(k): str(v) for k, v in raw.items() if v is not None}
+
+
+def _set_subassembly_parent_override_yaml(txt, graph, name, parent):
+    """Set/reset one preview-only collapsed sub-assembly parent choice."""
+    names = _subassembly_names(graph)
+    if name not in names:
+        raise ValueError(f"no CAD sub-assembly '{name}'")
+    if parent:
+        return _upsert_yaml_map(
+            txt, "subassembly_parent_overrides", name, _yaml_scalar(parent))
+    return _remove_yaml_map_entry(txt, "subassembly_parent_overrides", name)
+
+
+def _subassembly_origin_links(yml_txt):
+    """Preview-only representative member links for collapsed sub-assemblies.
+
+    The build/export path does not consume this yet; it only documents the
+    user's intended anchor for collapsed preview diagnostics.
+    """
+    import yaml as _yaml
+
+    try:
+        cfg = _yaml.safe_load(yml_txt) or {}
+        if not isinstance(cfg, dict):
+            return {}
+    except Exception:
+        return {}
+    raw = cfg.get("subassembly_origin_links") or {}
+    if not isinstance(raw, dict):
+        return {}
+    return {str(k): str(v) for k, v in raw.items() if v is not None}
+
+
+def _set_subassembly_origin_link_yaml(txt, graph, name, origin_link):
+    """Set/reset one preview-only collapsed sub-assembly origin link."""
+    names = _subassembly_names(graph)
+    if name not in names:
+        raise ValueError(f"no CAD sub-assembly '{name}'")
+    if origin_link:
+        return _upsert_yaml_map(
+            txt, "subassembly_origin_links", name,
+            _yaml_scalar(origin_link))
+    return _remove_yaml_map_entry(txt, "subassembly_origin_links", name)
+
+
+def _subassembly_cycle_break_joints(yml_txt):
+    """Preview-only source joints dropped to break collapsed-tree cycles."""
+    import yaml as _yaml
+
+    try:
+        cfg = _yaml.safe_load(yml_txt) or {}
+        if not isinstance(cfg, dict):
+            return set()
+    except Exception:
+        return set()
+    raw = cfg.get("subassembly_cycle_break_joints") or []
+    if not isinstance(raw, list):
+        return set()
+    return {str(x) for x in raw if x is not None}
+
+
+def _set_subassembly_cycle_break_joint_yaml(
+        txt, source_joint, drop, previous_source_joint=""):
+    """Set/reset one preview-only source joint dropped for cycle breaking."""
+    source_joint = str(source_joint or "").strip()
+    previous_source_joint = str(previous_source_joint or "").strip()
+    target = source_joint or previous_source_joint
+    if not target:
+        raise ValueError("source_joint required")
+    remove = [x for x in (previous_source_joint, source_joint) if x]
+    add = [source_joint] if drop and source_joint else []
+    new_txt, _members = _set_yaml_list_block(
+        txt, "subassembly_cycle_break_joints", add=add, remove=remove)
+    return new_txt
+
+
 def _canonical_tree_payload(graph, yml_txt=""):
     """Fully-expanded tree plus CAD sub-assembly membership.
 
@@ -1215,6 +1305,9 @@ def _collapse_preview_payload(graph, yml_txt=""):
     """
     canonical = _canonical_tree_payload(graph, yml_txt)
     states = _subassemblies_payload(graph, yml_txt)
+    parent_overrides = _subassembly_parent_overrides(yml_txt)
+    origin_links = _subassembly_origin_links(yml_txt)
+    cycle_break_joints = _subassembly_cycle_break_joints(yml_txt)
     by_sub = {s["name"]: s for s in canonical["subassemblies"]}
     collapse_link = {}
     collapsed = []
@@ -1233,10 +1326,33 @@ def _collapse_preview_payload(graph, yml_txt=""):
             "member_components": sub["member_components"],
             "internal_joints": sub["internal_joints"],
             "boundary_joints": sub["boundary_joints"],
+            "selected_parent": "",
+            "selected_origin_link": origin_links.get(row["name"], ""),
         }
         collapsed.append(info)
         for link in sub["member_links"]:
             collapse_link[link] = row["link_name"]
+
+    parent_choices = _collapse_parent_choices(
+        collapsed, collapse_link, parent_overrides)
+    selected_parent_by_subassembly = {
+        c.get("subassembly"): c.get("selected_parent", "")
+        for c in parent_choices
+    }
+    for sub in collapsed:
+        sub["selected_parent"] = selected_parent_by_subassembly.get(
+            sub["name"], "")
+    group_choices = _collapse_group_choices(collapsed, origin_links)
+    origin_choice_by_subassembly = {
+        c.get("subassembly"): c
+        for c in group_choices
+    }
+    for sub in collapsed:
+        choice = origin_choice_by_subassembly.get(sub["name"], {})
+        sub["selected_origin_link"] = choice.get("selected_origin_link", "")
+        stale = choice.get("stale_origin_link", "")
+        if stale:
+            sub["stale_origin_link"] = stale
 
     links = []
     inserted = set()
@@ -1256,29 +1372,64 @@ def _collapse_preview_payload(graph, yml_txt=""):
             continue
         links.append({**link, "collapsed": False})
 
-    joints, dropped = [], []
+    selected_by_link = {
+        c["link_name"]: c.get("selected_parent", "")
+        for c in parent_choices
+        if c.get("selected_parent")
+    }
+    joints, dropped, dropped_parent_override = [], [], []
     for j in canonical["joints"]:
         parent = collapse_link.get(j["parent"], j["parent"])
         child = collapse_link.get(j["child"], j["child"])
         out = {**j, "source_name": j["name"],
                "parent": parent, "child": child}
+        collapsed_endpoint = parent != j["parent"] or child != j["child"]
         if parent == child:
+            out["decision"] = "dropped_internal_to_collapsed_subassembly"
             dropped.append(out)
             continue
+        selected = selected_by_link.get(child)
+        if selected and parent != selected:
+            out["decision"] = "dropped_parent_override"
+            dropped_parent_override.append(out)
+            continue
         out["name"] = f"{parent}__{child}"
+        out["decision"] = "kept_boundary" if collapsed_endpoint \
+            else "kept_expanded"
         joints.append(out)
 
     base = collapse_link.get(canonical["base_link"], canonical["base_link"])
+    dropped_cycle_joints = []
+    if cycle_break_joints:
+        kept = []
+        for j in joints:
+            if _joint_source_name(j) in cycle_break_joints:
+                j["decision"] = "dropped_cycle_break"
+                dropped_cycle_joints.append(j)
+            else:
+                kept.append(j)
+        joints = kept
+    cycle_break_choices = _collapse_cycle_break_choices(
+        base, links, joints, cycle_break_joints)
+
     validation = _validate_collapsed_tree(base, links, joints, collapsed,
                                           collapse_link)
+    collapse_plan = _collapse_plan_payload(
+        base, links, joints, collapsed, collapse_link, dropped,
+        dropped_parent_override, dropped_cycle_joints, validation)
     return {
         "base_link": base,
         "links": links,
         "joints": joints,
-        "tree_rows": _tree_rows_payload(base, links, joints),
+        "tree_rows": _tree_rows_from_collapse_plan(collapse_plan),
+        "collapse_plan": collapse_plan,
         "validation": validation,
         "dropped_internal_joints": dropped,
+        "dropped_cycle_joints": dropped_cycle_joints,
         "collapsed_subassemblies": collapsed,
+        "parent_choices": parent_choices,
+        "group_choices": group_choices,
+        "cycle_break_choices": cycle_break_choices,
         "canonical_counts": {
             "links": len(canonical["links"]),
             "joints": len(canonical["joints"]),
@@ -1290,12 +1441,247 @@ def _collapse_preview_payload(graph, yml_txt=""):
     }
 
 
+def _collapse_parent_choices(collapsed, collapse_link, parent_overrides):
+    """List attach-parent candidates for collapsed sub-assemblies.
+
+    The candidates are computed before any override is applied so the UI can
+    still change an existing choice after it resolves the validation warning.
+    """
+    choices = []
+    for sub in collapsed:
+        by_parent = {}
+        link_name = sub.get("link_name")
+        for j in sub.get("boundary_joints") or []:
+            parent = collapse_link.get(j["parent"], j["parent"])
+            child = collapse_link.get(j["child"], j["child"])
+            if child == link_name and parent != child:
+                by_parent.setdefault(parent, []).append(j.get("name"))
+        raw_selected = parent_overrides.get(sub.get("name"), "")
+        selected = raw_selected if raw_selected in by_parent else ""
+        if len(by_parent) <= 1 and not selected:
+            continue
+        choices.append({
+            "subassembly": sub.get("name"),
+            "link_name": link_name,
+            "selected_parent": selected,
+            "parents": [
+                {"link": p, "joints": sorted(x for x in js if x)}
+                for p, js in sorted(by_parent.items())
+            ],
+        })
+    return choices
+
+
+def _subassembly_member_groups(sub):
+    """Connected components of a collapsed sub-assembly's expanded members."""
+    members = list(sub.get("member_links") or [])
+    if not members:
+        return []
+    member_set = set(members)
+    internal_adj = {m: set() for m in members}
+    for j in sub.get("internal_joints") or []:
+        p, c = j.get("parent"), j.get("child")
+        if p in member_set and c in member_set:
+            internal_adj[p].add(c)
+            internal_adj[c].add(p)
+    comps = []
+    todo = set(members)
+    while todo:
+        start = todo.pop()
+        comp = [start]
+        q = [start]
+        while q:
+            cur = q.pop()
+            for nxt in internal_adj.get(cur, ()):
+                if nxt in todo:
+                    todo.remove(nxt)
+                    comp.append(nxt)
+                    q.append(nxt)
+        comps.append(sorted(comp))
+    comps.sort(key=lambda x: (x[0] if x else "", len(x)))
+    return comps
+
+
+def _collapse_group_choices(collapsed, origin_links):
+    """List origin link candidates for disconnected collapsed member groups."""
+    choices = []
+    for sub in collapsed:
+        groups = _subassembly_member_groups(sub)
+        members = set(sub.get("member_links") or [])
+        raw_selected = origin_links.get(sub.get("name"), "")
+        selected = raw_selected if raw_selected in members else ""
+        stale = (
+            raw_selected
+            if raw_selected and raw_selected not in members
+            else "")
+        if len(groups) <= 1 and not selected and not stale:
+            continue
+        choices.append({
+            "subassembly": sub.get("name"),
+            "link_name": sub.get("link_name"),
+            "selected_origin_link": selected,
+            "stale_origin_link": stale,
+            "groups": [
+                {"origin_link": g[0], "links": g, "size": len(g)}
+                for g in groups
+            ],
+        })
+    return choices
+
+
+def _joint_source_name(joint):
+    return str(joint.get("source_name") or joint.get("name") or "")
+
+
+def _directed_cycle_reports(base_link, links, joints):
+    """Return directed cycles with the preview joints that form them."""
+    link_names = {l["link_name"] for l in links}
+    by_parent = {}
+    for j in joints:
+        by_parent.setdefault(j.get("parent"), []).append(j)
+    for rows in by_parent.values():
+        rows.sort(key=lambda j: (j.get("child", ""), j.get("name", "")))
+
+    reports, seen_cycles, colour = [], set(), {}
+    stack_links, stack_edges = [], []
+
+    def add_cycle(child, back_edge):
+        try:
+            i = stack_links.index(child)
+        except ValueError:
+            return
+        cycle_links = [*stack_links[i:], child]
+        cycle_edges = [*stack_edges[i:], back_edge]
+        key = tuple(_joint_source_name(j) for j in cycle_edges)
+        if key in seen_cycles:
+            return
+        seen_cycles.add(key)
+        candidates = [{
+            "joint": j.get("name"),
+            "source_joint": _joint_source_name(j),
+            "parent": j.get("parent"),
+            "child": j.get("child"),
+        } for j in cycle_edges]
+        reports.append({
+            "links": cycle_links,
+            "joints": [j.get("name") for j in cycle_edges],
+            "source_joints": [_joint_source_name(j) for j in cycle_edges],
+            "candidates": candidates,
+        })
+
+    def dfs(node):
+        colour[node] = "gray"
+        stack_links.append(node)
+        for j in by_parent.get(node, []):
+            child = j.get("child")
+            if child not in link_names:
+                continue
+            if colour.get(child) == "gray":
+                add_cycle(child, j)
+            elif colour.get(child) != "black":
+                stack_edges.append(j)
+                dfs(child)
+                stack_edges.pop()
+        stack_links.pop()
+        colour[node] = "black"
+
+    roots = [base_link] if base_link in link_names else []
+    roots.extend(sorted(link_names - set(roots)))
+    for root in roots:
+        if colour.get(root) is None:
+            dfs(root)
+    return reports
+
+
+def _collapse_cycle_break_choices(base_link, links, joints, selected_sources):
+    """List preview source-joint candidates that can break active cycles."""
+    selected_sources = set(selected_sources or [])
+    choices = []
+    active_sources = set()
+    for cycle in _directed_cycle_reports(base_link, links, joints):
+        candidates = cycle.get("candidates", [])
+        for c in candidates:
+            if c.get("source_joint"):
+                active_sources.add(c["source_joint"])
+        selected = next((c.get("source_joint") for c in candidates
+                         if c.get("source_joint") in selected_sources), "")
+        choices.append({
+            **cycle,
+            "selected_source_joint": selected,
+            "stale": False,
+        })
+    for source in sorted(selected_sources - active_sources):
+        choices.append({
+            "links": [],
+            "joints": [],
+            "source_joints": [source],
+            "selected_source_joint": source,
+            "stale": True,
+            "candidates": [{
+                "joint": source,
+                "source_joint": source,
+                "parent": "",
+                "child": "",
+            }],
+        })
+    return choices
+
+
 def _validate_collapsed_tree(base_link, links, joints, collapsed,
                              collapse_link=None):
     """Report structural hazards in a collapsed preview tree."""
     collapse_link = collapse_link or {}
-    link_names = {l["link_name"] for l in links}
     issues = []
+    link_names = {row.get("link_name") for row in links
+                  if row.get("link_name")}
+
+    children = {j.get("child") for j in joints
+                if j.get("child") in link_names}
+    roots = sorted(link_names - children)
+    if base_link not in link_names:
+        issues.append({
+            "severity": "error",
+            "code": "invalid_base_link",
+            "base_link": base_link,
+            "message": f"collapsed tree base link {base_link} does not exist",
+        })
+    if roots != [base_link]:
+        issues.append({
+            "severity": "error",
+            "code": "invalid_roots",
+            "base_link": base_link,
+            "roots": roots,
+            "message": (
+                "collapsed tree must have exactly one root matching "
+                f"base_link; found {len(roots)} root(s)"),
+        })
+
+    reachable = set()
+    if base_link in link_names:
+        by_parent = {}
+        for joint in joints:
+            parent = joint.get("parent")
+            child = joint.get("child")
+            if parent in link_names and child in link_names:
+                by_parent.setdefault(parent, []).append(child)
+        todo = [base_link]
+        while todo:
+            link = todo.pop()
+            if link in reachable:
+                continue
+            reachable.add(link)
+            todo.extend(by_parent.get(link, []))
+    unreachable = sorted(link_names - reachable)
+    if unreachable:
+        issues.append({
+            "severity": "error",
+            "code": "unreachable_links",
+            "base_link": base_link,
+            "links": unreachable,
+            "message": (
+                f"{len(unreachable)} collapsed tree link(s) are not reachable "
+                f"from {base_link}"),
+        })
 
     incoming = {}
     for j in joints:
@@ -1315,68 +1701,48 @@ def _validate_collapsed_tree(base_link, links, joints, collapsed,
                     "sub-assembly collapse"),
             })
 
-    adj = {}
-    for j in joints:
-        adj.setdefault(j["parent"], []).append(j["child"])
-    seen_cycles, colour, stack = set(), {}, []
-
-    def dfs(node):
-        colour[node] = "gray"
-        stack.append(node)
-        for child in adj.get(node, []):
-            if colour.get(child) == "gray":
-                i = stack.index(child)
-                cyc = [*stack[i:], child]
-                key = tuple(cyc)
-                if key not in seen_cycles:
-                    seen_cycles.add(key)
-                    issues.append({
-                        "severity": "error",
-                        "code": "cycle",
-                        "links": cyc,
-                        "message": "collapsed tree contains a directed cycle",
-                    })
-            elif colour.get(child) != "black":
-                dfs(child)
-        stack.pop()
-        colour[node] = "black"
-
-    roots = [base_link] if base_link in link_names else []
-    roots.extend(sorted(link_names - set(roots)))
-    for root in roots:
-        if colour.get(root) is None:
-            dfs(root)
+    for cycle in _directed_cycle_reports(base_link, links, joints):
+        issues.append({
+            "severity": "error",
+            "code": "cycle",
+            "links": cycle["links"],
+            "joints": cycle["joints"],
+            "source_joints": cycle["source_joints"],
+            "candidates": cycle["candidates"],
+            "message": "collapsed tree contains a directed cycle",
+        })
 
     for sub in collapsed:
-        members = list(sub.get("member_links") or [])
-        if len(members) <= 1:
+        comps = _subassembly_member_groups(sub)
+        stale_origin_link = sub.get("stale_origin_link")
+        if stale_origin_link:
+            issues.append({
+                "severity": "warning",
+                "code": "invalid_origin_link",
+                "subassembly": sub.get("name"),
+                "link": sub.get("link_name"),
+                "origin_link": stale_origin_link,
+                "components": comps,
+                "message": (
+                    f"{sub.get('name')} uses stale origin link "
+                    f"{stale_origin_link}"),
+            })
+        selected_origin_link = sub.get("selected_origin_link")
+        if len(comps) <= 1:
             continue
-        member_set = set(members)
-        internal_adj = {m: set() for m in members}
-        for j in sub.get("internal_joints") or []:
-            p, c = j.get("parent"), j.get("child")
-            if p in member_set and c in member_set:
-                internal_adj[p].add(c)
-                internal_adj[c].add(p)
-        comps = []
-        todo = set(members)
-        while todo:
-            start = todo.pop()
-            comp = [start]
-            q = [start]
-            while q:
-                cur = q.pop()
-                for nxt in internal_adj.get(cur, ()):
-                    if nxt in todo:
-                        todo.remove(nxt)
-                        comp.append(nxt)
-                        q.append(nxt)
-            comps.append(sorted(comp))
-        # ``todo`` is a set, so the discovery order of the groups is not
-        # deterministic across platforms/hash seeds -- sort the groups (each
-        # already sorted internally) so the payload is stable.
-        comps.sort()
-        if len(comps) > 1:
+        if selected_origin_link:
+            issues.append({
+                "severity": "info",
+                "code": "disconnected_members",
+                "subassembly": sub.get("name"),
+                "link": sub.get("link_name"),
+                "origin_link": selected_origin_link,
+                "components": comps,
+                "message": (
+                    f"{sub.get('name')} maps to {len(comps)} disconnected "
+                    f"member groups; anchored at {selected_origin_link}"),
+            })
+        else:
             issues.append({
                 "severity": "warning",
                 "code": "disconnected_members",
@@ -1389,9 +1755,12 @@ def _validate_collapsed_tree(base_link, links, joints, collapsed,
             })
 
         incoming_boundary = []
+        selected_parent = sub.get("selected_parent")
         for j in sub.get("boundary_joints") or []:
             parent = collapse_link.get(j["parent"], j["parent"])
             child = collapse_link.get(j["child"], j["child"])
+            if selected_parent and parent != selected_parent:
+                continue
             if child == sub.get("link_name") and parent != child:
                 incoming_boundary.append({
                     "parent": parent,
@@ -1416,6 +1785,92 @@ def _validate_collapsed_tree(base_link, links, joints, collapsed,
         "issue_count": len(issues),
         "issues": issues,
     }
+
+
+def _collapse_plan_payload(base_link, links, joints, collapsed, collapse_link,
+                           dropped_internal, dropped_parent_override,
+                           dropped_cycle, validation):
+    """Stable preview IR shared by the UI and future collapsed URDF output."""
+    sub_by_link = {s.get("link_name"): s for s in collapsed}
+
+    def plan_link(row):
+        link = row.get("link_name")
+        sub = sub_by_link.get(link, {})
+        collapsed_row = bool(row.get("collapsed"))
+        return {
+            "link": link,
+            "name": row.get("name", link),
+            "kind": "collapsed_subassembly" if collapsed_row
+                    else "expanded_link",
+            "source_subassembly": sub.get("name", "") if collapsed_row else "",
+            "member_links": list(row.get("member_links") or []),
+            "member_components": list(sub.get("member_components") or []),
+            "selected_parent": sub.get("selected_parent", ""),
+            "selected_origin_link": sub.get("selected_origin_link", ""),
+        }
+
+    def plan_joint(row, decision=None):
+        return {
+            "name": row.get("name"),
+            "parent": row.get("parent"),
+            "child": row.get("child"),
+            "type": row.get("type"),
+            "source_joint": _joint_source_name(row),
+            "decision": decision or row.get("decision", ""),
+        }
+
+    dropped_joints = []
+    for row in dropped_internal:
+        dropped_joints.append(plan_joint(
+            row, "dropped_internal_to_collapsed_subassembly"))
+    for row in dropped_parent_override:
+        dropped_joints.append(plan_joint(row, "dropped_parent_override"))
+    for row in dropped_cycle:
+        dropped_joints.append(plan_joint(row, "dropped_cycle_break"))
+
+    blocking_issue_count = sum(
+        issue.get("severity") != "info"
+        for issue in (validation.get("issues") or []))
+
+    return {
+        "version": 1,
+        "base_link": base_link,
+        "ready_for_urdf": blocking_issue_count == 0,
+        "blocking_issue_count": blocking_issue_count,
+        "links": [plan_link(row) for row in links],
+        "joints": [plan_joint(row) for row in joints],
+        "dropped_joints": dropped_joints,
+        "collapsed_subassemblies": [{
+            "name": s.get("name"),
+            "link": s.get("link_name"),
+            "member_links": list(s.get("member_links") or []),
+            "member_components": list(s.get("member_components") or []),
+            "selected_parent": s.get("selected_parent", ""),
+            "selected_origin_link": s.get("selected_origin_link", ""),
+        } for s in collapsed],
+        "link_replacements": [
+            {"source_link": src, "collapsed_link": dst}
+            for src, dst in sorted(collapse_link.items())
+        ],
+    }
+
+
+def _tree_rows_from_collapse_plan(plan):
+    """Flatten a collapse plan into the existing preview tree row shape."""
+    links = [{
+        "link_name": row.get("link"),
+        "name": row.get("name"),
+        "collapsed": row.get("kind") == "collapsed_subassembly",
+        "member_links": row.get("member_links") or [],
+    } for row in plan.get("links", [])]
+    joints = [{
+        "name": row.get("name"),
+        "parent": row.get("parent"),
+        "child": row.get("child"),
+        "type": row.get("type"),
+        "source_name": row.get("source_joint"),
+    } for row in plan.get("joints", [])]
+    return _tree_rows_payload(plan.get("base_link"), links, joints)
 
 
 def _tree_rows_payload(base_link, links, joints):
@@ -3858,6 +4313,185 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                                 **members})
                 print(f"[sw2robot.web] set_subassembly_mode: "
                       f"{name_in} -> {mode} (preview only)")
+                return self._send_json(payload)
+            if parsed.path == "/api/set_subassembly_parent":
+                cls = type(self)
+                n = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(n) or b"{}")
+                name_in = (body.get("name") or "").strip()
+                parent = (body.get("parent") or "").strip()
+                if parent == "auto":
+                    parent = ""
+                if not cls.pkg_dir:
+                    return self._send_json({"error": "no package open"}, 400)
+                if not _cad_mode(cls.pkg_dir):
+                    return self._send_json(
+                        {"error": "sub-assembly parent choices need the CAD "
+                                  "graph.json"},
+                        400)
+                if not name_in:
+                    return self._send_json({"error": "name required"}, 400)
+                from sw2robot.exporter.state import GraphState
+                graph = GraphState.load(os.path.join(cls.pkg_dir, "graph.json"))
+                name = os.path.splitext(os.path.basename(cls.urdf_rel))[0]
+                yml = os.path.join(cls.pkg_dir, name + ".joints.yaml")
+                if not os.path.exists(yml):
+                    return self._send_json(
+                        {"error": "joints.yaml not found -- re-extract once"},
+                        400)
+                with open(yml, encoding="utf-8") as f:
+                    txt = f.read()
+                try:
+                    preview = _collapse_preview_payload(graph, txt)
+                    choices = {
+                        c.get("subassembly"): c
+                        for c in preview.get("parent_choices", [])
+                    }
+                    if parent:
+                        allowed = {
+                            p.get("link")
+                            for p in choices.get(name_in, {}).get("parents", [])
+                        }
+                        if parent not in allowed:
+                            return self._send_json(
+                                {"error": f"'{parent}' is not a parent "
+                                          f"candidate for {name_in}"},
+                                400)
+                    txt = _set_subassembly_parent_override_yaml(
+                        txt, graph, name_in, parent)
+                except ValueError as e:
+                    return self._send_json({"error": str(e)}, 400)
+                label = parent or "auto"
+                _snapshot(cls.pkg_dir, yml,
+                          f"sub-assembly parent {name_in} -> {label}")
+                with open(yml, "w", encoding="utf-8") as f:
+                    f.write(txt)
+                payload = _collapse_preview_payload(graph, txt)
+                payload.update({"ok": True, "name": name_in,
+                                "parent": parent, "preview_only": True,
+                                "rebuilt": False})
+                print(f"[sw2robot.web] set_subassembly_parent: "
+                      f"{name_in} -> {label} (preview only)")
+                return self._send_json(payload)
+            if parsed.path == "/api/set_subassembly_origin_link":
+                cls = type(self)
+                n = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(n) or b"{}")
+                name_in = (body.get("name") or "").strip()
+                origin_link = (body.get("origin_link") or "").strip()
+                if origin_link == "auto":
+                    origin_link = ""
+                if not cls.pkg_dir:
+                    return self._send_json({"error": "no package open"}, 400)
+                if not _cad_mode(cls.pkg_dir):
+                    return self._send_json(
+                        {"error": "sub-assembly origin links need the CAD "
+                                  "graph.json"},
+                        400)
+                if not name_in:
+                    return self._send_json({"error": "name required"}, 400)
+                from sw2robot.exporter.state import GraphState
+                graph = GraphState.load(os.path.join(cls.pkg_dir, "graph.json"))
+                name = os.path.splitext(os.path.basename(cls.urdf_rel))[0]
+                yml = os.path.join(cls.pkg_dir, name + ".joints.yaml")
+                if not os.path.exists(yml):
+                    return self._send_json(
+                        {"error": "joints.yaml not found -- re-extract once"},
+                        400)
+                with open(yml, encoding="utf-8") as f:
+                    txt = f.read()
+                try:
+                    preview = _collapse_preview_payload(graph, txt)
+                    choices = {
+                        c.get("subassembly"): c
+                        for c in preview.get("group_choices", [])
+                    }
+                    if origin_link:
+                        allowed = {
+                            link
+                            for group in choices.get(name_in, {}).get("groups", [])
+                            for link in group.get("links", [])
+                        }
+                        if origin_link not in allowed:
+                            return self._send_json(
+                                {"error": f"'{origin_link}' is not a member "
+                                          f"origin link candidate for {name_in}"},
+                                400)
+                    txt = _set_subassembly_origin_link_yaml(
+                        txt, graph, name_in, origin_link)
+                except ValueError as e:
+                    return self._send_json({"error": str(e)}, 400)
+                label = origin_link or "auto"
+                _snapshot(cls.pkg_dir, yml,
+                          f"sub-assembly origin link {name_in} -> {label}")
+                with open(yml, "w", encoding="utf-8") as f:
+                    f.write(txt)
+                payload = _collapse_preview_payload(graph, txt)
+                payload.update({"ok": True, "name": name_in,
+                                "origin_link": origin_link,
+                                "preview_only": True,
+                                "rebuilt": False})
+                print(f"[sw2robot.web] set_subassembly_origin_link: "
+                      f"{name_in} -> {label} (preview only)")
+                return self._send_json(payload)
+            if parsed.path == "/api/set_subassembly_cycle_break":
+                cls = type(self)
+                n = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(n) or b"{}")
+                source_joint = (body.get("source_joint") or "").strip()
+                previous_source_joint = (
+                    body.get("previous_source_joint") or "").strip()
+                drop = bool(body.get("drop", True))
+                target = source_joint or previous_source_joint
+                if not cls.pkg_dir:
+                    return self._send_json({"error": "no package open"}, 400)
+                if not _cad_mode(cls.pkg_dir):
+                    return self._send_json(
+                        {"error": "sub-assembly cycle breaks need the CAD "
+                                  "graph.json"},
+                        400)
+                if not target:
+                    return self._send_json(
+                        {"error": "source_joint required"}, 400)
+                from sw2robot.exporter.state import GraphState
+                graph = GraphState.load(os.path.join(cls.pkg_dir, "graph.json"))
+                name = os.path.splitext(os.path.basename(cls.urdf_rel))[0]
+                yml = os.path.join(cls.pkg_dir, name + ".joints.yaml")
+                if not os.path.exists(yml):
+                    return self._send_json(
+                        {"error": "joints.yaml not found -- re-extract once"},
+                        400)
+                with open(yml, encoding="utf-8") as f:
+                    txt = f.read()
+                try:
+                    preview = _collapse_preview_payload(graph, txt)
+                    selected = _subassembly_cycle_break_joints(txt)
+                    allowed = set(selected)
+                    for choice in preview.get("cycle_break_choices", []):
+                        for cand in choice.get("candidates", []):
+                            if cand.get("source_joint"):
+                                allowed.add(cand["source_joint"])
+                    if target not in allowed:
+                        return self._send_json(
+                            {"error": f"'{target}' is not a cycle-break "
+                                      "candidate"},
+                            400)
+                    txt = _set_subassembly_cycle_break_joint_yaml(
+                        txt, source_joint, drop, previous_source_joint)
+                except ValueError as e:
+                    return self._send_json({"error": str(e)}, 400)
+                label = source_joint if drop else "auto"
+                _snapshot(cls.pkg_dir, yml,
+                          f"sub-assembly cycle break {target} -> {label}")
+                with open(yml, "w", encoding="utf-8") as f:
+                    f.write(txt)
+                payload = _collapse_preview_payload(graph, txt)
+                payload.update({"ok": True, "source_joint": source_joint,
+                                "previous_source_joint": previous_source_joint,
+                                "drop": drop, "preview_only": True,
+                                "rebuilt": False})
+                print(f"[sw2robot.web] set_subassembly_cycle_break: "
+                      f"{target} -> {label} (preview only)")
                 return self._send_json(payload)
             if parsed.path == "/api/set_base":
                 cls = type(self)

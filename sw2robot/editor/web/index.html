@@ -1075,6 +1075,36 @@ the config and does NOT re-detect). Needs graph.json (CAD mode).">🔗 re-detect
     'subasm.thMembers': { en: 'members', ja: '構成link' },
     'subasm.thDropped': { en: 'internal joints', ja: '内部joint' },
     'subasm.collapsedTag': { en: 'collapsed', ja: '畳み込み' },
+    'subasm.parentChoicesTitle': { en: 'Attach parent choices',
+                                   ja: '接続先parent候補' },
+    'subasm.parentAuto': { en: 'auto', ja: 'auto' },
+    'subasm.parentSetOk': { en: a => `${a.name}: attach parent ${a.parent} ✓`,
+                            ja: a => `${a.name}: attach parent ${a.parent} ✓` },
+    'subasm.parentSetting': { en: a => `saving attach parent: ${a.name} → ${a.parent} ...`,
+                              ja: a => `接続先parentを保存中: ${a.name} → ${a.parent} ...` },
+    'subasm.parentSetFail': { en: a => `attach parent failed: ${a.e}`,
+                              ja: a => `接続先parentの保存に失敗: ${a.e}` },
+    'subasm.originLinkChoicesTitle': { en: 'Sub-assembly origin links',
+                                      ja: 'サブアセンブリ原点link' },
+    'subasm.originLinkAuto': { en: 'auto', ja: 'auto' },
+    'subasm.originLinkSetOk': { en: a => `${a.name}: origin link ${a.originLink} ✓`,
+                                ja: a => `${a.name}: origin link ${a.originLink} ✓` },
+    'subasm.originLinkSetting': { en: a => `saving origin link: ${a.name} → ${a.originLink} ...`,
+                                  ja: a => `サブアセンブリ原点linkを保存中: ${a.name} → ${a.originLink} ...` },
+    'subasm.originLinkSetFail': { en: a => `origin link failed: ${a.e}`,
+                                  ja: a => `サブアセンブリ原点linkの保存に失敗: ${a.e}` },
+    'subasm.cycleBreakChoicesTitle': { en: 'Cycle break joints',
+                                       ja: 'cycle解消joint' },
+    'subasm.cycleBreakAuto': { en: 'auto', ja: 'auto' },
+    'subasm.cycleBreakStale': {
+      en: 'saved drop is not on an active cycle; reset to auto if no longer needed',
+      ja: '保存済みdropは現在のcycle候補にありません。不要ならautoに戻してください' },
+    'subasm.cycleBreakSetOk': { en: a => `cycle break ${a.sourceJoint} ✓`,
+                                ja: a => `cycle break ${a.sourceJoint} ✓` },
+    'subasm.cycleBreakSetting': { en: a => `saving cycle break: ${a.sourceJoint} ...`,
+                                  ja: a => `cycle解消jointを保存中: ${a.sourceJoint} ...` },
+    'subasm.cycleBreakSetFail': { en: a => `cycle break failed: ${a.e}`,
+                                  ja: a => `cycle解消jointの保存に失敗: ${a.e}` },
     'subasm.backSubasm': { en: '← sub-assemblies', ja: '← サブアセンブリ' },
     'subasm.stateExpanded': { en: 'expanded', ja: '展開' },
     'subasm.stateKept': { en: 'kept as one link', ja: '1リンク保持' },
@@ -2820,6 +2850,256 @@ function validationIssuesHtml(validation) {
     rows + more + `</div>`;
 }
 
+function parentChoicesHtml(parentChoices) {
+  const choices = (parentChoices || []).filter(c =>
+    (c.parents || []).length > 1 || c.selected_parent);
+  if (!choices.length) { return ''; }
+  const rows = choices.map(c => {
+    const selected = c.selected_parent || '';
+    const opts = [`<option value=""${selected ? '' : ' selected'}>` +
+      `${t('subasm.parentAuto')}</option>`].concat((c.parents || []).map(p =>
+      `<option value="${htmlEsc(p.link)}"${selected === p.link ? ' selected' : ''}>` +
+      `${htmlEsc(p.link)}</option>`)).join('');
+    const joints = (c.parents || []).map(p => {
+      const js = (p.joints || []).slice(0, 3).map(htmlEsc).join(', ');
+      const more = (p.joints || []).length > 3
+        ? `, +${(p.joints || []).length - 3} more` : '';
+      return `<div style="color:#6b7480">${htmlEsc(p.link)}: ${js}${more}</div>`;
+    }).join('');
+    return `<div style="display:grid;grid-template-columns:minmax(110px,1fr) ` +
+      `minmax(120px,1.4fr);gap:6px;align-items:start;margin-top:5px">` +
+      `<div><div style="color:#cfe3ff">${htmlEsc(c.subassembly)}</div>` +
+      `<div style="color:#6b7480">${htmlEsc(c.link_name)}</div></div>` +
+      `<div><select class="subasm-parent-choice" ` +
+      `data-name="${htmlEsc(c.subassembly)}">` +
+      opts + `</select>${joints}</div></div>`;
+  }).join('');
+  return `<div style="border:1px solid #3c4654;background:#1f242c;` +
+    `border-radius:4px;padding:6px 8px;margin:8px 0;font-size:11px">` +
+    `<div style="color:#9fb7de">${t('subasm.parentChoicesTitle')}</div>` +
+    rows + `</div>`;
+}
+
+async function setSubassemblyParentChoice(name, parent, ov) {
+  const label = parent || t('subasm.parentAuto');
+  op('subassembly_parent', { name, parent });
+  log(t('subasm.parentSetting', { name, parent: label }));
+  try {
+    const resp = await fetch('/api/set_subassembly_parent', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, parent }) });
+    const r = await resp.json();
+    if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
+    log(t('subasm.parentSetOk', { name, parent: label }), 'ok');
+    refreshHistory();
+    if (ov) {
+      await openSubassemblyPreview(ov);
+    }
+    if (viewer.robot && treeViewMode === 'subassembly') {
+      buildJointRows(viewer.robot);
+    }
+  } catch (e) {
+    log(t('subasm.parentSetFail', { e: e.message ?? e }), 'err');
+    if (ov) {
+      await openSubassemblyPreview(ov);
+    }
+  }
+}
+
+function bindSubassemblyParentChoices(root, ov) {
+  root.querySelectorAll('.subasm-parent-choice').forEach(sel => {
+    sel.addEventListener('change', () => {
+      const name = sel.dataset.name;
+      const parent = sel.value;
+      root.querySelectorAll('.subasm-parent-choice')
+        .forEach(x => { x.disabled = true; });
+      setSubassemblyParentChoice(name, parent, ov);
+    });
+  });
+}
+
+function originLinkChoicesHtml(groupChoices) {
+  const choices = (groupChoices || []).filter(c =>
+    (c.groups || []).length > 1 || c.selected_origin_link ||
+    c.stale_origin_link);
+  if (!choices.length) { return ''; }
+  const rows = choices.map(c => {
+    const selected = c.selected_origin_link || '';
+    const stale = c.stale_origin_link
+      ? `<div style="color:#d68c8c">stale saved link: ` +
+        `${htmlEsc(c.stale_origin_link)}</div>`
+      : '';
+    const opts = [`<option value=""${selected ? '' : ' selected'}>` +
+      `${t('subasm.originLinkAuto')}</option>`].concat((c.groups || []).map((g, i) => {
+      const label = `group ${i + 1} (${g.size || (g.links || []).length})`;
+      const originLink = g.origin_link || (g.links || [])[0] || '';
+      return `<option value="${htmlEsc(originLink)}"` +
+        `${selected === originLink ? ' selected' : ''}>` +
+        `${htmlEsc(label)} origin link: ${htmlEsc(originLink)}</option>`;
+    })).join('');
+    const groups = (c.groups || []).map((g, i) => {
+      const links = (g.links || []).slice(0, 4).map(htmlEsc).join(', ');
+      const more = (g.links || []).length > 4
+        ? `, +${(g.links || []).length - 4} more` : '';
+      return `<div style="color:#6b7480">group ${i + 1} links: ${links}${more}</div>`;
+    }).join('');
+    return `<div style="display:grid;grid-template-columns:minmax(110px,1fr) ` +
+      `minmax(120px,1.4fr);gap:6px;align-items:start;margin-top:5px">` +
+      `<div><div style="color:#cfe3ff">${htmlEsc(c.subassembly)}</div>` +
+      `<div style="color:#6b7480">${htmlEsc(c.link_name)}</div></div>` +
+      `<div><select class="subasm-origin-link-choice" ` +
+      `data-name="${htmlEsc(c.subassembly)}">` +
+      opts + `</select>${stale}${groups}</div></div>`;
+  }).join('');
+  return `<div style="border:1px solid #4d4536;background:#24231d;` +
+    `border-radius:4px;padding:6px 8px;margin:8px 0;font-size:11px">` +
+    `<div style="color:#d6c18c">${t('subasm.originLinkChoicesTitle')}</div>` +
+    rows + `</div>`;
+}
+
+async function setSubassemblyOriginLinkChoice(name, originLink, ov) {
+  const label = originLink || t('subasm.originLinkAuto');
+  op('subassembly_origin_link', { name, origin_link: originLink });
+  log(t('subasm.originLinkSetting', { name, originLink: label }));
+  try {
+    const resp = await fetch('/api/set_subassembly_origin_link', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, origin_link: originLink }) });
+    const r = await resp.json();
+    if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
+    log(t('subasm.originLinkSetOk', { name, originLink: label }), 'ok');
+    refreshHistory();
+    if (ov) {
+      await openSubassemblyPreview(ov);
+    }
+    if (viewer.robot && treeViewMode === 'subassembly') {
+      buildJointRows(viewer.robot);
+    }
+  } catch (e) {
+    log(t('subasm.originLinkSetFail', { e: e.message ?? e }), 'err');
+    if (ov) {
+      await openSubassemblyPreview(ov);
+    } else {
+      document.querySelectorAll('.subasm-origin-link-choice')
+        .forEach(x => { x.disabled = false; });
+    }
+  }
+}
+
+function bindSubassemblyOriginLinkChoices(root, ov) {
+  root.querySelectorAll('.subasm-origin-link-choice').forEach(sel => {
+    sel.addEventListener('change', () => {
+      const name = sel.dataset.name;
+      const originLink = sel.value;
+      root.querySelectorAll('.subasm-origin-link-choice')
+        .forEach(x => { x.disabled = true; });
+      setSubassemblyOriginLinkChoice(name, originLink, ov);
+    });
+  });
+}
+
+function cycleBreakChoicesHtml(cycleChoices) {
+  const choices = (cycleChoices || []).filter(c =>
+    (c.candidates || []).length || c.selected_source_joint);
+  if (!choices.length) { return ''; }
+  const rows = choices.map((c, i) => {
+    const selected = c.selected_source_joint || '';
+    const stale = !!c.stale;
+    const seen = new Set();
+    const opts = [`<option value=""${selected ? '' : ' selected'}>` +
+      `${t('subasm.cycleBreakAuto')}</option>`].concat((c.candidates || [])
+      .filter(j => {
+        const source = j.source_joint || j.joint || '';
+        if (!source || seen.has(source)) { return false; }
+        seen.add(source);
+        return true;
+      }).map(j => {
+        const source = j.source_joint || j.joint || '';
+        const edge = j.parent && j.child
+          ? `${j.parent} → ${j.child}` : source;
+        return `<option value="${htmlEsc(source)}"` +
+          `${selected === source ? ' selected' : ''}>` +
+          `drop: ${htmlEsc(edge)}</option>`;
+      })).join('');
+    const path = stale
+      ? `<div style="color:#d6c18c">${t('subasm.cycleBreakStale')}</div>`
+      : `<div style="color:#6b7480">links: ` +
+        `${(c.links || []).map(htmlEsc).join(' → ')}</div>`;
+    const joints = (c.candidates || []).map(j => {
+      const source = j.source_joint || j.joint || '';
+      const edge = j.parent && j.child ? `${j.parent} → ${j.child}` : '';
+      return `<div style="color:#6b7480">${htmlEsc(source)}` +
+        `${edge ? `: ${htmlEsc(edge)}` : ''}</div>`;
+    }).join('');
+    return `<div style="display:grid;grid-template-columns:minmax(80px,0.6fr) ` +
+      `minmax(150px,1.8fr);gap:6px;align-items:start;margin-top:5px">` +
+      `<div><div style="color:#cfe3ff">${stale ? 'saved drop' : `cycle ${i + 1}`}</div>` +
+      path + `</div>` +
+      `<div><select class="subasm-cycle-break-choice" ` +
+      `data-prev="${htmlEsc(selected)}">` + opts +
+      `</select>${joints}</div></div>`;
+  }).join('');
+  return `<div style="border:1px solid #5a3940;background:#271e22;` +
+    `border-radius:4px;padding:6px 8px;margin:8px 0;font-size:11px">` +
+    `<div style="color:#e2a6b1">${t('subasm.cycleBreakChoicesTitle')}</div>` +
+    rows + `</div>`;
+}
+
+async function setSubassemblyCycleBreakChoice(sourceJoint, previousSourceJoint, ov) {
+  const label = sourceJoint || t('subasm.cycleBreakAuto');
+  const target = sourceJoint || previousSourceJoint;
+  op('subassembly_cycle_break', {
+    source_joint: sourceJoint,
+    previous_source_joint: previousSourceJoint,
+  });
+  log(t('subasm.cycleBreakSetting', { sourceJoint: label }));
+  try {
+    const resp = await fetch('/api/set_subassembly_cycle_break', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        source_joint: sourceJoint,
+        previous_source_joint: previousSourceJoint,
+        drop: !!sourceJoint,
+      }) });
+    const r = await resp.json();
+    if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
+    log(t('subasm.cycleBreakSetOk', { sourceJoint: target || label }), 'ok');
+    refreshHistory();
+    if (ov) {
+      await openSubassemblyPreview(ov);
+    } else {
+      document.querySelectorAll('.subasm-cycle-break-choice')
+        .forEach(x => { x.disabled = false; });
+    }
+    if (viewer.robot && treeViewMode === 'subassembly') {
+      buildJointRows(viewer.robot);
+    }
+  } catch (e) {
+    log(t('subasm.cycleBreakSetFail', { e: e.message ?? e }), 'err');
+    if (ov) {
+      await openSubassemblyPreview(ov);
+    } else {
+      document.querySelectorAll('.subasm-cycle-break-choice')
+        .forEach(x => { x.disabled = false; });
+    }
+  }
+}
+
+function bindSubassemblyCycleBreakChoices(root, ov) {
+  root.querySelectorAll('.subasm-cycle-break-choice').forEach(sel => {
+    sel.addEventListener('change', () => {
+      const sourceJoint = sel.value;
+      const previousSourceJoint = sel.dataset.prev || '';
+      root.querySelectorAll('.subasm-cycle-break-choice')
+        .forEach(x => { x.disabled = true; });
+      setSubassemblyCycleBreakChoice(sourceJoint, previousSourceJoint, ov);
+    });
+  });
+}
+
 function pathBase(p) {
   const s = String(p ?? '');
   return s.split(/[\\/]/).pop() || s;
@@ -2970,7 +3250,10 @@ async function openSubassemblyPreview(ov) {
         cl: cc.links ?? 0, cj: cc.joints ?? 0,
         pl: pc.links ?? 0, pj: pc.joints ?? 0,
       }) + '</div>' +
-      validationIssuesHtml(r.validation);
+      validationIssuesHtml(r.validation) +
+      parentChoicesHtml(r.parent_choices) +
+      originLinkChoicesHtml(r.group_choices) +
+      cycleBreakChoicesHtml(r.cycle_break_choices);
     const rows = r.collapsed_subassemblies || [];
     if (!rows.length) {
       html += '<div style="color:#8a93a3">' + t('subasm.previewNone') + '</div>';
@@ -3011,6 +3294,9 @@ async function openSubassemblyPreview(ov) {
       html += '</tbody></table>';
     }
     card.innerHTML = html;
+    bindSubassemblyParentChoices(card, owned);
+    bindSubassemblyOriginLinkChoices(card, owned);
+    bindSubassemblyCycleBreakChoices(card, owned);
     const bar = document.createElement('div');
     bar.style.cssText = 'display:flex;gap:8px;margin-top:10px';
     const back = document.createElement('button');
@@ -3379,6 +3665,27 @@ async function renderSubassemblyTreeRows(robot, movable) {
       const warn = document.createElement('div');
       warn.innerHTML = validationHtml;
       jointsEl.appendChild(warn);
+    }
+    const choicesHtml = parentChoicesHtml(r.parent_choices);
+    if (choicesHtml) {
+      const choices = document.createElement('div');
+      choices.innerHTML = choicesHtml;
+      jointsEl.appendChild(choices);
+      bindSubassemblyParentChoices(choices);
+    }
+    const groupChoices = originLinkChoicesHtml(r.group_choices);
+    if (groupChoices) {
+      const groups = document.createElement('div');
+      groups.innerHTML = groupChoices;
+      jointsEl.appendChild(groups);
+      bindSubassemblyOriginLinkChoices(groups);
+    }
+    const cycleChoices = cycleBreakChoicesHtml(r.cycle_break_choices);
+    if (cycleChoices) {
+      const cycles = document.createElement('div');
+      cycles.innerHTML = cycleChoices;
+      jointsEl.appendChild(cycles);
+      bindSubassemblyCycleBreakChoices(cycles);
     }
     const hint = document.createElement('div');
     hint.className = 'joint';

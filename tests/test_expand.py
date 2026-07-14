@@ -2,6 +2,12 @@
 graph: a 'servo unit' sub-assembly whose horn turns inside, mounted on a
 base plate.  Expansion must splice the children in, keep the internal
 revolute, and re-attach the mounting mate to the owning child."""
+import json
+import socket
+import threading
+import urllib.error
+import urllib.request
+
 import numpy as np
 import pytest
 from test_classify_geo import O, Z, coinc_planes, conc, dup
@@ -63,6 +69,25 @@ def make_graph():
                       components=[plate, inst], edges=[mount],
                       ground=["plate-1"],
                       subassemblies={"X:/fake/servo_unit.SLDASM": sub})
+
+
+def _free_port():
+    s = socket.socket()
+    s.bind(("", 0))
+    p = s.getsockname()[1]
+    s.close()
+    return p
+
+
+def _post_json(base, path, body):
+    req = urllib.request.Request(
+        base + path, data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(req) as r:
+            return r.status, json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        return e.code, json.loads(e.read().decode("utf-8"))
 
 
 def test_expand_splices_children():
@@ -205,6 +230,26 @@ def test_collapse_preview_replaces_no_expand_subassembly_members():
     ]
     assert payload["tree_rows"][1]["member_links"] == [
         "servo_1__case_1", "servo_1__horn_1"]
+    plan = payload["collapse_plan"]
+    assert plan["ready_for_urdf"] is True
+    assert plan["blocking_issue_count"] == 0
+    assert plan["collapsed_subassemblies"] == [{
+        "name": "servo-1",
+        "link": "servo_1",
+        "member_links": ["servo_1__case_1", "servo_1__horn_1"],
+        "member_components": ["servo-1/case-1", "servo-1/horn-1"],
+        "selected_parent": "",
+        "selected_origin_link": "",
+    }]
+    assert plan["link_replacements"] == [
+        {"source_link": "servo_1__case_1", "collapsed_link": "servo_1"},
+        {"source_link": "servo_1__horn_1", "collapsed_link": "servo_1"},
+    ]
+    assert [(j["source_joint"], j["decision"])
+            for j in plan["dropped_joints"]] == [
+        ("servo_1__case_1__servo_1__horn_1",
+         "dropped_internal_to_collapsed_subassembly"),
+    ]
 
 
 def test_collapse_preview_keeps_expanded_override():
@@ -220,6 +265,260 @@ def test_collapse_preview_keeps_expanded_override():
         ("servo_1__case_1", 1, "fixed", False),
         ("servo_1__horn_1", 2, "revolute", False),
     ]
+
+
+def test_collapse_preview_applies_subassembly_parent_override():
+    from sw2robot.editor.webserver import (
+        _collapse_preview_payload,
+        _set_subassembly_origin_link_yaml,
+        _set_subassembly_parent_override_yaml,
+        _tree_rows_from_collapse_plan,
+    )
+
+    graph = make_graph()
+    graph.components.append(_comp("bracket-1", "bracket_1", xyz=(0, 0.1, 0)))
+    txt = """
+base: plate-1
+no_expand:
+- servo
+joints:
+  - parent: plate-1
+    child:  servo-1/case-1
+    type:   fixed
+  - parent: bracket-1
+    child:  servo-1/horn-1
+    type:   fixed
+  - parent: plate-1
+    child:  bracket-1
+    type:   fixed
+"""
+    payload = _collapse_preview_payload(graph, txt)
+    choices = payload["parent_choices"]
+    assert choices[0]["subassembly"] == "servo-1"
+    assert [p["link"] for p in choices[0]["parents"]] == [
+        "bracket_1", "plate_1"]
+    assert {
+        i["code"] for i in payload["validation"]["issues"]
+    } >= {"multiple_parents", "multiple_boundary_parents",
+          "disconnected_members"}
+
+    txt = _set_subassembly_parent_override_yaml(
+        txt, graph, "servo-1", "bracket_1")
+    payload = _collapse_preview_payload(graph, txt)
+    assert payload["parent_choices"][0]["selected_parent"] == "bracket_1"
+    assert [(j["parent"], j["child"]) for j in payload["joints"]] == [
+        ("bracket_1", "servo_1"),
+        ("plate_1", "bracket_1"),
+    ]
+    assert "multiple_boundary_parents" not in {
+        i["code"] for i in payload["validation"]["issues"]
+    }
+    plan = payload["collapse_plan"]
+    assert plan["version"] == 1
+    assert plan["base_link"] == payload["base_link"]
+    assert plan["ready_for_urdf"] is False
+    assert plan["blocking_issue_count"] == 1
+    servo_link = next(l for l in plan["links"] if l["link"] == "servo_1")
+    assert servo_link["kind"] == "collapsed_subassembly"
+    assert servo_link["source_subassembly"] == "servo-1"
+    assert servo_link["selected_parent"] == "bracket_1"
+    assert servo_link["member_links"] == [
+        "servo_1__case_1", "servo_1__horn_1"]
+    assert [(j["parent"], j["child"], j["source_joint"], j["decision"])
+            for j in plan["joints"]] == [
+        ("bracket_1", "servo_1", "bracket_1__servo_1__horn_1",
+         "kept_boundary"),
+        ("plate_1", "bracket_1", "plate_1__bracket_1",
+         "kept_expanded"),
+    ]
+    assert [(j["source_joint"], j["decision"])
+            for j in plan["dropped_joints"]] == [
+        ("plate_1__servo_1__case_1", "dropped_parent_override")
+    ]
+    assert payload["tree_rows"] == _tree_rows_from_collapse_plan(plan)
+    assert payload["group_choices"][0]["subassembly"] == "servo-1"
+    assert [g["origin_link"] for g in payload["group_choices"][0]["groups"]] == [
+        "servo_1__case_1", "servo_1__horn_1"]
+    assert "disconnected_members" in {
+        i["code"] for i in payload["validation"]["issues"]
+    }
+
+    txt = _set_subassembly_origin_link_yaml(
+        txt, graph, "servo-1", "servo_1__horn_1")
+    payload = _collapse_preview_payload(graph, txt)
+    assert payload["group_choices"][0]["selected_origin_link"] == \
+        "servo_1__horn_1"
+    anchored = next(
+        i for i in payload["validation"]["issues"]
+        if i["code"] == "disconnected_members")
+    assert anchored["severity"] == "info"
+    assert anchored["origin_link"] == "servo_1__horn_1"
+    plan = payload["collapse_plan"]
+    assert plan["ready_for_urdf"] is True
+    assert plan["blocking_issue_count"] == 0
+
+
+def test_collapse_preview_reports_stale_subassembly_origin_link():
+    from sw2robot.editor.webserver import _collapse_preview_payload
+
+    txt = """
+base: plate-1
+no_expand:
+- servo
+subassembly_origin_links:
+  servo-1: missing_link
+"""
+    payload = _collapse_preview_payload(make_graph(), txt)
+    choices = payload["group_choices"]
+    assert choices[0]["subassembly"] == "servo-1"
+    assert choices[0]["selected_origin_link"] == ""
+    assert choices[0]["stale_origin_link"] == "missing_link"
+    assert payload["collapsed_subassemblies"][0]["selected_origin_link"] == ""
+    assert payload["collapsed_subassemblies"][0]["stale_origin_link"] == \
+        "missing_link"
+    issue = next(
+        i for i in payload["validation"]["issues"]
+        if i["code"] == "invalid_origin_link")
+    assert issue["origin_link"] == "missing_link"
+
+
+def test_set_subassembly_origin_link_rejects_non_candidate(tmp_path):
+    from sw2robot.editor import webserver
+
+    graph = make_graph()
+    graph.components.append(_comp("bracket-1", "bracket_1", xyz=(0, 0.1, 0)))
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "urdf").mkdir()
+    graph.save(pkg / "graph.json")
+    yml = pkg / "t.joints.yaml"
+    yml.write_text("""
+base: plate-1
+no_expand:
+- servo
+joints:
+  - parent: plate-1
+    child:  servo-1/case-1
+    type:   fixed
+  - parent: bracket-1
+    child:  servo-1/horn-1
+    type:   fixed
+  - parent: plate-1
+    child:  bracket-1
+    type:   fixed
+""", encoding="utf-8")
+
+    old_state = (
+        webserver._Handler.pkg_dir,
+        webserver._Handler.urdf_rel,
+        webserver._Handler.robot_name,
+        webserver._Handler.root_dir,
+    )
+    webserver._Handler.pkg_dir = str(pkg)
+    webserver._Handler.urdf_rel = "urdf/t.urdf"
+    webserver._Handler.robot_name = "t"
+    webserver._Handler.root_dir = str(pkg)
+    httpd, port = webserver._bind_free_port(
+        webserver._Handler, _free_port())
+    httpd.daemon_threads = True
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        code, payload = _post_json(
+            f"http://127.0.0.1:{port}",
+            "/api/set_subassembly_origin_link",
+            {"name": "servo-1", "origin_link": "not_a_member"})
+        assert code == 400
+        assert "not a member origin link candidate" in payload["error"]
+        assert "subassembly_origin_links" not in yml.read_text(
+            encoding="utf-8")
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        (
+            webserver._Handler.pkg_dir,
+            webserver._Handler.urdf_rel,
+            webserver._Handler.robot_name,
+            webserver._Handler.root_dir,
+        ) = old_state
+
+
+def test_collapse_preview_ignores_stale_subassembly_parent_override():
+    from sw2robot.editor.webserver import _collapse_preview_payload
+
+    graph = make_graph()
+    graph.components.append(_comp("bracket-1", "bracket_1", xyz=(0, 0.1, 0)))
+    txt = """
+base: plate-1
+no_expand:
+- servo
+subassembly_parent_overrides:
+  servo-1: missing_parent
+joints:
+  - parent: plate-1
+    child:  servo-1/case-1
+    type:   fixed
+  - parent: bracket-1
+    child:  servo-1/horn-1
+    type:   fixed
+  - parent: plate-1
+    child:  bracket-1
+    type:   fixed
+"""
+    payload = _collapse_preview_payload(graph, txt)
+    assert payload["parent_choices"][0]["selected_parent"] == ""
+    assert payload["collapsed_subassemblies"][0]["selected_parent"] == ""
+    assert {
+        (j["parent"], j["child"]) for j in payload["joints"]
+    } >= {
+        ("plate_1", "servo_1"),
+        ("bracket_1", "servo_1"),
+    }
+    assert "multiple_boundary_parents" in {
+        i["code"] for i in payload["validation"]["issues"]
+    }
+    plan = payload["collapse_plan"]
+    assert plan["ready_for_urdf"] is False
+    servo_link = next(l for l in plan["links"] if l["link"] == "servo_1")
+    assert servo_link["selected_origin_link"] == ""
+
+
+def test_collapse_preview_can_reset_subassembly_parent_override_to_auto():
+    from sw2robot.editor.webserver import (
+        _collapse_preview_payload,
+        _set_subassembly_parent_override_yaml,
+        _subassembly_parent_overrides,
+    )
+
+    graph = make_graph()
+    graph.components.append(_comp("bracket-1", "bracket_1", xyz=(0, 0.1, 0)))
+    txt = """
+base: plate-1
+no_expand:
+- servo
+joints:
+  - parent: plate-1
+    child:  servo-1/case-1
+    type:   fixed
+  - parent: bracket-1
+    child:  servo-1/horn-1
+    type:   fixed
+  - parent: plate-1
+    child:  bracket-1
+    type:   fixed
+"""
+    txt = _set_subassembly_parent_override_yaml(
+        txt, graph, "servo-1", "bracket_1")
+    txt = _set_subassembly_parent_override_yaml(txt, graph, "servo-1", "")
+    assert _subassembly_parent_overrides(txt) == {}
+
+    payload = _collapse_preview_payload(graph, txt)
+    assert payload["parent_choices"][0]["selected_parent"] == ""
+    assert {
+        (j["parent"], j["child"]) for j in payload["joints"]
+    } >= {
+        ("plate_1", "servo_1"),
+        ("bracket_1", "servo_1"),
+    }
 
 
 def test_validate_collapsed_tree_reports_multiple_parents_and_cycles():
@@ -243,7 +542,140 @@ def test_validate_collapsed_tree_reports_multiple_parents_and_cycles():
     assert multi["source_joints"] == ["j1", "j2"]
     cycle = next(i for i in payload["issues"] if i["code"] == "cycle")
     assert cycle["links"] == ["base", "arm", "base"]
+    assert cycle["source_joints"] == ["j1", "j3"]
+    assert cycle["candidates"] == [
+        {"joint": "base__arm", "source_joint": "j1",
+         "parent": "base", "child": "arm"},
+        {"joint": "arm__base", "source_joint": "j3",
+         "parent": "arm", "child": "base"},
+    ]
     assert payload["ok"] is False
+
+
+def test_collapse_preview_applies_cycle_break_before_choices(monkeypatch):
+    from sw2robot.editor import webserver
+
+    links = [{"link_name": n} for n in ("base", "arm")]
+    joints = [
+        {"name": "base__arm", "parent": "base", "child": "arm",
+         "type": "fixed", "source_name": "j1"},
+        {"name": "arm__base", "parent": "arm", "child": "base",
+         "type": "fixed", "source_name": "j2"},
+    ]
+    monkeypatch.setattr(webserver, "_canonical_tree_payload", lambda *_: {
+        "base_link": "base",
+        "links": links,
+        "joints": joints,
+        "subassemblies": [],
+    })
+    monkeypatch.setattr(webserver, "_subassemblies_payload", lambda *_: {
+        "subassemblies": [],
+    })
+
+    unresolved = webserver._collapse_preview_payload(object(), "")
+    assert any(i["code"] == "cycle"
+               for i in unresolved["validation"]["issues"])
+    assert unresolved["collapse_plan"]["ready_for_urdf"] is False
+
+    payload = webserver._collapse_preview_payload(
+        object(), "subassembly_cycle_break_joints:\n- arm__base\n")
+
+    assert [j["source_name"] for j in payload["joints"]] == ["base__arm"]
+    assert not any(i["code"] == "cycle"
+                   for i in payload["validation"]["issues"])
+    assert payload["cycle_break_choices"] == [{
+        "links": [],
+        "joints": [],
+        "source_joints": ["arm__base"],
+        "selected_source_joint": "arm__base",
+        "stale": True,
+        "candidates": [{
+            "joint": "arm__base",
+            "source_joint": "arm__base",
+            "parent": "",
+            "child": "",
+        }],
+    }]
+    assert payload["collapse_plan"]["ready_for_urdf"] is True
+    assert [(j["source_joint"], j["decision"])
+            for j in payload["collapse_plan"]["dropped_joints"]] == [
+        ("arm__base", "dropped_cycle_break"),
+    ]
+
+
+def test_collapse_plan_rejects_unreachable_second_root(monkeypatch):
+    from sw2robot.editor import webserver
+
+    monkeypatch.setattr(webserver, "_canonical_tree_payload", lambda *_: {
+        "base_link": "base",
+        "links": [{"name": n, "link_name": n}
+                  for n in ("base", "arm", "orphan")],
+        "joints": [{
+            "name": "base__arm", "parent": "base", "child": "arm",
+            "type": "fixed",
+        }],
+        "subassemblies": [],
+    })
+    monkeypatch.setattr(webserver, "_subassemblies_payload", lambda *_: {
+        "subassemblies": [],
+    })
+
+    payload = webserver._collapse_preview_payload(object(), "")
+
+    issues = {i["code"]: i for i in payload["validation"]["issues"]}
+    assert issues["invalid_roots"]["roots"] == ["base", "orphan"]
+    assert issues["unreachable_links"]["links"] == ["orphan"]
+    assert payload["collapse_plan"]["ready_for_urdf"] is False
+
+
+def test_subassembly_cycle_break_yaml_adds_and_resets_source_joint():
+    from sw2robot.editor.webserver import (
+        _set_subassembly_cycle_break_joint_yaml,
+        _subassembly_cycle_break_joints,
+    )
+
+    txt = _set_subassembly_cycle_break_joint_yaml("", "j2", True)
+    assert _subassembly_cycle_break_joints(txt) == {"j2"}
+
+    txt = _set_subassembly_cycle_break_joint_yaml(txt, "", False, "j2")
+    assert _subassembly_cycle_break_joints(txt) == set()
+
+
+def test_directed_cycle_reports_self_loop():
+    from sw2robot.editor.webserver import _directed_cycle_reports
+
+    reports = _directed_cycle_reports(
+        "base", [{"link_name": "base"}], [{
+            "name": "base__base", "parent": "base", "child": "base",
+            "type": "fixed", "source_name": "self_joint",
+        }])
+
+    assert len(reports) == 1
+    assert reports[0]["links"] == ["base", "base"]
+    assert reports[0]["source_joints"] == ["self_joint"]
+
+
+def test_cycle_break_shared_candidate_resolves_two_cycles():
+    from sw2robot.editor.webserver import _directed_cycle_reports
+
+    links = [{"link_name": n} for n in ("base", "arm", "tip")]
+    joints = [
+        {"name": "base__arm", "parent": "base", "child": "arm",
+         "source_name": "shared"},
+        {"name": "arm__base", "parent": "arm", "child": "base",
+         "source_name": "short_return"},
+        {"name": "arm__tip", "parent": "arm", "child": "tip",
+         "source_name": "to_tip"},
+        {"name": "tip__base", "parent": "tip", "child": "base",
+         "source_name": "long_return"},
+    ]
+
+    reports = _directed_cycle_reports("base", links, joints)
+    assert len(reports) == 2
+    assert all("shared" in r["source_joints"] for r in reports)
+
+    kept = [j for j in joints if j["source_name"] != "shared"]
+    assert _directed_cycle_reports("base", links, kept) == []
 
 
 def test_validate_collapsed_tree_reports_disconnected_members():
