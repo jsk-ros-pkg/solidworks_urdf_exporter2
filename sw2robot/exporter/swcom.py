@@ -17,6 +17,7 @@ KEY FACTS about this machine (discovered empirically):
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import sys
@@ -440,9 +441,70 @@ class SolidWorks:
             return True
         return safe_call(self.app, "RevisionNumber") not in (None, "")
 
+    # -- part cache -------------------------------------------------------
+    def _cache_dir(self):
+        """Persistent local cache of CAD files pulled from the source drive.
+        Override the location with ``SW2ROBOT_PART_CACHE``."""
+        d = getattr(self, "_part_cache", None)
+        if d is None:
+            d = (os.environ.get("SW2ROBOT_PART_CACHE")
+                 or os.path.join(os.environ.get("LOCALAPPDATA")
+                                 or os.path.expanduser("~"),
+                                 "sw2robot", "partcache"))
+            self._part_cache = d
+        return d
+
+    def _place(self, src, dst):
+        """Put a copy of ``src`` at ``dst``, sourcing the bytes from a persistent
+        local cache keyed by (path, mtime, size).
+
+        The slow part of opening an assembly off Google Drive is streaming its
+        referenced parts DOWN from the drive; the same shared part (a servo, a
+        bearing) is referenced by many assemblies, so without a cache it is
+        re-downloaded once per assembly.  With the cache each (file, version) is
+        pulled ONCE and every later use is a fast local copy.  Falls back to a
+        direct copy if the cache cannot be used."""
+        try:
+            st = os.stat(src)
+        except OSError:
+            return False
+        h = hashlib.sha1(
+            os.path.normcase(os.path.abspath(src)).encode("utf-8")).hexdigest()
+        tag = f"{int(st.st_mtime)}_{st.st_size}"
+        cdir = os.path.join(self._cache_dir(), h[:2])
+        cname = f"{h}__{tag}__{os.path.basename(src)}"
+        cpath = os.path.join(cdir, cname)
+        try:
+            if not os.path.exists(cpath):
+                os.makedirs(cdir, exist_ok=True)
+                # keep ONE version per file: drop older-mtime entries so the
+                # cache tracks the current drive contents, not every past edit
+                for fn in os.listdir(cdir):
+                    if fn.startswith(h + "__") and fn != cname:
+                        try:
+                            os.remove(os.path.join(cdir, fn))
+                        except OSError:
+                            pass
+                tmp = cpath + f".{os.getpid()}.part"
+                shutil.copy2(src, tmp)          # the drive download -- once
+                os.replace(tmp, cpath)
+            shutil.copy2(cpath, dst)            # fast local copy into the temp dir
+            return True
+        except OSError:
+            try:
+                shutil.copy2(src, dst)          # cache unusable -> straight copy
+                return True
+            except OSError:
+                return False
+
     # -- document handling ------------------------------------------------
-    def open_copy(self, path):
+    def open_copy(self, path, progress=None):
         """Copy ``path`` to a temp dir and open the COPY full (read-write).
+
+        ``progress(msg)`` -- if given -- is pinged as each referenced file is
+        fetched, so a caller's stall watchdog sees a heartbeat during a long
+        co-location download (many parts streamed off a shared drive) and does
+        not mistake it for a hang.
 
         We never open or modify the user's original file.  Crucially we do NOT
         use the read-only open flag: opening an assembly read-only makes
@@ -481,7 +543,12 @@ class SolidWorks:
             # stale then open with almost everything unresolved (home_drone came
             # up as a single component).  Register the original's folder family
             # as document search paths so rule (2) replaces rule (4).
-            self._register_search_folders(path)
+            # resolve the assembly's references to their CURRENT locations (also
+            # recovers a part that was MOVED so the stored path is stale), then
+            # both register those folders and co-locate the parts beside the copy
+            dep_files = (self._dependency_files(path)
+                         if doc_type_for(path) == SW_DOC_ASSEMBLY else [])
+            self._register_search_folders(path, dep_files)
             # Reuse ONE temp dir per source folder: assemblies that share a folder
             # (the common case -- a module's sub-assemblies all sit beside it)
             # then co-locate their sibling CAD files ONCE instead of re-copying
@@ -501,7 +568,7 @@ class SolidWorks:
             stem, ext = os.path.splitext(os.path.basename(path))
             tmp = os.path.join(tmpdir, f"{stem}_{os.path.basename(tmpdir)}{ext}")
             if not os.path.exists(tmp):
-                shutil.copy2(path, tmp)
+                self._place(path, tmp)
             # Co-locate the source folder's sibling CAD files in the SAME temp dir
             # so SolidWorks' "same folder as the assembly" rule resolves them by
             # name -- ONCE per folder (the folder's other sub-assemblies reuse
@@ -523,14 +590,30 @@ class SolidWorks:
                     s = os.path.join(src_dir, fn)
                     d = os.path.join(tmpdir, fn)
                     if os.path.isfile(s) and not os.path.exists(d):
-                        try:
-                            shutil.copy2(s, d)
+                        if progress:
+                            progress(f"fetching {fn}")   # stall-watchdog heartbeat
+                        if self._place(s, d):
                             n_sib += 1
-                        except OSError:
-                            pass
                 if n_sib:
                     print(f"      co-located {n_sib} sibling CAD file(s) for "
                           f"reference resolution")
+            # Also co-locate this assembly's OWN referenced files, resolved to
+            # their current locations, beside the copy.  This is what recovers a
+            # DISTANT shared library or a MOVED part whose stored path is stale:
+            # a temp copy does not re-resolve an unresolvable stored path through
+            # the search paths (those components then come up suppressed), but the
+            # "same folder as the assembly" rule resolves a co-located part by name.
+            n_dep = 0
+            for s in dep_files:
+                d = os.path.join(tmpdir, os.path.basename(s))
+                if os.path.isfile(s) and not os.path.exists(d):
+                    if progress:
+                        progress(f"fetching {os.path.basename(s)}")  # heartbeat
+                    if self._place(s, d):
+                        n_dep += 1
+            if n_dep:
+                print(f"      co-located {n_dep} referenced file(s) from their "
+                      f"resolved locations")
             t1 = _time.time()
             doc, ecode, wcode = open_doc6(self.app, tmp, doc_type_for(tmp))
             if doc is None:
@@ -576,47 +659,55 @@ class SolidWorks:
               f"{t4 - t3:.1f}s")
         return doc
 
-    def _reference_dirs(self, src_path):
-        """Every folder that actually holds a file this assembly references,
-        read from SolidWorks' own dependency records (``GetDocumentDependencies2``
-        -- from the file, no open required).
-
-        The parent + parent's-subfolders scan below only reaches parts that sit
-        near the .SLDASM.  Assemblies that reference a SHARED library in a distant
-        folder (e.g. ``.../common_parts/servo/Dynamixel/XL430`` while the assembly
-        is under ``.../beetle/asm/subasm``) then open with every component
-        unresolved -- the "no usable components" / widespread "FAILED mesh"
-        failures on the hand and aerial trees.  Feeding those real folders into
-        the search paths lets SolidWorks resolve them by name."""
-        dirs = []
+    def _deps(self, src_path, search_subfolders):
+        """``GetDocumentDependencies2`` -> list of referenced file paths (from the
+        file, no open required).  ``[name, path, name, path, ...]`` -> the paths."""
         try:
-            # (document, Traverseflag=whole tree, SearchSubfolders=off, AddReadOnlyInfo=off)
-            deps = self.app.GetDocumentDependencies2(src_path, True, False, False)
+            deps = self.app.GetDocumentDependencies2(
+                src_path, True, bool(search_subfolders), False)
         except Exception as e:
             print(f"      WARN: GetDocumentDependencies2 failed ({e!r}); "
-                  f"distant part references may not resolve")
-            return dirs
-        if not deps:
-            return dirs
-        # returns a flat [name, path, name, path, ...] sequence
-        seq = list(deps)
-        seen = set()
-        for p in seq[1::2]:
+                  f"distant/relocated part references may not resolve")
+            return None
+        return [str(p) for p in list(deps or [])[1::2]]
+
+    def _dependency_files(self, src_path):
+        """Every file this assembly references, resolved to its CURRENT location.
+
+        Fast path first: ``GetDocumentDependencies2`` with SearchSubfolders OFF
+        just reads the recorded paths and returns instantly.  Only if some of
+        those paths are STALE (a part was moved -- saved on another machine, a
+        different Drive letter, a ``\\.shortcut-targets-by-id\\`` id) do we pay
+        the SLOW subfolder search (ON), which walks the drive to find the part's
+        current location.  Turning the flag ON unconditionally made SolidWorks
+        scan the whole subtree for every assembly -- minutes over a shared drive,
+        long enough to look like a hang on a big reference tree (e.g. tiger_8link)."""
+        recorded = self._deps(src_path, False)
+        if recorded is None:
+            return []
+        paths = recorded
+        if any(not os.path.isfile(os.path.abspath(p)) for p in recorded):
+            # a recorded path points nowhere here -> resolve via the slow search
+            resolved = self._deps(src_path, True)
+            if resolved:
+                paths = resolved
+        files, seen = [], set()
+        for p in paths:
             try:
-                d = os.path.dirname(os.path.abspath(str(p)))
+                ap = os.path.abspath(p)
             except Exception:
                 continue
-            key = os.path.normcase(d)
-            if d and key not in seen and os.path.isdir(d):
+            key = os.path.normcase(ap)
+            if key not in seen and os.path.isfile(ap):
                 seen.add(key)
-                dirs.append(d)
-        return dirs
+                files.append(ap)
+        return files
 
-    def _register_search_folders(self, src_path):
+    def _register_search_folders(self, src_path, dep_files=()):
         """Add the source assembly's folder, its parent, the parent's sub-folders
         (parts/, commercial/, ...) AND every folder that actually holds a
-        referenced part (from the assembly's dependency records) to the reference
-        search paths of this SolidWorks session.
+        referenced part (from ``dep_files``) to the reference search paths of this
+        SolidWorks session.
 
         The previous user settings are captured ONCE and restored in
         shutdown() -- SolidWorks persists these preferences to the registry
@@ -646,10 +737,12 @@ class SolidWorks:
             # the real folders of every referenced part, wherever they live --
             # this is what lets a DISTANT shared library resolve (parent-subfolder
             # scan above only reaches parts near the .SLDASM)
-            ref_dirs = self._reference_dirs(src_path)
-            for d in ref_dirs:
-                if d not in cand:
-                    cand.append(d)
+            ref_dirs = []
+            for f in dep_files:
+                d = os.path.dirname(f)
+                if d and d not in cand and d not in ref_dirs:
+                    ref_dirs.append(d)
+            cand.extend(ref_dirs)
             # KEEP the user's existing referenced-document search paths and only
             # ADD ours -- SolidWorks resolves this assembly's parts through those
             # configured paths interactively, so replacing them (the old
