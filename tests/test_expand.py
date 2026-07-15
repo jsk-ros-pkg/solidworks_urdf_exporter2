@@ -171,7 +171,9 @@ def test_canonical_tree_payload_ignores_subassembly_modes():
     from sw2robot.editor.webserver import _canonical_tree_payload
 
     payload = _canonical_tree_payload(
-        make_graph(), "base: plate-1\nno_expand:\n- servo\n")
+        make_graph(),
+        "base: plate-1\nno_expand:\n- servo\n"
+        "subassembly_modes:\n  servo-1: no_expand\n")
     link_names = {x["link_name"] for x in payload["links"]}
     assert "servo_1" not in link_names
     assert {"servo_1__case_1", "servo_1__horn_1"} <= link_names
@@ -1324,7 +1326,7 @@ def test_validate_collapsed_tree_reports_disconnected_members():
     assert issue["components"] == [["sub_1__a"], ["sub_1__b"]]
 
 
-def test_subassemblies_payload_reports_expansion_state():
+def test_subassemblies_payload_defaults_to_no_expand():
     from sw2robot.editor.webserver import _subassemblies_payload
 
     payload = _subassemblies_payload(make_graph())
@@ -1334,8 +1336,9 @@ def test_subassemblies_payload_reports_expansion_state():
     assert rows[0]["children"] == 2
     assert rows[0]["internal_edges"] == 1
     assert rows[0]["movable"] is True
-    assert rows[0]["expanded"] is True
-    assert rows[0]["override"] == "auto"
+    assert rows[0]["expanded"] is False
+    assert rows[0]["override"] == "no_expand"
+    assert rows[0]["mode_source"] == "default"
 
 
 def test_subassemblies_payload_reports_no_expand_override():
@@ -1346,26 +1349,40 @@ def test_subassemblies_payload_reports_no_expand_override():
     assert len(rows) == 1
     assert rows[0]["expanded"] is False
     assert rows[0]["override"] == "no_expand"
+    assert rows[0]["mode_source"] == "legacy"
+
+
+def test_subassemblies_payload_keeps_legacy_expand_override():
+    from sw2robot.editor.webserver import _subassemblies_payload
+
+    payload = _subassemblies_payload(make_graph(), "expand:\n- servo\n")
+    row = payload["subassemblies"][0]
+    assert row["expanded"] is True
+    assert row["override"] == "expand"
+    assert row["mode_source"] == "legacy"
 
 
 def test_set_subassembly_mode_yaml_round_trips_exact_name():
     from sw2robot.editor.webserver import (
         _set_subassembly_mode_yaml,
         _subassemblies_payload,
+        _subassembly_modes,
     )
 
     txt, members = _set_subassembly_mode_yaml("", make_graph(), "servo-1",
                                               "no_expand")
     assert members["expand"] == []
-    assert members["no_expand"] == ["servo-1"]
+    assert members["no_expand"] == []
+    assert _subassembly_modes(txt) == {"servo-1": "no_expand"}
     row = _subassemblies_payload(make_graph(), txt)["subassemblies"][0]
     assert row["expanded"] is False
     assert row["override"] == "no_expand"
 
     txt, members = _set_subassembly_mode_yaml(txt, make_graph(), "servo-1",
                                               "expand")
-    assert members["expand"] == ["servo-1"]
+    assert members["expand"] == []
     assert members["no_expand"] == []
+    assert _subassembly_modes(txt) == {"servo-1": "expand"}
     row = _subassemblies_payload(make_graph(), txt)["subassemblies"][0]
     assert row["expanded"] is True
     assert row["override"] == "expand"
@@ -1374,20 +1391,53 @@ def test_set_subassembly_mode_yaml_round_trips_exact_name():
                                               "auto")
     assert members["expand"] == []
     assert members["no_expand"] == []
+    assert _subassembly_modes(txt) == {"servo-1": "auto"}
     row = _subassemblies_payload(make_graph(), txt)["subassemblies"][0]
     assert row["override"] == "auto"
+    assert row["expanded"] is True
 
 
-def test_set_subassembly_mode_yaml_rejects_shared_substring_override():
-    from sw2robot.editor.webserver import _set_subassembly_mode_yaml
+def test_exact_subassembly_mode_overrides_shared_legacy_substring():
+    from sw2robot.editor.webserver import (
+        _set_subassembly_mode_yaml,
+        _subassemblies_payload,
+    )
 
     g = make_graph()
     inst2 = _comp("servo-2", "servo_2", xyz=(0.2, 0, 0), sub=True,
                   path="X:/fake/servo_unit.SLDASM")
     g.components.append(inst2)
-    with pytest.raises(ValueError, match="also match other sub-assemblies"):
-        _set_subassembly_mode_yaml("no_expand:\n- servo\n", g, "servo-1",
-                                   "expand")
+    txt, members = _set_subassembly_mode_yaml(
+        "no_expand:\n- servo\n", g, "servo-1", "expand")
+
+    assert members["retained_shared_legacy_modes"] == ["servo"]
+    rows = {row["name"]: row for row in
+            _subassemblies_payload(g, txt)["subassemblies"]}
+    assert rows["servo-1"]["override"] == "expand"
+    assert rows["servo-1"]["mode_source"] == "saved"
+    assert rows["servo-2"]["override"] == "no_expand"
+    assert rows["servo-2"]["mode_source"] == "legacy"
+
+
+def test_preview_default_no_expand_does_not_change_normal_model():
+    import yaml
+
+    from sw2robot.editor.webserver import (
+        _collapse_preview_payload,
+        _set_subassembly_mode_yaml,
+    )
+    from sw2robot.exporter.model import build_model
+
+    graph = make_graph()
+    txt, _ = _set_subassembly_mode_yaml(
+        "base: plate-1\n", graph, "servo-1", "no_expand")
+
+    preview = _collapse_preview_payload(graph, txt)
+    assert {row["link_name"] for row in preview["links"]} == {
+        "plate_1", "servo_1"}
+    normal = build_model(graph, config=yaml.safe_load(txt))
+    assert {component.link_name for component in normal.components} == {
+        "plate_1", "servo_1__case_1", "servo_1__horn_1"}
 
 
 def test_rigid_subassembly_not_expanded():
