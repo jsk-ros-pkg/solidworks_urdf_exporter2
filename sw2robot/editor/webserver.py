@@ -1028,6 +1028,23 @@ def _set_number_override(txt, mapkey, key, value):
     return (f"{mapkey}:\n{block}" + txt) if block else txt
 
 
+def _subassembly_modes(yml_txt):
+    """Exact per-instance modes used only by sub-assembly previews."""
+    import yaml as _yaml
+
+    try:
+        cfg = _yaml.safe_load(yml_txt) or {}
+        if not isinstance(cfg, dict):
+            return {}
+    except Exception:
+        return {}
+    raw = cfg.get("subassembly_modes") or {}
+    if not isinstance(raw, dict):
+        return {}
+    valid = {"auto", "expand", "no_expand"}
+    return {str(k): str(v) for k, v in raw.items() if str(v) in valid}
+
+
 def _subassemblies_payload(graph, yml_txt=""):
     """Read-only summary for the editor's sub-assembly panel.
 
@@ -1045,6 +1062,7 @@ def _subassemblies_payload(graph, yml_txt=""):
         cfg = {}
     expand = [str(x).lower() for x in (cfg.get("expand") or [])]
     no_expand = [str(x).lower() for x in (cfg.get("no_expand") or [])]
+    exact_modes = _subassembly_modes(yml_txt)
 
     subs = getattr(graph, "subassemblies", None) or {}
     out = []
@@ -1053,16 +1071,23 @@ def _subassemblies_payload(graph, yml_txt=""):
             continue
         sub = subs.get(c.part_path)
         nm = c.name.lower()
-        override = "auto"
-        if any(s in nm for s in no_expand):
+        override = exact_modes.get(c.name)
+        mode_source = "saved" if override else ""
+        if not override and any(s in nm for s in no_expand):
             override = "no_expand"
-        elif any(s in nm for s in expand):
+            mode_source = "legacy"
+        elif not override and any(s in nm for s in expand):
             override = "expand"
+            mode_source = "legacy"
+        elif not override:
+            override = "no_expand"
+            mode_source = "default"
         movable = bool(sub and _subgraph_is_movable(sub, subs))
         expanded = override != "no_expand" and (
             override == "expand" or movable)
         if override == "no_expand":
-            reason = "kept by no_expand"
+            reason = "kept by default no_expand" \
+                if mode_source == "default" else "kept by no_expand"
         elif override == "expand":
             reason = "forced expand"
         elif movable:
@@ -1078,6 +1103,7 @@ def _subassemblies_payload(graph, yml_txt=""):
             "internal_edges": len(sub.edges) if sub else 0,
             "movable": movable,
             "override": override,
+            "mode_source": mode_source,
             "expanded": expanded,
             "reason": reason,
         })
@@ -1086,6 +1112,7 @@ def _subassemblies_payload(graph, yml_txt=""):
         "subassemblies": out,
         "expand": cfg.get("expand") or [],
         "no_expand": cfg.get("no_expand") or [],
+        "subassembly_modes": exact_modes,
     }
 
 
@@ -1115,7 +1142,7 @@ def _matching_subasm_members(members, name, all_names):
 
 
 def _set_subassembly_mode_yaml(txt, graph, name, mode):
-    """Set one CAD sub-assembly instance to auto / expand / no_expand."""
+    """Set one exact CAD instance's preview-only sub-assembly mode."""
     import yaml as _yaml
 
     if mode not in ("auto", "expand", "no_expand"):
@@ -1131,18 +1158,21 @@ def _set_subassembly_mode_yaml(txt, graph, name, mode):
     noexp = [str(x) for x in (cfg.get("no_expand") or [])]
     exp_rm, exp_shared = _matching_subasm_members(exp, name, names)
     noexp_rm, noexp_shared = _matching_subasm_members(noexp, name, names)
-    shared = [*exp_shared, *noexp_shared]
-    if shared:
-        raise ValueError(
-            "cannot safely change this row because these substring override(s) "
-            "also match other sub-assemblies: " + ", ".join(shared))
-    add_exp = [name] if mode == "expand" else []
-    add_noexp = [name] if mode == "no_expand" else []
+    # Remove only legacy entries unique to this row. Shared substring entries
+    # remain for siblings; this exact preview mode takes precedence for name.
     txt, exp_members = _set_yaml_list_block(
-        txt, "expand", add=add_exp, remove=[*exp_rm, name])
+        txt, "expand", remove=[*exp_rm, name])
     txt, noexp_members = _set_yaml_list_block(
-        txt, "no_expand", add=add_noexp, remove=[*noexp_rm, name])
-    return txt, {"expand": exp_members, "no_expand": noexp_members}
+        txt, "no_expand", remove=[*noexp_rm, name])
+    txt = _upsert_yaml_map(
+        txt, "subassembly_modes", name, _yaml_scalar(mode))
+    return txt, {
+        "expand": exp_members,
+        "no_expand": noexp_members,
+        "subassembly_modes": _subassembly_modes(txt),
+        "retained_shared_legacy_modes": sorted(
+            {*exp_shared, *noexp_shared}),
+    }
 
 
 def _subassembly_parent_overrides(yml_txt):
