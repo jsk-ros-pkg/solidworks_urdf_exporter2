@@ -467,8 +467,8 @@ def _collision_part_stls(src, mode, quality, cache_dir):
 # geometry there is (native URDF primitives, no STL), for path planning where a
 # coarse convex bound per link is enough.  The fitting lives UPSTREAM in
 # scikit-robot (fit_primitive_to_mesh + primitive_params_to_origin); we only
-# place the result.  scikit-robot is an OPTIONAL dependency -- its absence (or a
-# version predating the per-mesh primitive API) raises a clear error, like coacd.
+# place the result.  scikit-robot is a core dependency, but a version predating
+# the per-mesh primitive API still raises a clear error, like coacd.
 
 # collision-mode string -> primitive_type for fit_primitive_to_mesh
 # (None = auto-pick box/cylinder/sphere by voxel IoU)
@@ -1116,9 +1116,10 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
     (no mesh file at all -- the lightest collision, ``'primitive'`` auto-picks
     the best of box/cylinder/sphere by voxel IoU).  ``coacd_quality``
     (``'balanced'`` | ``'fine'``) picks the CoACD preset and is ignored for the
-    other modes.  ``'coacd'`` needs the optional ``coacd`` package and the
-    primitive modes need the optional ``scikit-robot`` package; their absence
-    raises a clear error.  ``'hull'`` has no extra dependency.  CoACD
+    other modes.  ``'coacd'`` needs the optional ``coacd`` package (its absence
+    raises a clear error); the primitive modes use ``scikit-robot``, a core
+    dependency (a version predating the per-mesh primitive API also raises a
+    clear error).  ``'hull'`` has no extra dependency.  CoACD
     decomposition is cached under ``meshes/.coacd_cache``.
 
     ``ros_version`` picks the build system: ``1`` (default) writes a catkin
