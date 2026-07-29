@@ -68,6 +68,22 @@ def test_folder_read_is_os_independent():
         is True
 
 
+def test_thread_callout_as_catalogue_field():
+    # purchased hardware often carries the thread as a plain delimited field
+    # rather than the "M4x8" size form -- each such screw would otherwise
+    # spawn a spurious revolute per screw
+    assert is_fastener_part("SSFJW8-31-M4-N4", None) is True
+    assert is_fastener_part("BRACKET_M3_SPACER", None) is True
+    assert is_fastener_part("part-M2.5", None) is True
+
+
+def test_thread_callout_does_not_overreach():
+    # codes that merely START with M are structural, not threads
+    for n in ("MB080xxxxxxDNx00", "MRA080BC055DSE00",
+              "MAGNET_9.STEP", "MODULE_CAMERA_DS5_AWG_RGB_6.STEP"):
+        assert is_fastener_part(n, None) is False, n
+
+
 def test_fastener_rec_welds_fixed():
     # a flagged edge classifies fixed regardless of its (hinge-looking) mates
     rec = {"types": ["CONCENTRIC"], "axis": None, "mates": [], "fastener": True}

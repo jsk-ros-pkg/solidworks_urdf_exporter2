@@ -83,6 +83,12 @@ _FASTENER_SIZE = re.compile(
     + chr(0xD7) + r"]\s*\d+")
 # a bare metric thread call-out used as a stand-alone library folder (e.g. "M3")
 _FASTENER_FOLDER_BARE = re.compile(r"(?i)^(?:fs[\s_-]*)?m\d+(?:[\s_-]\w+)*$")
+# The size pattern above only fires on the "M4x8" form, but purchased-hardware
+# catalogue numbers often carry the thread as a plain delimited field instead
+# ("SSFJW8-31-M4-N4"), which would otherwise spawn a spurious revolute per screw.
+# Require the WHOLE token to be M<digits>, so longer codes that merely START
+# with M ("MB080xxxxxxDNx00", "MRA080BC055DSE00", "MAGNET") are left alone.
+_FASTENER_THREAD_TOKEN = re.compile(r"(?i)(?:^|[\s_-])m\d+(?:\.\d+)?(?=[\s_-]|$)")
 
 
 def is_fastener_part(name, part_path, extra=None, keep=None):
@@ -105,7 +111,8 @@ def is_fastener_part(name, part_path, extra=None, keep=None):
         return False
     if extra and any(e.lower() in low for e in extra):
         return True
-    if _FASTENER_WORD.search(hay) or _FASTENER_SIZE.search(hay):
+    if (_FASTENER_WORD.search(hay) or _FASTENER_SIZE.search(hay)
+            or _FASTENER_THREAD_TOKEN.search(hay_name)):
         return True
     # a leaf part sitting directly in a folder whose whole name is a thread
     # call-out ("Bolt/", "M3/") -- folder is the library category, very reliable
