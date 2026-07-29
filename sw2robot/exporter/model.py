@@ -133,8 +133,10 @@ def _sw_mass_props(mp):
 
     where ``R``'s rows are the three principal-axis unit vectors expressed in
     the part frame (SolidWorks returns them as three consecutive triples).
-    Returns ``(None, None, None)`` if the values are unavailable / degenerate
-    so the caller falls back to the mesh estimate."""
+    Returns ``(mass, com, None)`` when a valid mass/COM exist but no inertia
+    tensor can be marshalled (mass/COM are kept -- the mass editor uses them --
+    and the inertia falls back to the mesh estimate downstream), and
+    ``(None, None, None)`` only when even mass/COM are unavailable/degenerate."""
     # Force SI output if this build's interface exposes the toggle
     # (IMassProperty2); the classic IMassProperty is already SI, so the
     # attribute is simply absent and this is a no-op.
@@ -143,13 +145,27 @@ def _sw_mass_props(mp):
     except Exception:
         pass
 
-    def _arr(name, n):
-        v = safe_prop(mp, name)
-        try:
-            vals = [float(x) for x in v]
-        except (TypeError, ValueError):
-            return None
-        return vals if len(vals) == n else None
+    def _arr(names, n):
+        # SolidWorks' typelib spells these "Principle*" (sic); some builds
+        # expose only that name and some the corrected "Principal*" -- try
+        # each, as a property first, then as a no/one-arg method (the getter
+        # marshals as a method on certain pywin32/typelib combinations).
+        for name in names if isinstance(names, tuple) else (names,):
+            v = safe_prop(mp, name)
+            if v is None:
+                for args in ((), (0,)):
+                    try:
+                        v = getattr(mp, name)(*args)
+                        break
+                    except Exception:
+                        v = None
+            try:
+                vals = [float(x) for x in v]
+            except (TypeError, ValueError):
+                continue
+            if len(vals) == n:
+                return vals
+        return None
 
     try:
         mass = safe_prop(mp, "Mass")
@@ -157,18 +173,29 @@ def _sw_mass_props(mp):
     except (TypeError, ValueError):
         mass = None
     com = _arr("CenterOfMass", 3)
-    pm = _arr("PrincipalMomentsOfInertia", 3)
-    pax = _arr("PrincipalAxesOfInertia", 9)
-    if not (mass and mass > 0 and com and pm and pax):
+    if not (mass and mass > 0 and com and np.all(np.isfinite(com))):
         return None, None, None
-    if not (np.all(np.isfinite(com)) and np.all(np.isfinite(pm))
-            and np.all(np.isfinite(pax))):
-        return None, None, None
-    R = np.asarray(pax, float).reshape(3, 3)     # rows = principal axes (part frame)
-    I = R.T @ np.diag(pm) @ R                      # tensor about COM, part axes
-    inertia6 = (float(I[0, 0]), float(I[0, 1]), float(I[0, 2]),
-                float(I[1, 1]), float(I[1, 2]), float(I[2, 2]))
-    return mass, [float(x) for x in com], inertia6
+    com = [float(x) for x in com]
+    pm = _arr(("PrincipalMomentsOfInertia", "PrincipleMomentsOfInertia"), 3)
+    pax = _arr(("PrincipalAxesOfInertia", "PrincipleAxesOfInertia",
+                "IGetPrincipleAxesOfInertia"), 9)
+    if pm and pax and np.all(np.isfinite(pm)) and np.all(np.isfinite(pax)):
+        R = np.asarray(pax, float).reshape(3, 3)  # rows = principal axes (part frame)
+        I = R.T @ np.diag(pm) @ R                   # tensor about COM, part axes
+        inertia6 = (float(I[0, 0]), float(I[0, 1]), float(I[0, 2]),
+                    float(I[1, 1]), float(I[1, 2]), float(I[2, 2]))
+        return mass, com, inertia6
+    # 9-element tensor about the COM, straight from the API -- some builds
+    # give this where the principal decomposition is not marshallable
+    t9 = _arr(("MomentOfInertia", "GetMomentOfInertia"), 9)
+    if t9 and np.all(np.isfinite(t9)):
+        I = np.asarray(t9, float).reshape(3, 3)
+        inertia6 = (float(I[0, 0]), float(I[0, 1]), float(I[0, 2]),
+                    float(I[1, 1]), float(I[1, 2]), float(I[2, 2]))
+        return mass, com, inertia6
+    # no usable tensor: keep mass + COM (the mass editor / rescale still use
+    # them); the inertia falls back to the mesh estimate downstream
+    return mass, com, None
 
 
 def _sw_mass_overridden(mp):
