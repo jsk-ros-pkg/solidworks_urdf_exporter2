@@ -79,6 +79,8 @@ class MateEdge(BaseModel):
     axis_dir: list[float] | None = None      # world, unit
     # full per-mate geometry (newer extracts; None on graphs from older ones)
     mates: list[MateGeo] | None = None
+    # DOF-folder mode: this edge is NOT a 'dof' joint -> weld it fixed at build
+    force_fixed: bool = False
 
 
 class LimitJoint(BaseModel):

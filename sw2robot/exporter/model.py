@@ -615,6 +615,108 @@ def _entity_geo(me):
     return (_com_int(etype), p, d, radius)
 
 
+# --- DOF-folder mode ---------------------------------------------------------
+# When the assembly organizes its mates into a FeatureManager folder named
+# DOF_FOLDER_NAME (default "dof"), ONLY the mates inside that folder are treated
+# as actuated joints; every other mate is welded fixed.  This lets the CAD author
+# mark the real degrees of freedom explicitly instead of the exporter guessing
+# (which over-detects bearings / covers / linkage internals and, worse, picks a
+# spanning tree that breaks how parts move).  Folder name is configurable so the
+# convention can change later without code edits.
+DOF_FOLDER_NAME = os.environ.get("SW2URDF_DOF_FOLDER", "dof")
+_DOF_ACTIVE = False        # set by extract_graph when the top assembly has one
+
+
+def _mate_edge(sfi, name_set):
+    """``(edge, mate_type_name)`` a mate FEATURE connects, or ``(None, None)``."""
+    m2 = as_iface(safe_call(sfi, "GetSpecificFeature2"), "IMate2")
+    if m2 is None:
+        return None, None
+    mtype = _com_int(safe_prop(m2, "Type"))
+    mname = MATE_TYPES.get(mtype, str(mtype))
+    ne = safe_call(m2, "GetMateEntityCount") or 0
+    tops = []
+    for i in range(ne):
+        me = as_iface(safe_call(m2, "MateEntity", i), "IMateEntity2")
+        if me is None:
+            continue
+        rc = as_iface(safe_prop(me, "ReferenceComponent"), "IComponent2")
+        rn = safe_prop(rc, "Name2") if rc else None
+        top = _top_level(rn) if rn else None
+        if top in name_set:
+            tops.append(top)
+    real = list(dict.fromkeys(tops))
+    return (frozenset((real[0], real[1])), mname) if len(real) >= 2 else (None, None)
+
+
+def read_dof_edges(doc, name_set, folder_name=None):
+    """``(found, edges)``: whether a mate folder named ``folder_name`` exists in
+    this doc's MateGroup, and the set of top-level component-pair edges the mates
+    inside it connect.  Folders are flat markers in the feature list -- a folder
+    START feature (its Name equals the folder name) and a separate '...EndTag___'
+    FtrFolder that closes the most-recently-opened folder -- so we track a stack."""
+    folder_name = folder_name or DOF_FOLDER_NAME
+    found = False
+    edges = {}                                    # frozenset(edge) -> set(mate types)
+    feat = safe_call(doc, "FirstFeature")
+    guard = 0
+    while feat is not None and guard < 100000:
+        guard += 1
+        fi = as_iface(feat, "IFeature")
+        if safe_call(fi, "GetTypeName2") == "MateGroup":
+            stack = []
+            sub = safe_call(fi, "GetFirstSubFeature")
+            while sub is not None:
+                sfi = as_iface(sub, "IFeature")
+                tn = safe_call(sfi, "GetTypeName2")
+                nm = safe_prop(sfi, "Name") or ""
+                if tn == "FtrFolder":
+                    if "EndTag" in nm:            # closes the innermost open folder
+                        if stack:
+                            stack.pop()
+                    else:                         # a folder START
+                        stack.append(nm)
+                        if nm == folder_name:
+                            found = True
+                elif folder_name in stack:        # a mate inside the dof folder
+                    e, mt = _mate_edge(sfi, name_set)
+                    if e is not None:
+                        edges.setdefault(e, set()).add(mt)
+                sub = safe_call(sfi, "GetNextSubFeature")
+        feat = safe_call(fi, "GetNextFeature")
+    return found, edges
+
+
+def _apply_dof_filter(doc, comps, adjacency):
+    """DOF-folder mode (armed when the TOP assembly has a 'dof' mate folder): weld
+    every edge that is NOT a dof-folder joint.  A sub-assembly with no dof folder
+    of its own becomes fully rigid (all edges fixed) -- its internals are not robot
+    DOFs -- while one that HAS a dof folder keeps only those mates as joints."""
+    if not _DOF_ACTIVE:
+        return
+    name_set = {c.name for c in comps}
+    _found, dof_e = read_dof_edges(doc, name_set)
+    n = 0
+    for key, rec in adjacency.items():
+        if key in dof_e:
+            # This edge IS a marked DOF.  The dof-folder mate is the LOCK that
+            # pins the joint at its assembled angle (suppress it in SolidWorks and
+            # the joint swings free).  Keep ONLY the CONCENTRIC mate (which gives
+            # the free-rotation axis); dropping the parallel/coincident/symmetric
+            # mates is essential -- when this edge is expanded they would otherwise
+            # become FIXED cross-links that bridge the two rigid halves and let the
+            # tree pull the distal parts back onto the proximal side.
+            rec["mates"] = [g for g in rec.get("mates", []) if g.get("type") == "CONCENTRIC"]
+            rec["types"] = [t for t in rec.get("types", []) if t == "CONCENTRIC"]
+            rec.pop("force_fixed", None)
+        else:
+            rec["force_fixed"] = True
+            n += 1
+    if adjacency:
+        print(f"      DOF-folder '{DOF_FOLDER_NAME}': {len(dof_e)} joint edge(s) kept, "
+              f"{n} other edge(s) welded fixed")
+
+
 def build_mate_graph(doc, comps):
     """Adjacency over top-level component names.
 
@@ -712,6 +814,7 @@ def build_mate_graph(doc, comps):
               f"({seen} mates from GetMates"
               + (f"; entities resolved to {refs}" if refs else "")
               + ") -> attaches FIXED")
+    _apply_dof_filter(doc, comps, adjacency)
     return adjacency, ground
 
 
@@ -2470,6 +2573,13 @@ def extract_graph(doc, robot_name, source_assembly, progress=None):
     ``progress(link_name)`` is forwarded per component (see
     :func:`extract_components`)."""
     comps = extract_components(doc, progress=progress)
+    # DOF-folder mode: if the top assembly marks its real joints in a 'dof' mate
+    # folder, switch on the whitelist for this whole extraction (top + subgraphs).
+    global _DOF_ACTIVE
+    _DOF_ACTIVE, _ = read_dof_edges(doc, {c.name for c in comps})
+    if _DOF_ACTIVE:
+        print(f"      DOF-folder mode ON (mate folder '{DOF_FOLDER_NAME}'): only "
+              f"its mates become joints; everything else is welded fixed")
     adjacency, ground = build_mate_graph(doc, comps)
     mated = set()
     for key in adjacency:
@@ -2641,7 +2751,7 @@ def _mate_edges(adjacency):
             a=a, b=b, types=list(rec.get("types", [])),
             axis_point=([float(x) for x in ax[0]] if ax is not None else None),
             axis_dir=([float(x) for x in ax[1]] if ax is not None else None),
-            mates=mates))
+            mates=mates, force_fixed=bool(rec.get("force_fixed", False))))
     return edges
 
 
@@ -2749,7 +2859,8 @@ def _edge_rec(e):
     if e.axis_point and e.axis_dir:
         ax = (np.asarray(e.axis_point, float), np.asarray(e.axis_dir, float))
     return {"types": list(e.types), "axis": ax,
-            "mates": [g.model_dump() for g in e.mates] if e.mates else []}
+            "mates": [g.model_dump() for g in e.mates] if e.mates else [],
+            "force_fixed": bool(getattr(e, "force_fixed", False))}
 
 
 def _excluded(name, link_name, exclude):
