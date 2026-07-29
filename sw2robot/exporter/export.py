@@ -41,7 +41,7 @@ from .model import (
     to_graph_state,
 )
 from .state import GraphState
-from .swcom import SW_DOC_PART, SolidWorks, as_iface, doc_type_for
+from .swcom import SW_DOC_PART, SolidWorks, as_iface, doc_type_for, safe_call
 from .urdf_writer import write_ros_package, write_urdf
 
 GRAPH_FILE = "graph.json"
@@ -93,15 +93,35 @@ def _extract_part_into(sw, part_path, pkg_dir, meshes_dir, robot_name, _say):
 
 
 def _extract_into(sw, assembly_path, pkg_dir, meshes_dir, robot_name, _say,
-                  _part=None):
+                  _part=None, configuration=None):
     """Extraction body against an already-running SolidWorks session.  ``_part``
-    (optional) reports the part currently being read, for the load indicator."""
+    (optional) reports the part currently being read, for the load indicator.
+    ``configuration`` -- extract THIS assembly configuration instead of the
+    file's saved-active one (configs can suppress whole components, e.g. a
+    bench-mount frame present in one variant only)."""
     if doc_type_for(assembly_path) == SW_DOC_PART:
         return _extract_part_into(sw, assembly_path, pkg_dir, meshes_dir,
                                   robot_name, _say)
     _say(f"opening copy of {os.path.basename(assembly_path)} "
          f"(loading the assembly) ...")
     doc = sw.open_copy(assembly_path)
+    # surface the choice: extracts silently follow the file's SAVED-ACTIVE
+    # configuration, which is not necessarily the one on the user's screen
+    try:
+        md = as_iface(doc, "IModelDoc2")
+        cfgs = [str(c) for c in (safe_call(md, "GetConfigurationNames") or [])]
+        active = md.ConfigurationManager.ActiveConfiguration.Name
+        if len(cfgs) > 1:
+            _say(f"assembly configurations: {cfgs} (saved-active: {active!r})")
+        if configuration and configuration != active:
+            if md.ShowConfiguration2(configuration):
+                _say(f"switched to configuration {configuration!r}")
+            else:
+                print(f"      WARN: configuration {configuration!r} not found; "
+                      f"staying on {active!r}")
+    except Exception as e:
+        if configuration:
+            print(f"      WARN: could not switch configuration ({e!r})")
 
     _say("reading components + mates ...")
     comps, adjacency, ground = extract_graph(doc, robot_name, assembly_path,
@@ -161,7 +181,7 @@ def _extract_into(sw, assembly_path, pkg_dir, meshes_dir, robot_name, _say,
 
 
 def extract(assembly_path, out_dir=None, robot_name=None, visible=False,
-            progress=None, sw=None):
+            progress=None, sw=None, configuration=None):
     """SolidWorks -> graph.json (+ per-link 3DXML).  ``progress(msg)`` -- if
     given -- receives short human-readable status strings at each stage and once
     per exported mesh, so a UI can show how far along the (multi-minute) extract
@@ -202,11 +222,12 @@ def extract(assembly_path, out_dir=None, robot_name=None, visible=False,
 
     if sw is not None:
         _extract_into(sw, assembly_path, pkg_dir, meshes_dir, robot_name, _say,
-                      _part)
+                      _part, configuration=configuration)
     else:
         with SolidWorks(visible=visible) as sw_own:
             _extract_into(sw_own, assembly_path, pkg_dir, meshes_dir,
-                          robot_name, _say, _part)
+                          robot_name, _say, _part,
+                          configuration=configuration)
 
     print(f"  graph: {os.path.join(pkg_dir, GRAPH_FILE)}")
     return pkg_dir
@@ -349,8 +370,9 @@ def export(assembly_path, out_dir=None, robot_name=None, visible=False,
            config_path=None, base_hint=None, exclude=None, ros_pkg=False,
            ros_version=1, ros_pkg_name=None, ros_urdf_name=None,
            collision="copy", coacd_quality="balanced", merge_fixed=False,
-           ros_mesh_dir=None):
-    pkg_dir = extract(assembly_path, out_dir, robot_name, visible)
+           ros_mesh_dir=None, configuration=None):
+    pkg_dir = extract(assembly_path, out_dir, robot_name, visible,
+                      configuration=configuration)
     return build(pkg_dir, config_path=config_path, base_hint=base_hint,
                  exclude=exclude, ros_pkg=ros_pkg, ros_version=ros_version,
                  ros_pkg_name=ros_pkg_name, ros_urdf_name=ros_urdf_name,
@@ -370,6 +392,10 @@ def main():
     ap.add_argument("-o", "--out", default=None)
     ap.add_argument("-n", "--name", default=None)
     ap.add_argument("--visible", action="store_true")
+    ap.add_argument("--configuration", default=None, metavar="NAME",
+                    help="extract this ASSEMBLY configuration instead of the "
+                         "file's saved-active one (configs can suppress whole "
+                         "components, e.g. a bench-mount frame)")
     ap.add_argument("--config", default=None)
     ap.add_argument("--base", default=None)
     ap.add_argument("--exclude", default=None)
@@ -414,6 +440,7 @@ def main():
                          "per moving body; mesh-less coordinate frames are kept")
     args = ap.parse_args()
     export(args.assembly, args.out, args.name, args.visible,
+           configuration=args.configuration,
            config_path=args.config, base_hint=args.base,
            exclude=_exclude_list(args.exclude),
            ros_pkg=args.ros_pkg or args.ros2,

@@ -15,8 +15,12 @@ def main():
     ap.add_argument("-o", "--out", default=None)
     ap.add_argument("-n", "--name", default=None)
     ap.add_argument("--visible", action="store_true")
+    ap.add_argument("--configuration", default=None, metavar="NAME",
+                    help="extract this ASSEMBLY configuration instead of the "
+                         "file's saved-active one")
     args = ap.parse_args()
-    extract(args.assembly, args.out, args.name, args.visible)
+    extract(args.assembly, args.out, args.name, args.visible,
+            configuration=args.configuration)
 
 
 if __name__ == "__main__":
