@@ -66,6 +66,12 @@ def _open_doc(app, path):
 
 
 def _save_3dxml(model_doc, out_path):
+    # SolidWorks resolves a RELATIVE SaveAs path against ITS OWN working
+    # directory (the SLDWORKS.exe process), not ours -- a `-o output` relative
+    # package dir then fails every export with swGenericSaveError (res=1)
+    # while absolute destinations (temp dirs) work.  Absolutise here, the one
+    # choke point every 3DXML export goes through.
+    out_path = os.path.abspath(out_path)
     # write to a temp name and os.replace on success: a SolidWorks crash
     # mid-SaveAs must not leave a partial file that later passes the
     # size-based reuse checks
@@ -83,6 +89,11 @@ def _save_3dxml(model_doc, out_path):
     if ok and os.path.exists(tmp) and os.path.getsize(tmp) >= _MIN_MESH_BYTES:
         os.replace(tmp, out_path)
         return True
+    # say WHY: a res=True but tiny file is the empty-envelope failure mode
+    # (hollow/lightweight doc), distinct from SaveAs refusing outright
+    sz = os.path.getsize(tmp) if os.path.exists(tmp) else -1
+    print(f"    3dxml rejected for {os.path.basename(out_path)}: "
+          f"res={res} size={sz}")
     try:
         os.remove(tmp)
     except OSError:
@@ -399,6 +410,7 @@ def _compose_from_parts(app, md, path, out_glb, meshes_dir=None, by_path=None):
     print(f"    compose: merged {len(meshes)} part meshes")
     merged = trimesh.util.concatenate(meshes)
     merged.units = "meter"
+    os.makedirs(os.path.dirname(out_glb), exist_ok=True)
     tmp = out_glb + ".part.glb"
     merged.export(tmp, file_type="glb")
     if os.path.exists(tmp) and os.path.getsize(tmp) > 500:

@@ -160,7 +160,10 @@ def _extract_into(sw, assembly_path, pkg_dir, meshes_dir, robot_name, _say,
                                     by_path=by_path)
     _say("exporting full assembly mesh ...")
     whole_rel = None
-    whole = os.path.join(pkg_dir, robot_name + "_assembly.3dxml")
+    # absolute: SolidWorks resolves a relative SaveAs path against its OWN cwd,
+    # not ours, so a relative `-o output` dir fails the export (see _save_3dxml)
+    whole = os.path.abspath(
+        os.path.join(pkg_dir, robot_name + "_assembly.3dxml"))
     try:
         ext = as_iface(doc.Extension, "IModelDocExtension")
         res = ext.SaveAs(whole, 0, _SAVE_OPTS, None, 0, 0)
