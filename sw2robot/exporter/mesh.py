@@ -159,6 +159,7 @@ def export_meshes(app, doc, comps, meshes_dir, progress=None, by_path=None):
         if reused:
             continue
         ok = False
+        why = None                       # specific reason, surfaced on failure
         ct = live.get(comp.name)
         md = safe_call(ct, "GetModelDoc2") if ct else None
         if md is not None:
@@ -167,11 +168,20 @@ def export_meshes(app, doc, comps, meshes_dir, progress=None, by_path=None):
             # a standalone OpenDoc6 of the same file comes up hollow
             try:
                 ok = _save_3dxml(md, out)
+                if not ok:
+                    why = "in-session 3DXML export was empty"
             except Exception as e:
+                why = f"in-session export raised {e!r}"
                 print(f"  {comp.name}: in-session export failed ({e!r}); "
                       f"opening file")
         if not ok:
-            ok = _export_by_opening(app, path, out)
+            if not os.path.exists(path):
+                why = "referenced part file not found on disk (unresolved reference)"
+            else:
+                ok = _export_by_opening(app, path, out)
+                if not ok:
+                    why = ("opened but produced no geometry -- no solid bodies "
+                           "(an imported STEP / graphics body?) or it would not open")
         if not ok and comp.is_subassembly:
             # 3DXML of a sub-assembly doc reliably comes out EMPTY however it
             # is opened; compose the mesh from its child PARTS instead (parts
@@ -180,6 +190,8 @@ def export_meshes(app, doc, comps, meshes_dir, progress=None, by_path=None):
             print(f"  composing {comp.link_name}.glb from child parts ...")
             ok = _compose_from_parts(app, md, path, out,
                                      meshes_dir=meshes_dir, by_path=by_path)
+            if not ok:
+                why = "sub-assembly mesh could not be composed from its child parts"
         if ok:
             rel = os.path.join("meshes", os.path.basename(out))
             by_path[path] = rel
@@ -188,7 +200,10 @@ def export_meshes(app, doc, comps, meshes_dir, progress=None, by_path=None):
             print(f"  mesh: {comp.link_name} <- {os.path.basename(path)} "
                   f"({os.path.getsize(out)} B)")
         else:
-            print(f"  FAILED mesh for {comp.name} ({os.path.basename(path)})")
+            # surface WHY instead of a bare "FAILED mesh": distinguishes an
+            # unresolved reference from a bodiless / STEP part from a compose miss
+            print(f"  FAILED mesh for {comp.name} "
+                  f"({os.path.basename(path)}): {why or 'unknown reason'}")
     return n
 
 

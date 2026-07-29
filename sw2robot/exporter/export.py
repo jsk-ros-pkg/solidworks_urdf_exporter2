@@ -77,7 +77,7 @@ def _extract_part_into(sw, part_path, pkg_dir, meshes_dir, robot_name, _say):
     SolidWorks-native mass/COM/inertia and its mesh.  See
     :func:`sw2robot.exporter.model.extract_part_graph`."""
     _say(f"opening copy of {os.path.basename(part_path)} (loading the part) ...")
-    doc = sw.open_copy(part_path)
+    doc = sw.open_copy(part_path, progress=_say)
 
     _say("reading part mass properties ...")
     comps, adjacency, ground = extract_part_graph(doc, robot_name, part_path)
@@ -101,7 +101,8 @@ def _extract_into(sw, assembly_path, pkg_dir, meshes_dir, robot_name, _say,
                                   robot_name, _say)
     _say(f"opening copy of {os.path.basename(assembly_path)} "
          f"(loading the assembly) ...")
-    doc = sw.open_copy(assembly_path)
+    # progress=_say -> heartbeat during the (possibly long) reference download
+    doc = sw.open_copy(assembly_path, progress=_say)
 
     _say("reading components + mates ...")
     comps, adjacency, ground = extract_graph(doc, robot_name, assembly_path,
