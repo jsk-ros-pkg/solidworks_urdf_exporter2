@@ -3450,7 +3450,9 @@ async function openSubassemblyList(ov) {
           `<td><span style="color:${col}">${state}</span>` +
           ` <span style="color:#8a93a3">` +
           `(${subasmOverrideLabel(s.override)}${htmlEsc(modeSource)})</span></td>` +
-          `<td><select class="subasm-mode" data-name="${htmlEsc(s.name)}">` +
+          `<td><select class="subasm-mode" data-name="${htmlEsc(s.name)}" ` +
+          `data-prev="${htmlEsc(s.override)}" data-children="${s.children ?? 0}" ` +
+          `data-edges="${s.internal_edges ?? 0}">` +
           opt('auto') + opt('expand') + opt('no_expand') + '</select></td>' +
           `<td title="${htmlEsc(s.path)}">${htmlEsc(pathBase(s.path))}</td></tr>`;
       }
