@@ -241,6 +241,12 @@ class Component:
     visual_rpy: list = field(default_factory=lambda: [0, 0, 0])
     material: str | None = None      # SolidWorks material name
     density: float | None = None     # kg/m^3 from that material
+    # the SolidWorks configuration this INSTANCE references.  Two instances of
+    # one part file can reference different configurations with different
+    # geometry (a length-configured tube: '180cm_shoulder_L120' vs
+    # '180cm_wrist_L75') -- sharing one mesh/mass across them renders both as
+    # the same variant, so exports must key on (part_path, configuration)
+    configuration: str | None = None
     # SolidWorks-native mass properties (part-local frame, SI), preferred over
     # the mesh estimate when present -- see exporter.inertia.link_inertial_from_sw
     sw_mass: float | None = None              # kg
@@ -534,13 +540,15 @@ def extract_components(doc, exclude=None, progress=None):
         if path and not is_asm:
             material, density, sw = _material_of(ct, path)
         sw = sw or {}
+        cfg = safe_prop(ct, "ReferencedConfiguration") or None
         comps.append(Component(name=name, link_name=ln, part_path=path,
                                is_subassembly=is_asm, world=world,
                                fixed=fixed, dof=dof,
                                material=material, density=density,
                                sw_mass=sw.get("mass"), sw_com=sw.get("com"),
                                sw_inertia=sw.get("inertia"),
-                               sw_mass_overridden=sw.get("overridden", False)))
+                               sw_mass_overridden=sw.get("overridden", False),
+                               configuration=cfg))
     if n_skipped or n_excluded:
         print(f"      (skipped {n_skipped} suppressed/unnamed, "
               f"excluded {n_excluded} components)")
@@ -2737,7 +2745,8 @@ def _component_states(comps):
             material=c.material, density=c.density,
             sw_mass=c.sw_mass, sw_com=c.sw_com, sw_inertia=c.sw_inertia,
             sw_mass_overridden=c.sw_mass_overridden,
-            mass_target=c.mass_target)
+            mass_target=c.mass_target,
+            configuration=getattr(c, "configuration", None))
             for c in comps]
 
 
@@ -2815,12 +2824,20 @@ def extract_subgraphs(doc, comps, sw=None, progress=None):
         live[safe_prop(ct, "Name2")] = ct
 
     out = {}
+    out_cfg = {}
     opened_docs = []
-    work = [(c.part_path, live.get(c.name))
+    work = [(c.part_path, live.get(c.name),
+             getattr(c, "configuration", None))
             for c in comps if c.is_subassembly and c.part_path]
     while work:
-        path, ct = work.pop(0)
-        if not path or path in out:
+        path, ct, cfg = work.pop(0)
+        if not path:
+            continue
+        if path in out:
+            if cfg and out_cfg.get(path) and out_cfg[path] != cfg:
+                print(f"      WARN: {os.path.basename(path)} is used with "
+                      f"configurations {out_cfg[path]!r} AND {cfg!r}; its "
+                      f"internals were extracted as {out_cfg[path]!r}")
             continue
         md = safe_call(ct, "GetModelDoc2") if ct is not None else None
         if md is None and sw is not None:
@@ -2835,6 +2852,19 @@ def extract_subgraphs(doc, comps, sw=None, progress=None):
             print(f"      WARN: no document for sub-assembly "
                   f"{os.path.basename(path)}; internals not extracted")
             continue
+        # The instance references a specific CONFIGURATION of this
+        # sub-assembly.  The file may be SAVED on a different one, where the
+        # children reference other configs of their own parts (a hinge clevis
+        # plate becomes a 22 mm spacer) or are suppressed -- reading the
+        # saved-active state then extracts the wrong internals.  Switch first.
+        if cfg:
+            try:
+                as_iface(md, "IModelDoc2").ShowConfiguration2(cfg)
+                out_cfg[path] = cfg
+            except Exception as e:
+                print(f"      WARN: could not switch "
+                      f"{os.path.basename(path)} to configuration "
+                      f"{cfg!r}: {e!r}")
         subcomps = extract_components(md, progress=progress)
         subadj, subground = build_mate_graph(md, subcomps)
         out[path] = (subcomps, subadj, subground)
@@ -2845,8 +2875,9 @@ def extract_subgraphs(doc, comps, sw=None, progress=None):
             ct2 = as_iface(c2, "IComponent2")
             live2[safe_prop(ct2, "Name2")] = ct2
         for sc in subcomps:
-            if sc.is_subassembly and sc.part_path and sc.part_path not in out:
-                work.append((sc.part_path, live2.get(sc.name)))
+            if sc.is_subassembly and sc.part_path:
+                work.append((sc.part_path, live2.get(sc.name),
+                             getattr(sc, "configuration", None)))
     if sw is not None:
         for md in opened_docs:
             sw.close_doc(md)
@@ -2897,7 +2928,8 @@ def from_graph(graph, exclude=None, expand=None, no_expand=None):
             sw_mass=cs.sw_mass, sw_com=cs.sw_com, sw_inertia=cs.sw_inertia,
             sw_mass_overridden=getattr(cs, "sw_mass_overridden", False),
             mass_target=getattr(cs, "mass_target", None),
-            mass_only=getattr(cs, "mass_only", False)))
+            mass_only=getattr(cs, "mass_only", False),
+            configuration=getattr(cs, "configuration", None)))
     names = {c.name for c in comps}
     adjacency = {}
     for e in graph.edges:

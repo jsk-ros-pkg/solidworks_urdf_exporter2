@@ -47,6 +47,11 @@ class ComponentState(BaseModel):
     # Valid only on a fixed child -- its inertial is lumped into the fixed parent
     # on export, so the parent's mass/inertia accounts for it without a mesh.
     mass_only: bool = False
+    # the SolidWorks configuration this instance references.  Two instances of
+    # the SAME part file can reference different configurations with different
+    # geometry (length-configured tube), so mesh/mass exports key on
+    # (part_path, configuration).  None on older extracts / single-config parts.
+    configuration: str | None = None
 
     def world_matrix(self):
         return np.array(self.world, float).reshape(4, 4)
