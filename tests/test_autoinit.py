@@ -1,10 +1,10 @@
 """Tests for the CAD-derived initial values: build-time inertia + the
 self-collision limit sweep.
 
-The inertia half needs only trimesh + scipy (always present), so it builds a
-copy of the committed ``feetech_hand`` cache and checks the URDF carries real,
-sane masses.  The sweep half needs the optional skrobot + python-fcl UI
-dependencies; it skips when unavailable.
+The inertia half needs only trimesh + skrobot (both core dependencies), so it
+builds a copy of the committed ``feetech_hand`` cache and checks the URDF
+carries real, sane masses.  The sweep half additionally needs the optional
+python-fcl ``[ui]`` dependency; it skips when unavailable.
 
 Everything builds into a tmp copy of the cache so the committed
 ``output/feetech_hand`` is never dirtied.

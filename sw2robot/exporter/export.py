@@ -384,8 +384,7 @@ def main():
                          "convex decomposition into convex part STLs (needs: pip "
                          "install coacd); 'primitive'/'box'/'cylinder'/'sphere' "
                          "fit a native URDF primitive per link, no mesh file "
-                         "('primitive' auto-picks the best shape; needs: pip "
-                         "install -U scikit-robot)")
+                         "('primitive' auto-picks the best shape)")
     ap.add_argument("--coacd-quality", choices=("balanced", "fine"),
                     default="balanced",
                     help="CoACD preset for --collision coacd: 'balanced' "

@@ -13,9 +13,12 @@ are in METRES (the SW API is metric), which is what URDF wants.
 
 from __future__ import annotations
 
-import math
-
 import numpy as np
+
+# rpy2matrix / matrix2rpy follow the URDF convention (extrinsic X-Y-Z:
+# R = Rz @ Ry @ Rx).  NB: skrobot's legacy ``rpy_matrix(yaw, pitch, roll)``
+# takes its arguments in the OPPOSITE order -- use rpy2matrix here.
+from skrobot.coordinates.math import matrix2rpy, rpy2matrix
 
 
 def transform_to_matrix(array_data):
@@ -36,17 +39,9 @@ def transform_to_matrix(array_data):
 def matrix_to_xyz_rpy(M):
     """4x4 -> (xyz, rpy) with URDF rpy = extrinsic XYZ (roll,pitch,yaw)."""
     xyz = [float(M[0, 3]), float(M[1, 3]), float(M[2, 3])]
-    R = M[:3, :3]
-    sy = -R[2, 0]
-    sy = max(-1.0, min(1.0, sy))
-    pitch = math.asin(sy)
-    if abs(R[2, 0]) < 0.999999:
-        roll = math.atan2(R[2, 1], R[2, 2])
-        yaw = math.atan2(R[1, 0], R[0, 0])
-    else:  # gimbal lock
-        roll = math.atan2(-R[1, 2], R[1, 1])
-        yaw = 0.0
-    return xyz, [roll, pitch, yaw]
+    roll, pitch, yaw = matrix2rpy(np.asarray(M[:3, :3], dtype=float))
+    # + 0.0 folds IEEE negative zeros so the URDF text stays stable
+    return xyz, [float(roll) + 0.0, float(pitch) + 0.0, float(yaw) + 0.0]
 
 
 def relative_matrix(parent_world, child_world):
@@ -56,14 +51,9 @@ def relative_matrix(parent_world, child_world):
 
 def matrix_from_rpy(rpy):
     """4x4 rotation from extrinsic-XYZ roll/pitch/yaw (URDF convention)."""
-    rx, ry, rz = rpy
-    cx, cy, cz = math.cos(rx), math.cos(ry), math.cos(rz)
-    sx, sy, sz = math.sin(rx), math.sin(ry), math.sin(rz)
-    Rx = np.array([[1, 0, 0], [0, cx, -sx], [0, sx, cx]])
-    Ry = np.array([[cy, 0, sy], [0, 1, 0], [-sy, 0, cy]])
-    Rz = np.array([[cz, -sz, 0], [sz, cz, 0], [0, 0, 1]])
+    roll, pitch, yaw = rpy
     M = np.eye(4)
-    M[:3, :3] = Rz @ Ry @ Rx
+    M[:3, :3] = rpy2matrix(float(roll), float(pitch), float(yaw))
     return M
 
 

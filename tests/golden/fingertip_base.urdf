@@ -19,13 +19,13 @@
   <link name="base_link">
     <!-- sw2robot inertia="hull" -->
     <visual>
-      <origin xyz="3.8518599e-34 0 0" rpy="0 -0 -4.4572704e-33"/>
+      <origin xyz="3.8518599e-34 0 0" rpy="0 0 -4.4572704e-33"/>
       <geometry>
         <mesh filename="../meshes/fingertip_front_2.3dxml"/>
       </geometry>
     </visual>
     <collision>
-      <origin xyz="3.8518599e-34 0 0" rpy="0 -0 -4.4572704e-33"/>
+      <origin xyz="3.8518599e-34 0 0" rpy="0 0 -4.4572704e-33"/>
       <geometry>
         <mesh filename="../meshes/fingertip_front_2.3dxml"/>
       </geometry>

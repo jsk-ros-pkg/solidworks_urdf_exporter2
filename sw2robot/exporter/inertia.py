@@ -28,10 +28,13 @@ DEFAULT_DENSITY = 1000.0  # kg/m^3 -- generic light part; override per build
 
 def _rpy_matrix(rpy):
     """4x4 homogeneous rotation for a URDF ``rpy`` (extrinsic X-Y-Z)."""
-    from scipy.spatial.transform import Rotation
+    # rpy2matrix(roll, pitch, yaw) follows the URDF convention
+    # R = Rz @ Ry @ Rx.
+    from skrobot.coordinates.math import rpy2matrix
 
+    roll, pitch, yaw = rpy
     T = np.eye(4)
-    T[:3, :3] = Rotation.from_euler("xyz", rpy).as_matrix()
+    T[:3, :3] = rpy2matrix(float(roll), float(pitch), float(yaw))
     return T
 
 
