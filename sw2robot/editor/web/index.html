@@ -1170,9 +1170,6 @@ the config and does NOT re-detect). Needs graph.json (CAD mode).">🔗 re-detect
       ja: 'このスライダーは表示中の畳み込みロボットの preview joint を動かします。source normal joint は type / axis / limit のコピー元です。' },
     'subasm.previewSlidersEmpty': { en: 'No movable preview joints.',
                                     ja: '動かせるpreview jointがありません。' },
-    'subasm.largeConfirm': {
-      en: a => `${a.name} contains ${a.children} children and ${a.edges} mates. Changing a large sub-assembly can take a long time. Continue?`,
-      ja: a => `${a.name} は子 ${a.children} 個、mate ${a.edges} 個を含みます。大きいサブアセンブリの切り替えには時間がかかることがあります。続行しますか？` },
     'tree.modeExpanded': { en: 'expanded', ja: '全展開' },
     'tree.modeSubassembly': { en: 'subassembly', ja: 'サブアセンブリ' },
     'tree.subasmLoading': { en: 'loading sub-assembly tree...',
@@ -3386,10 +3383,6 @@ function subasmOverrideLabel(v) {
   return t('subasm.overrideAuto');
 }
 
-function isLargeSubassembly(children, edges) {
-  return Number(children) >= 15 || Number(edges) >= 15;
-}
-
 async function setSubassemblyMode(name, mode, ov) {
   op('subassembly_mode', { name, mode });
   log(t('subasm.settingPreview', { name, mode }));
@@ -3484,14 +3477,6 @@ async function openSubassemblyList(ov) {
       sel.addEventListener('change', () => {
         const name = sel.dataset.name;
         const mode = sel.value;
-        const prev = sel.dataset.prev || 'auto';
-        const children = Number(sel.dataset.children || 0);
-        const edges = Number(sel.dataset.edges || 0);
-        if (mode !== prev && isLargeSubassembly(children, edges) &&
-            !confirm(t('subasm.largeConfirm', { name, children, edges }))) {
-          sel.value = prev;
-          return;
-        }
         card.querySelectorAll('.subasm-mode').forEach(x => { x.disabled = true; });
         setSubassemblyMode(name, mode, owned);
       });
