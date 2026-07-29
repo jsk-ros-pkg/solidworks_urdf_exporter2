@@ -334,6 +334,60 @@ def _require_typelibs():
     return mod
 
 
+def resolve_lightweight_components(doc, deep=True):
+    """Force-resolve LIGHTWEIGHT components one by one; return the count.
+
+    ``ResolveAllLightWeightComponents`` needs an ACTIVE document, so in a
+    hidden automation session it can be a silent no-op -- lightweight
+    components then report ``GetModelDoc2 = None`` and vanish from mass
+    properties and meshes (a whole-sub-assembly 3DXML writes them as HOLES).
+    ``SetSuppression2`` works per component without activation.  ``deep``
+    walks nested children too (GetComponents(False))."""
+    n = 0
+    try:
+        for c in list(safe_call(doc, "GetComponents", not deep) or []):
+            ct = as_iface(c, "IComponent2")
+            if safe_call(ct, "GetSuppression") == 1:       # lightweight
+                try:
+                    ct.SetSuppression2(2)                  # fully resolved
+                    n += 1
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return n
+
+
+def resolve_suppressed_components(doc, deep=True):
+    """Force-resolve components SUPPRESSED by the saved-active configuration
+    (``GetSuppression == 0``) so their geometry is included in the export.
+
+    A component the active config suppresses is otherwise dropped entirely
+    (``extract_components`` skips ``state == 0``), so parts that ARE present on
+    disk but merely toggled off by the config -- e.g. an encoder board or a
+    Misumi extrusion carried in a variant -- silently vanish from the URDF.
+    ``SetSuppression2(2)`` brings them back; parts whose file cannot be found
+    fail the call and stay suppressed.  Returns ``(count, [names])``.  Gated by
+    the caller (opt-in) since a config MAY suppress parts on purpose."""
+    n = 0
+    names = []
+    try:
+        for c in list(safe_call(doc, "GetComponents", not deep) or []):
+            ct = as_iface(c, "IComponent2")
+            if safe_call(ct, "GetSuppression") == 0:       # config-suppressed
+                nm = safe_prop(ct, "Name2")
+                try:
+                    ct.SetSuppression2(2)                  # fully resolved
+                    if safe_call(ct, "GetSuppression") != 0:
+                        n += 1
+                        names.append(nm)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return n, names
+
+
 class SolidWorks:
     """Owns a private SolidWorks instance; opens docs read-only; never saves.
 
@@ -532,7 +586,17 @@ class SolidWorks:
                     print(f"      co-located {n_sib} sibling CAD file(s) for "
                           f"reference resolution")
             t1 = _time.time()
-            doc, ecode, wcode = open_doc6(self.app, tmp, doc_type_for(tmp))
+            # 0x80 = swOpenDocOptions_OverrideDefaultLoadLightweight: force a
+            # FULLY RESOLVED load even when the machine's system option says
+            # "load components lightweight".  Lightweight components report
+            # GetModelDoc2 = None, so every top-level part loses its SolidWorks
+            # mass properties AND its mesh (the in-session export has no doc,
+            # and a standalone OpenDoc6 of a file the assembly already holds
+            # lightweight returns that same hollow stub -> empty 3DXML).
+            # ResolveAllLightWeightComponents below is kept as a second chance
+            # but on some installs it returns instantly without resolving.
+            doc, ecode, wcode = open_doc6(self.app, tmp, doc_type_for(tmp),
+                                          SW_OPEN_SILENT | 0x80)
             if doc is None:
                 # 65536 = swFileWithSameTitleAlreadyOpen: a doc with this title
                 # is already open in the reused session (we copy under a unique
@@ -557,6 +621,23 @@ class SolidWorks:
                 asm.ResolveAllLightWeightComponents(True)
             except Exception:
                 pass
+            # Components SAVED lightweight survive both the 0x80 open flag
+            # and the bulk resolve above -- resolve them one by one (see
+            # resolve_lightweight_components).
+            n_lw = resolve_lightweight_components(doc, deep=True)
+            if n_lw:
+                print(f"      resolved {n_lw} lightweight component(s) "
+                      f"individually")
+            # Opt-in: bring back parts the saved-active CONFIGURATION suppresses
+            # (they are present on disk but toggled off -- encoder boards, Misumi
+            # extrusions in a variant, ...).  Off by default since a config may
+            # suppress parts on purpose (e.g. a 'without_hand' variant).
+            if os.environ.get("SW2URDF_RESOLVE_SUPPRESSED") == "1":
+                n_sp, sp_names = resolve_suppressed_components(doc, deep=True)
+                if n_sp:
+                    print(f"      resolved {n_sp} config-suppressed component(s): "
+                          f"{', '.join(sp_names[:8])}"
+                          f"{' ...' if len(sp_names) > 8 else ''}")
             t3 = _time.time()
             # ForceRebuild3 was added for stale as-saved poses (propellers
             # floating off motors), but it was MEASURED to be a no-op for
