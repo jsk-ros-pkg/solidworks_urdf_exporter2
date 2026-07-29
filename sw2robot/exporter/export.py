@@ -262,6 +262,24 @@ def build(pkg_dir, config_path=None, base_hint=None, exclude=None,
     # The working URDF KEEPS each mass-only link (geometry stripped) so it stays
     # selectable in the editor tree; only the exported package folds it away.
     mass_only_links = write_urdf(model, urdf_path, **urdf_kwargs)
+    # Surface parts that resolved + got a mesh but whose geometry never makes it
+    # into the URDF (classic case: a sub-assembly kept as one composed mesh whose
+    # 3DXML export config suppresses some children).  Best-effort: warn_dropped_
+    # geometry itself returns [] when trimesh/scipy/skrobot are absent, so this
+    # is a silent no-op there; the guard only catches unexpected failures and is
+    # advisory -- it must never break the build.
+    try:
+        import json as _json
+
+        from .validate import warn_dropped_geometry
+        with open(os.path.join(pkg_dir, GRAPH_FILE), encoding="utf-8") as _f:
+            _graph = _json.load(_f)
+        _dropped = warn_dropped_geometry(pkg_dir, urdf_path, _graph)
+        if _dropped:
+            print("      -> add the parent sub-assembly to the joint config's "
+                  "`expand:` list to bring these parts into the URDF.")
+    except Exception as _e:
+        print(f"      (dropped-geometry check skipped: {_e!r})")
     write_ros_package(model, pkg_dir)
     tmpl = os.path.join(pkg_dir, robot_name + ".joints.yaml")
     if not config_path:
