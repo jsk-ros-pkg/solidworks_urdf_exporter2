@@ -126,6 +126,34 @@ def _cache_is_fresh(cand, source_path):
         return True
 
 
+def _refresh_mass_with_config(app, comp):
+    """Re-read material/density/mass properties on the instance's OWN
+    configuration.  The values captured during the graph walk came from the
+    shared doc's ACTIVE config -- wrong for the other variants of a
+    length-configured part."""
+    md = _open_doc(app, comp.part_path)
+    if md is None:
+        return
+    try:
+        _show_config(md, getattr(comp, "configuration", None))
+        from .model import _read_part_props
+        material, density, sw = _read_part_props(md)
+        if material:
+            comp.material = material
+        if density:
+            comp.density = density
+        sw = sw or {}
+        if sw.get("mass"):
+            comp.sw_mass = sw["mass"]
+            comp.sw_com = sw.get("com")
+            comp.sw_inertia = sw.get("inertia")
+    finally:
+        try:
+            app.CloseDoc(safe_prop(md, "GetTitle"))
+        except Exception:
+            pass
+
+
 def export_meshes(app, doc, comps, meshes_dir, progress=None, by_path=None):
     """Fill ``component.mesh_file`` for every component; return mesh count.
 
@@ -145,34 +173,56 @@ def export_meshes(app, doc, comps, meshes_dir, progress=None, by_path=None):
 
     total = len({c.part_path for c in comps if c.part_path})
     if by_path is None:
-        by_path = {}   # part_path -> relative mesh file
+        by_path = {}   # (part_path, configuration) -> relative mesh file
+    # part files whose instances reference DIFFERENT configurations carry
+    # per-instance geometry (a length-configured tube): the shared in-session
+    # doc shows only ONE config, so export those instances standalone, each on
+    # its own configuration, and re-read their mass properties the same way
+    cfgs_of = {}
+    for c in comps:
+        if c.part_path:
+            cfgs_of.setdefault(c.part_path, set()).add(
+                getattr(c, "configuration", None))
+    divergent = {pth for pth, cc in cfgs_of.items() if len(cc) > 1}
+    if divergent:
+        print(f"      {len(divergent)} part file(s) used with differing "
+              f"configurations -> per-instance meshes")
     n = 0
     for comp in comps:
         path = comp.part_path
+        cfg = getattr(comp, "configuration", None)
+        key = _mkey(path, cfg)
         if not path:
             print(f"  WARN: no part path for {comp.name}; skipping mesh")
             continue
-        if path in by_path:
-            comp.mesh_file = by_path[path]
+        if key in by_path:
+            comp.mesh_file = by_path[key]
+            if path in divergent and not comp.is_subassembly:
+                _refresh_mass_with_config(app, comp)
             continue
         if progress:
             progress(len(by_path) + 1, total, comp.link_name)
         out = os.path.join(meshes_dir, comp.link_name + ".3dxml")
         reused = False
-        for cand in (out, os.path.join(meshes_dir, comp.link_name + ".glb")):
+        # a cached file cannot say WHICH configuration it holds -- for files
+        # whose instances diverge, always re-export on the right config
+        for cand in (() if path in divergent else
+                     (out, os.path.join(meshes_dir, comp.link_name + ".glb"))):
             if _cache_is_fresh(cand, path):
                 rel = os.path.join("meshes", os.path.basename(cand))
-                by_path[path] = rel
+                by_path[key] = rel
                 comp.mesh_file = rel
                 n += 1
                 reused = True
                 break  # reuse existing mesh (fast re-runs, unless CAD is newer)
         if reused:
+            if path in divergent and not comp.is_subassembly:
+                _refresh_mass_with_config(app, comp)
             continue
         ok = False
         ct = live.get(comp.name)
         md = safe_call(ct, "GetModelDoc2") if ct else None
-        if md is not None:
+        if md is not None and path not in divergent:
             # in-session doc first -- for SUB-ASSEMBLIES this is the copy the
             # parent already fully resolved, so it exports real geometry where
             # a standalone OpenDoc6 of the same file comes up hollow
@@ -182,7 +232,7 @@ def export_meshes(app, doc, comps, meshes_dir, progress=None, by_path=None):
                 print(f"  {comp.name}: in-session export failed ({e!r}); "
                       f"opening file")
         if not ok:
-            ok = _export_by_opening(app, path, out)
+            ok = _export_by_opening(app, path, out, config=cfg)
         if not ok and comp.is_subassembly:
             # 3DXML of a sub-assembly doc reliably comes out EMPTY however it
             # is opened; compose the mesh from its child PARTS instead (parts
@@ -193,13 +243,18 @@ def export_meshes(app, doc, comps, meshes_dir, progress=None, by_path=None):
                                      meshes_dir=meshes_dir, by_path=by_path)
         if ok:
             rel = os.path.join("meshes", os.path.basename(out))
-            by_path[path] = rel
+            by_path[key] = rel
             comp.mesh_file = rel
             n += 1
             print(f"  mesh: {comp.link_name} <- {os.path.basename(path)} "
                   f"({os.path.getsize(out)} B)")
+            if path in divergent and not comp.is_subassembly:
+                _refresh_mass_with_config(app, comp)
         else:
-            print(f"  FAILED mesh for {comp.name} ({os.path.basename(path)})")
+            st = safe_call(ct, "GetSuppression") if ct else "no-live-comp"
+            print(f"  FAILED mesh for {comp.name} ({os.path.basename(path)}) "
+                  f"[suppr={st} in-session-md="
+                  f"{'OK' if md is not None else 'None'}]")
     return n
 
 
@@ -241,26 +296,40 @@ def export_subgraph_meshes(app, subgraphs, meshes_dir, by_path=None):
     os.makedirs(meshes_dir, exist_ok=True)
     if by_path is None:
         by_path = {}
+    # per-instance configs: see export_meshes -- same rule for sub-children
+    cfgs_of = {}
+    for _pth, (scs, _a, _g) in (subgraphs or {}).items():
+        for sc in scs:
+            if sc.part_path:
+                cfgs_of.setdefault(sc.part_path, set()).add(
+                    getattr(sc, "configuration", None))
+    divergent = {pth for pth, cc in cfgs_of.items() if len(cc) > 1}
     n = 0
     for path, (scomps, _adj, _ground) in (subgraphs or {}).items():
         prefix = safe_name(os.path.splitext(os.path.basename(path))[0])
         for sc in scomps:
             p = sc.part_path
+            cfg = getattr(sc, "configuration", None)
+            key = _mkey(p, cfg)
             if not p:
                 continue
-            if p in by_path:
-                sc.mesh_file = by_path[p]
+            if key in by_path:
+                sc.mesh_file = by_path[key]
+                if p in divergent and not sc.is_subassembly:
+                    _refresh_mass_with_config(app, sc)
                 n += 1
                 continue
             base = f"{prefix}__{sc.link_name}"
             out = os.path.join(meshes_dir, base + ".3dxml")
             ok = False
-            for cand in (out, os.path.join(meshes_dir, base + ".glb")):
+            # config-divergent files: never trust the config-blind cache
+            for cand in (() if p in divergent else
+                         (out, os.path.join(meshes_dir, base + ".glb"))):
                 if _cache_is_fresh(cand, p):
                     out, ok = cand, True
                     break
             if not ok:
-                ok = _export_by_opening(app, p, out)
+                ok = _export_by_opening(app, p, out, config=cfg)
             if not ok and p.lower().endswith(".sldasm"):
                 out = os.path.join(meshes_dir, base + ".glb")
                 print(f"  composing {base}.glb from child parts ...")
@@ -268,9 +337,11 @@ def export_subgraph_meshes(app, subgraphs, meshes_dir, by_path=None):
                                          meshes_dir=meshes_dir, by_path=by_path)
             if ok:
                 rel = os.path.join("meshes", os.path.basename(out))
-                by_path[p] = rel
+                by_path[key] = rel
                 sc.mesh_file = rel
                 n += 1
+                if p in divergent and not sc.is_subassembly:
+                    _refresh_mass_with_config(app, sc)
                 print(f"  sub-mesh: {base} <- {os.path.basename(p)} "
                       f"({os.path.getsize(out)} B)")
             else:
@@ -307,15 +378,18 @@ def _compose_from_parts(app, md, path, out_glb, meshes_dir=None, by_path=None):
     tmpd = tempfile.mkdtemp(prefix="sw2urdf_sub_")
     meshes = []
 
-    def _persist_part(cpath, m_local):
-        """Save a part-local trimesh as its own meshes/<name>.glb (once)."""
-        if meshes_dir is None or by_path is None or cpath in by_path:
+    def _persist_part(cpath, ccfg, m_local):
+        """Save a part-local trimesh as its own meshes/<name>.glb (once per
+        (file, configuration) -- config variants carry different geometry)."""
+        key = _mkey(cpath, ccfg)
+        if meshes_dir is None or by_path is None or key in by_path:
             return
         stem = safe_name(os.path.splitext(os.path.basename(cpath))[0])
         dst = os.path.join(meshes_dir, stem + ".glb")
-        # two different part files may sanitize to the same stem -- never clobber
+        # different part files (or config variants of one file) may sanitize
+        # to the same stem -- never clobber
         i = 1
-        while dst in _persisted and _persisted[dst] != cpath:
+        while dst in _persisted and _persisted[dst] != key:
             i += 1
             dst = os.path.join(meshes_dir, f"{stem}_{i}.glb")
         try:
@@ -323,8 +397,8 @@ def _compose_from_parts(app, md, path, out_glb, meshes_dir=None, by_path=None):
             m_local.export(tmp, file_type="glb")
             if os.path.exists(tmp) and os.path.getsize(tmp) > 500:
                 os.replace(tmp, dst)
-                _persisted[dst] = cpath
-                by_path[cpath] = os.path.join("meshes", os.path.basename(dst))
+                _persisted[dst] = key
+                by_path[key] = os.path.join("meshes", os.path.basename(dst))
         except Exception as e:
             print(f"    compose: could not persist part mesh "
                   f"{os.path.basename(cpath)}: {e!r}")
@@ -366,14 +440,18 @@ def _compose_from_parts(app, md, path, out_glb, meshes_dir=None, by_path=None):
                               f"branch missing from mesh")
                 continue
             f = os.path.join(tmpd, f"p{len(meshes)}.3dxml")
+            ccfg = safe_prop(ct, "ReferencedConfiguration")
             ok = False
             if cmd is not None:
                 try:
+                    # the shared doc shows ONE active config; switch to this
+                    # instance's referenced one (length variants differ)
+                    _show_config(cmd, ccfg)
                     ok = _save_3dxml(cmd, f)
                 except Exception:
                     pass
             if not ok:
-                ok = _export_by_opening(app, cpath, f)
+                ok = _export_by_opening(app, cpath, f, config=ccfg)
             if not ok:
                 print(f"    compose: part export failed: "
                       f"{os.path.basename(cpath)}")
@@ -389,7 +467,7 @@ def _compose_from_parts(app, md, path, out_glb, meshes_dir=None, by_path=None):
                 m.units = "meter"
                 # persist the part-local mesh (pre-transform) for reuse as an
                 # expanded child's own visual, THEN place it for the merge
-                _persist_part(cpath, m)
+                _persist_part(cpath, ccfg, m)
                 m = m.copy()
                 m.apply_transform(T)
                 meshes.append(m)
@@ -423,7 +501,24 @@ def _compose_from_parts(app, md, path, out_glb, meshes_dir=None, by_path=None):
     return False
 
 
-def _export_by_opening(app, path, out):
+def _mkey(path, cfg):
+    """Mesh-dedup key: one mesh per (part file, referenced configuration).
+    Two instances of one file can reference configs with DIFFERENT geometry
+    (a length-configured tube), so the file path alone under-keys the cache."""
+    return (path, cfg or None)
+
+
+def _show_config(md, config):
+    """Activate ``config`` on ``md`` (no-op when already active / None)."""
+    if not config:
+        return
+    try:
+        as_iface(md, "IModelDoc2").ShowConfiguration2(config)
+    except Exception as e:
+        print(f"    could not switch to configuration {config!r}: {e!r}")
+
+
+def _export_by_opening(app, path, out, config=None):
     if not os.path.exists(path):
         print(f"  part file missing: {path}")
         return False
@@ -434,14 +529,25 @@ def _export_by_opening(app, path, out):
         return False
     try:
         # a sub-assembly opened silent may come up LIGHTWEIGHT; saving it
-        # then yields an empty (~850 B) 3DXML envelope.  Resolve first.
-        from .swcom import SW_DOC_ASSEMBLY
+        # then yields an empty (~850 B) 3DXML envelope -- and children SAVED
+        # lightweight stay hollow even after the bulk resolve (which needs an
+        # ACTIVE document, a silent no-op here), leaving HOLES in the
+        # whole-sub-assembly mesh (missing joint stops, motor internals).
+        # Resolve in bulk, then per component.
+        from .swcom import SW_DOC_ASSEMBLY, resolve_lightweight_components
         if doc_type_for(path) == SW_DOC_ASSEMBLY:
             try:
                 as_iface(md, "IAssemblyDoc") \
                     .ResolveAllLightWeightComponents(True)
             except Exception:
                 pass
+            n_lw = resolve_lightweight_components(md, deep=True)
+            if n_lw:
+                print(f"    resolved {n_lw} lightweight child(ren) in "
+                      f"{os.path.basename(path)}")
+        # the file opens on its SAVED active configuration; the instance may
+        # reference a different one (length variants) -- switch before saving
+        _show_config(md, config)
         return _save_3dxml(md, out)
     except Exception as e:
         if getattr(e, "hresult", None) == _RPC_DISCONNECTED:
