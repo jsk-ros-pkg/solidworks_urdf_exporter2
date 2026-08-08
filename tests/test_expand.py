@@ -1495,6 +1495,75 @@ def test_collapsed_preview_urdf_uses_selected_coordinate_frame():
     assert axis == pytest.approx([0.0, -1.0, 0.0], abs=1e-9)
 
 
+def test_collapsed_preview_urdf_uses_top_reference_axis_direction():
+    import xml.etree.ElementTree as ET
+
+    from sw2robot.editor.webserver import _collapsed_preview_urdf_text
+
+    expanded_urdf = """<robot name="demo">
+  <link name="base"/><link name="member"/>
+  <joint name="base__member" type="fixed">
+    <origin xyz="1 0 0" rpy="0 0 0"/>
+    <parent link="base"/><child link="member"/>
+  </joint>
+</robot>
+"""
+    normal_urdf = """<robot name="demo">
+  <link name="base"/><link name="normal_child"/>
+  <joint name="normal_driver" type="revolute">
+    <origin xyz="1 0 0" rpy="0 0 0"/>
+    <axis xyz="1 0 0"/>
+    <parent link="base"/><child link="normal_child"/>
+    <limit lower="-1" upper="1" effort="1" velocity="1"/>
+  </joint>
+</robot>
+"""
+    selected_frame = np.eye(4)
+    selected_frame[:3, :3] = np.array([
+        [0.0, -1.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0],
+    ])
+    selected_frame[:3, 3] = [0.5, 0.0, 0.0]
+    plan = {
+        "version": 1,
+        "base_link": "base",
+        "ready_for_urdf": True,
+        "links": [
+            {"link": "base", "name": "base", "kind": "expanded_link"},
+            {"link": "sub", "name": "sub",
+             "kind": "collapsed_subassembly",
+             "member_links": ["member"],
+             "selected_frame_transform": [
+                 float(x) for x in selected_frame.flatten()]},
+        ],
+        "joints": [{
+            "name": "base__sub", "parent": "base", "child": "sub",
+            "type": "fixed", "source_joint": "base__member",
+            "driver_source_joint": "normal_driver",
+            "driver_type": "revolute",
+            "selected_axis_source": "top_level_reference_axis",
+            "selected_axis_name": "fl_hip",
+            # Top/root-frame +Y becomes child-frame +X after the +90deg Z frame.
+            "selected_axis_direction": [0.0, 1.0, 0.0],
+            "decision": "kept_boundary",
+        }],
+        "dropped_joints": [],
+        "collapsed_subassemblies": [],
+        "link_replacements": [
+            {"source_link": "member", "collapsed_link": "sub"},
+        ],
+    }
+
+    root = ET.fromstring(_collapsed_preview_urdf_text(
+        expanded_urdf, plan, driver_urdf_text=normal_urdf))
+    joint = root.find("joint")
+
+    assert joint.get("type") == "revolute"
+    assert joint.find("axis").get("xyz") == "1 0 0"
+    assert joint.find("limit").get("lower") == "-1"
+
+
 def test_collapsed_preview_urdf_maps_canonical_base_origin_to_urdf_root():
     import xml.etree.ElementTree as ET
 

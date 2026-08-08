@@ -3001,7 +3001,16 @@ def _collapsed_preview_urdf_text(urdf_text, plan, robot_name=None,
             src_ce = src.find("child")
             src_child = src_ce.get("link") if src_ce is not None else ""
         src_child_T = src_link_poses.get(src_child)
-        if axis_elem is not None and src_child_T is not None:
+        selected_axis = list(row.get("selected_axis_direction") or [])
+        if len(selected_axis) == 3 and joint.get("type") in (
+                "revolute", "continuous", "prismatic"):
+            # Reference Joint axes are stored in the expanded URDF root frame.
+            # The official SolidWorks exporter expresses the selected RefAxis
+            # in the selected Reference Coordinate System, which is the child
+            # joint frame here.
+            world_axis = _np.asarray(selected_axis, float)
+            _set_urdf_axis(joint, child_T[:3, :3].T @ world_axis)
+        elif axis_elem is not None and src_child_T is not None:
             axis = _np.asarray(_urdf_vec(axis_elem.get("xyz"), 3), float)
             # Both source URDFs describe the zero pose with their root at the
             # identity, so their link poses share one world frame.  Convert the
