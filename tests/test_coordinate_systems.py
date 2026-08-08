@@ -1,7 +1,12 @@
 import numpy as np
+import pytest
 
 from sw2robot.exporter import model
-from sw2robot.exporter.model import extract_coordinate_systems, to_graph_state
+from sw2robot.exporter.model import (
+    extract_coordinate_systems,
+    extract_reference_axes,
+    to_graph_state,
+)
 
 
 class _Transform:
@@ -23,6 +28,14 @@ class _CoordinateData:
         self.released = True
 
 
+class _ReferenceAxis:
+    def __init__(self, params):
+        self._params = params
+
+    def GetRefAxisParams(self):
+        return self._params
+
+
 class _Feature:
     def __init__(self, name, kind, data=None):
         self.Name = name
@@ -34,6 +47,9 @@ class _Feature:
         return self._kind
 
     def GetDefinition(self):
+        return self._data
+
+    def GetSpecificFeature2(self):
         return self._data
 
     def GetNextFeature(self):
@@ -90,4 +106,34 @@ def test_graph_coordinate_system_fields_are_backward_compatible():
     graph = to_graph_state([], {}, [], "robot", "robot.SLDASM")
 
     assert graph.coordinate_systems == []
+    assert graph.reference_axes == []
     assert graph.subassemblies == {}
+
+
+def test_extract_reference_axes_matches_official_exporter_direction(
+        monkeypatch):
+    monkeypatch.setattr(model, "as_iface", lambda obj, _name: obj)
+    doc = _Document([
+        _Feature("Origin", "OriginProfileFeature"),
+        _Feature("fl_hip", "RefAxis", _ReferenceAxis([
+            1.0, 2.0, 3.0,
+            1.0, 5.0, 3.0,
+        ])),
+    ])
+
+    axes = extract_reference_axes(doc)
+
+    assert [axis.name for axis in axes] == ["fl_hip"]
+    assert axes[0].document_point == [1.0, 2.0, 3.0]
+    # Official SW2URDF uses start - end, not end - start.
+    assert axes[0].document_direction == pytest.approx([0.0, -1.0, 0.0])
+
+
+def test_extract_reference_axes_skips_degenerate_axis(monkeypatch, capsys):
+    monkeypatch.setattr(model, "as_iface", lambda obj, _name: obj)
+    doc = _Document([
+        _Feature("bad_axis", "RefAxis", _ReferenceAxis([0.0] * 6)),
+    ])
+
+    assert extract_reference_axes(doc) == []
+    assert "bad_axis" in capsys.readouterr().out

@@ -37,6 +37,7 @@ from .model import (
     extract_graph,
     extract_limit_joints,
     extract_part_graph,
+    extract_reference_axes,
     extract_subgraphs,
     safe_name,
     to_graph_state,
@@ -88,9 +89,11 @@ def _extract_part_into(sw, part_path, pkg_dir, meshes_dir, robot_name, _say):
 
     _say("saving graph.json ...")
     coordinate_systems = extract_coordinate_systems(doc)
+    reference_axes = extract_reference_axes(doc)
     graph = to_graph_state(
         comps, adjacency, ground, robot_name, part_path,
-        coordinate_systems=coordinate_systems)
+        coordinate_systems=coordinate_systems,
+        reference_axes=reference_axes)
     graph.save(os.path.join(pkg_dir, GRAPH_FILE))
     sw.close_doc(doc)
     return pkg_dir
@@ -131,6 +134,7 @@ def _extract_into(sw, assembly_path, pkg_dir, meshes_dir, robot_name, _say,
     comps, adjacency, ground = extract_graph(doc, robot_name, assembly_path,
                                              progress=_part)
     coordinate_systems = extract_coordinate_systems(doc)
+    reference_axes = extract_reference_axes(doc)
     _say(f"found {len(comps)} components, {len(adjacency)} mate pairs")
     if not comps:
         sw.close_doc(doc)
@@ -187,6 +191,7 @@ def _extract_into(sw, assembly_path, pkg_dir, meshes_dir, robot_name, _say,
                            subassemblies=subgraphs, deep_worlds=deep_worlds,
                            hidden=hidden, limit_joints=limit_joints,
                            coordinate_systems=coordinate_systems,
+                           reference_axes=reference_axes,
                            subassembly_coordinate_systems=
                            subassembly_coordinate_systems)
     graph.save(os.path.join(pkg_dir, GRAPH_FILE))

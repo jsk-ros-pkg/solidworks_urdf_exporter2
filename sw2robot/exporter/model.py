@@ -37,6 +37,7 @@ from .state import (
     LimitJoint,
     MateEdge,
     MateGeo,
+    ReferenceAxisState,
     SubGraph,
 )
 from .swcom import as_iface, safe_call, safe_prop
@@ -2629,6 +2630,30 @@ def extract_graph(doc, robot_name, source_assembly, progress=None):
     return comps, adjacency, ground
 
 
+def _document_features(doc):
+    """Return every feature owned by ``doc``, with a legacy fallback.
+
+    ``FeatureManager.GetFeatures(False)`` is also what the official
+    SolidWorks URDF Exporter uses to populate its reference-geometry lists.  A
+    few test doubles and older COM wrappers do not expose FeatureManager, so
+    retain the top-level linked-list traversal as a fallback.
+    """
+    manager = as_iface(safe_prop(doc, "FeatureManager"), "IFeatureManager")
+    features = safe_call(manager, "GetFeatures", False) if manager else None
+    if features is not None:
+        return [as_iface(feature, "IFeature") for feature in list(features)]
+
+    out = []
+    feat = safe_call(doc, "FirstFeature")
+    guard = 0
+    while feat is not None and guard < 100000:
+        guard += 1
+        fi = as_iface(feat, "IFeature")
+        out.append(fi)
+        feat = safe_call(fi, "GetNextFeature")
+    return out
+
+
 def extract_coordinate_systems(doc):
     """Return named ``CoordSys`` features in the owning document frame.
 
@@ -2638,11 +2663,7 @@ def extract_coordinate_systems(doc):
     SolidWorks transform once during extraction.
     """
     out = []
-    feat = safe_call(doc, "FirstFeature")
-    guard = 0
-    while feat is not None and guard < 100000:
-        guard += 1
-        fi = as_iface(feat, "IFeature")
+    for fi in _document_features(doc):
         if safe_call(fi, "GetTypeName2") == "CoordSys":
             name = safe_prop(fi, "Name") or ""
             data = safe_call(fi, "GetDefinition")
@@ -2669,10 +2690,48 @@ def extract_coordinate_systems(doc):
             finally:
                 if accessed:
                     safe_call(data, "ReleaseSelectionAccess")
-        feat = safe_call(fi, "GetNextFeature")
     if out:
         print("      coordinate systems: " +
               ", ".join(repr(c.name) for c in out))
+    return out
+
+
+def extract_reference_axes(doc):
+    """Return named top-level ``RefAxis`` features in the document frame.
+
+    ``IRefAxis.GetRefAxisParams`` returns ``start + end``.  The official
+    SolidWorks URDF Exporter computes ``start - end`` before localizing the
+    vector into the selected reference coordinate system, so preserve that
+    direction convention for compatible collapsed-joint output.
+    """
+    out = []
+    for fi in _document_features(doc):
+        if safe_call(fi, "GetTypeName2") != "RefAxis":
+            continue
+        name = str(safe_prop(fi, "Name") or "")
+        try:
+            axis = as_iface(safe_call(fi, "GetSpecificFeature2"), "IRefAxis")
+            params = np.asarray(
+                list(safe_call(axis, "GetRefAxisParams") or []), float)
+            if params.size < 6:
+                raise ValueError("reference axis has no start/end points")
+            start = params[:3]
+            end = params[3:6]
+            direction = start - end
+            norm = float(np.linalg.norm(direction))
+            if norm <= 1e-12:
+                raise ValueError("reference axis direction is degenerate")
+            out.append(ReferenceAxisState(
+                name=name,
+                document_point=[float(x) for x in start],
+                document_direction=[float(x) for x in direction / norm],
+            ))
+        except Exception as e:
+            print(f"      WARN: reference axis {name!r} could not be "
+                  f"read: {e!r}")
+    if out:
+        print("      reference axes: " +
+              ", ".join(repr(axis.name) for axis in out))
     return out
 
 
@@ -2842,7 +2901,7 @@ def _mate_edges(adjacency):
 def to_graph_state(comps, adjacency, ground, robot_name, source_assembly,
                    assembly_mesh=None, subassemblies=None, deep_worlds=None,
                    hidden=None, limit_joints=None, coordinate_systems=None,
-                   subassembly_coordinate_systems=None):
+                   subassembly_coordinate_systems=None, reference_axes=None):
     subs = {}
     for path, (scomps, sadj, sground) in (subassemblies or {}).items():
         subs[path] = SubGraph(components=_component_states(scomps),
@@ -2856,6 +2915,7 @@ def to_graph_state(comps, adjacency, ground, robot_name, source_assembly,
                       edges=_mate_edges(adjacency), ground=sorted(ground),
                       assembly_mesh=assembly_mesh,
                       coordinate_systems=list(coordinate_systems or []),
+                      reference_axes=list(reference_axes or []),
                       subassemblies=subs,
                       deep_worlds=deep_worlds or {}, hidden=hidden or [],
                       limit_joints=[LimitJoint(**j) for j in
