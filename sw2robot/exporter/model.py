@@ -32,6 +32,7 @@ from .geometry import (
 )
 from .state import (
     ComponentState,
+    CoordinateSystemState,
     GraphState,
     LimitJoint,
     MateEdge,
@@ -2628,6 +2629,53 @@ def extract_graph(doc, robot_name, source_assembly, progress=None):
     return comps, adjacency, ground
 
 
+def extract_coordinate_systems(doc):
+    """Return named ``CoordSys`` features in the owning document frame.
+
+    ``ICoordinateSystemFeatureData.Transform`` maps document coordinates into
+    the named coordinate system.  The cached graph uses the opposite direction
+    (named frame -> document), matching ``ComponentState.world``, so invert the
+    SolidWorks transform once during extraction.
+    """
+    out = []
+    feat = safe_call(doc, "FirstFeature")
+    guard = 0
+    while feat is not None and guard < 100000:
+        guard += 1
+        fi = as_iface(feat, "IFeature")
+        if safe_call(fi, "GetTypeName2") == "CoordSys":
+            name = safe_prop(fi, "Name") or ""
+            data = safe_call(fi, "GetDefinition")
+            data = as_iface(data, "ICoordinateSystemFeatureData")
+            accessed = False
+            try:
+                # SolidWorks' examples access the feature selections before
+                # reading Transform.  Some releases return the transform even
+                # without this call, but using the documented path is safer.
+                accessed = bool(safe_call(data, "AccessSelections", doc, None))
+                transform = safe_prop(data, "Transform")
+                if transform is None:
+                    raise ValueError("coordinate system has no Transform")
+                document_to_frame = transform_to_matrix(transform.ArrayData)
+                document_from_frame = np.linalg.inv(document_to_frame)
+                out.append(CoordinateSystemState(
+                    name=str(name),
+                    document_from_frame=[
+                        float(x) for x in document_from_frame.flatten()
+                    ]))
+            except Exception as e:
+                print(f"      WARN: coordinate system {name!r} could not be "
+                      f"read: {e!r}")
+            finally:
+                if accessed:
+                    safe_call(data, "ReleaseSelectionAccess")
+        feat = safe_call(fi, "GetNextFeature")
+    if out:
+        print("      coordinate systems: " +
+              ", ".join(repr(c.name) for c in out))
+    return out
+
+
 def extract_part_graph(doc, robot_name, part_path):
     """A single ``.SLDPRT`` -> the same ``(comps, adjacency, ground)`` triple
     ``extract_graph`` returns, but with exactly ONE component and no mates.
@@ -2793,16 +2841,22 @@ def _mate_edges(adjacency):
 
 def to_graph_state(comps, adjacency, ground, robot_name, source_assembly,
                    assembly_mesh=None, subassemblies=None, deep_worlds=None,
-                   hidden=None, limit_joints=None):
+                   hidden=None, limit_joints=None, coordinate_systems=None,
+                   subassembly_coordinate_systems=None):
     subs = {}
     for path, (scomps, sadj, sground) in (subassemblies or {}).items():
         subs[path] = SubGraph(components=_component_states(scomps),
                               edges=_mate_edges(sadj),
-                              ground=sorted(sground))
+                              ground=sorted(sground),
+                              coordinate_systems=list(
+                                  (subassembly_coordinate_systems or {})
+                                  .get(path, [])))
     return GraphState(robot_name=robot_name, source_assembly=source_assembly,
                       components=_component_states(comps),
                       edges=_mate_edges(adjacency), ground=sorted(ground),
-                      assembly_mesh=assembly_mesh, subassemblies=subs,
+                      assembly_mesh=assembly_mesh,
+                      coordinate_systems=list(coordinate_systems or []),
+                      subassemblies=subs,
                       deep_worlds=deep_worlds or {}, hidden=hidden or [],
                       limit_joints=[LimitJoint(**j) for j in
                                     (limit_joints or [])])
@@ -2836,7 +2890,8 @@ def capture_deep_worlds(doc):
     return out, hidden
 
 
-def extract_subgraphs(doc, comps, sw=None, progress=None):
+def extract_subgraphs(doc, comps, sw=None, progress=None,
+                      coordinate_systems_out=None):
     """{part_path: (comps, adjacency, ground)} for every unique sub-assembly
     appearing in ``comps``, RECURSIVELY (each sub-assembly's own internals in
     its own local frame).  Prefers the in-memory doc the parent resolved;
@@ -2895,6 +2950,8 @@ def extract_subgraphs(doc, comps, sw=None, progress=None):
         subcomps = extract_components(md, progress=progress)
         subadj, subground = build_mate_graph(md, subcomps)
         out[path] = (subcomps, subadj, subground)
+        if coordinate_systems_out is not None:
+            coordinate_systems_out[path] = extract_coordinate_systems(md)
         print(f"      sub-assembly {os.path.basename(path)}: "
               f"{len(subcomps)} children, {len(subadj)} internal mate pairs")
         live2 = {}

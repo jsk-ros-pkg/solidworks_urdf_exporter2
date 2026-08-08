@@ -33,6 +33,7 @@ from .mesh import (
 from .model import (
     build_model,
     capture_deep_worlds,
+    extract_coordinate_systems,
     extract_graph,
     extract_limit_joints,
     extract_part_graph,
@@ -86,7 +87,10 @@ def _extract_part_into(sw, part_path, pkg_dir, meshes_dir, robot_name, _say):
     export_part_mesh(doc, comps[0], meshes_dir)
 
     _say("saving graph.json ...")
-    graph = to_graph_state(comps, adjacency, ground, robot_name, part_path)
+    coordinate_systems = extract_coordinate_systems(doc)
+    graph = to_graph_state(
+        comps, adjacency, ground, robot_name, part_path,
+        coordinate_systems=coordinate_systems)
     graph.save(os.path.join(pkg_dir, GRAPH_FILE))
     sw.close_doc(doc)
     return pkg_dir
@@ -126,6 +130,7 @@ def _extract_into(sw, assembly_path, pkg_dir, meshes_dir, robot_name, _say,
     _say("reading components + mates ...")
     comps, adjacency, ground = extract_graph(doc, robot_name, assembly_path,
                                              progress=_part)
+    coordinate_systems = extract_coordinate_systems(doc)
     _say(f"found {len(comps)} components, {len(adjacency)} mate pairs")
     if not comps:
         sw.close_doc(doc)
@@ -145,7 +150,10 @@ def _extract_into(sw, assembly_path, pkg_dir, meshes_dir, robot_name, _say,
         _say(f"found {len(limit_joints)} limit-mate joint(s)")
 
     _say("reading sub-assembly internals ...")
-    subgraphs = extract_subgraphs(doc, comps, sw=sw, progress=_part)
+    subassembly_coordinate_systems = {}
+    subgraphs = extract_subgraphs(
+        doc, comps, sw=sw, progress=_part,
+        coordinate_systems_out=subassembly_coordinate_systems)
     deep_worlds, hidden = capture_deep_worlds(doc)
 
     by_path = {}
@@ -177,7 +185,10 @@ def _extract_into(sw, assembly_path, pkg_dir, meshes_dir, robot_name, _say,
     graph = to_graph_state(comps, adjacency, ground, robot_name,
                            assembly_path, assembly_mesh=whole_rel,
                            subassemblies=subgraphs, deep_worlds=deep_worlds,
-                           hidden=hidden, limit_joints=limit_joints)
+                           hidden=hidden, limit_joints=limit_joints,
+                           coordinate_systems=coordinate_systems,
+                           subassembly_coordinate_systems=
+                           subassembly_coordinate_systems)
     graph.save(os.path.join(pkg_dir, GRAPH_FILE))
     sw.close_doc(doc)
     return pkg_dir
