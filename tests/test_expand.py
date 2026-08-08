@@ -19,6 +19,7 @@ from sw2robot.exporter.state import (
     GraphState,
     MateEdge,
     MateGeo,
+    ReferenceAxisState,
     SubGraph,
 )
 
@@ -86,6 +87,10 @@ def make_coordinate_frame_graph():
     graph.coordinate_systems = [CoordinateSystemState(
         name="top_servo_frame",
         document_from_frame=[float(x) for x in top_frame.flatten()])]
+    graph.reference_axes = [ReferenceAxisState(
+        name="fl_hip",
+        document_point=[0.3, 0.4, 0.5],
+        document_direction=[0.0, -1.0, 0.0])]
     graph.subassemblies["X:/fake/servo_unit.SLDASM"].coordinate_systems = [
         CoordinateSystemState(
             name="servo_mount_frame",
@@ -847,6 +852,164 @@ def test_set_subassembly_frame_endpoint_validates_and_saves_choice(tmp_path):
             })
         assert code == 400
         assert "not a top_level_coordinate_system candidate" in \
+            payload["error"]
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        (
+            webserver._Handler.pkg_dir,
+            webserver._Handler.urdf_rel,
+            webserver._Handler.robot_name,
+            webserver._Handler.root_dir,
+        ) = old_state
+
+
+def test_collapse_preview_resolves_top_level_reference_joint_axis():
+    from sw2robot.editor.webserver import _collapse_preview_payload
+
+    current_joints = [{
+        "name": "plate_1__servo_1",
+        "parent": "plate_1",
+        "child": "servo_1",
+        "type": "revolute",
+    }]
+    payload = _collapse_preview_payload(
+        make_coordinate_frame_graph(), """
+base: plate-1
+no_expand:
+- servo
+collapsed_joint_axis_sources:
+  plate_1__servo_1: top_level_reference_axis
+collapsed_joint_axis_names:
+  plate_1__servo_1: fl_hip
+""", current_joints=current_joints)
+
+    choice = payload["joint_axis_choices"][0]
+    assert choice["edge"] == "plate_1__servo_1"
+    assert choice["joint_type"] == "revolute"
+    assert choice["applies"] is True
+    assert choice["selected_axis_source"] == "top_level_reference_axis"
+    assert choice["selected_axis_name"] == "fl_hip"
+    assert choice["selected_axis_direction"] == pytest.approx(
+        [0.0, -1.0, 0.0])
+    plan_joint = payload["collapse_plan"]["joints"][0]
+    assert plan_joint["configured_axis_source"] == \
+        "top_level_reference_axis"
+    assert plan_joint["selected_axis_name"] == "fl_hip"
+    assert plan_joint["selected_axis_direction"] == pytest.approx(
+        [0.0, -1.0, 0.0])
+
+
+def test_missing_reference_joint_axis_blocks_collapsed_urdf():
+    from sw2robot.editor.webserver import _collapse_preview_payload
+
+    current_joints = [{
+        "name": "plate_1__servo_1",
+        "parent": "plate_1",
+        "child": "servo_1",
+        "type": "revolute",
+    }]
+    payload = _collapse_preview_payload(
+        make_coordinate_frame_graph(), """
+base: plate-1
+no_expand:
+- servo
+collapsed_joint_axis_sources:
+  plate_1__servo_1: top_level_reference_axis
+collapsed_joint_axis_names:
+  plate_1__servo_1: removed_axis
+""", current_joints=current_joints)
+
+    issue = next(
+        row for row in payload["validation"]["issues"]
+        if row["code"] == "unresolved_reference_axis")
+    assert issue["joint"] == "plate_1__servo_1"
+    assert issue["axis_name"] == "removed_axis"
+    assert payload["collapse_plan"]["ready_for_urdf"] is False
+
+
+def test_set_collapsed_joint_axis_yaml_is_isolated_from_normal_joint():
+    from sw2robot.editor.webserver import (
+        _collapsed_joint_axis_names,
+        _collapsed_joint_axis_sources,
+        _set_collapsed_joint_axis_yaml,
+    )
+
+    txt = "joints:\n- parent: base\n  child: arm\n  type: revolute\n"
+    txt = _set_collapsed_joint_axis_yaml(
+        txt, "base__arm", "top_level_reference_axis", "fl_hip")
+    assert _collapsed_joint_axis_sources(txt) == {
+        "base__arm": "top_level_reference_axis"
+    }
+    assert _collapsed_joint_axis_names(txt) == {"base__arm": "fl_hip"}
+    assert "axis_dir" not in txt
+    assert "parent: base" in txt
+
+    txt = _set_collapsed_joint_axis_yaml(
+        txt, "base__arm", "normal_joint")
+    assert _collapsed_joint_axis_sources(txt) == {}
+    assert _collapsed_joint_axis_names(txt) == {}
+    assert "parent: base" in txt
+
+
+def test_set_collapsed_joint_axis_endpoint_saves_reference_axis(tmp_path):
+    from sw2robot.editor import webserver
+
+    graph = make_coordinate_frame_graph()
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "urdf").mkdir()
+    graph.save(pkg / "graph.json")
+    yml = pkg / "t.joints.yaml"
+    yml.write_text(
+        "base: plate-1\nno_expand:\n- servo\n", encoding="utf-8")
+    (pkg / "urdf" / "t.urdf").write_text("""<robot name="t">
+  <link name="plate_1"/><link name="servo_1"/>
+  <joint name="plate_1__servo_1" type="revolute">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <parent link="plate_1"/><child link="servo_1"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-1" upper="1" effort="1" velocity="1"/>
+  </joint>
+</robot>
+""", encoding="utf-8")
+
+    old_state = (
+        webserver._Handler.pkg_dir,
+        webserver._Handler.urdf_rel,
+        webserver._Handler.robot_name,
+        webserver._Handler.root_dir,
+    )
+    webserver._Handler.pkg_dir = str(pkg)
+    webserver._Handler.urdf_rel = "urdf/t.urdf"
+    webserver._Handler.robot_name = "t"
+    webserver._Handler.root_dir = str(pkg)
+    httpd, port = webserver._bind_free_port(
+        webserver._Handler, _free_port())
+    httpd.daemon_threads = True
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        base = f"http://127.0.0.1:{port}"
+        code, payload = _post_json(
+            base, "/api/set_collapsed_joint_axis", {
+                "edge": "plate_1__servo_1",
+                "source": "top_level_reference_axis",
+                "axis_name": "fl_hip",
+            })
+        assert code == 200
+        assert payload["ok"] is True
+        saved = yml.read_text(encoding="utf-8")
+        assert "plate_1__servo_1: top_level_reference_axis" in saved
+        assert "plate_1__servo_1: fl_hip" in saved
+
+        code, payload = _post_json(
+            base, "/api/set_collapsed_joint_axis", {
+                "edge": "plate_1__servo_1",
+                "source": "top_level_reference_axis",
+                "axis_name": "not_in_cad",
+            })
+        assert code == 400
+        assert "not a top-level reference axis candidate" in \
             payload["error"]
     finally:
         httpd.shutdown()
