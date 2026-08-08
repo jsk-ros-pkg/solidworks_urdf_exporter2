@@ -1079,7 +1079,7 @@ the config and does NOT re-detect). Needs graph.json (CAD mode).">🔗 re-detect
     'subasm.thTreeJoint': { en: 'joint', ja: 'joint' },
     'subasm.thMembers': { en: 'members', ja: '構成link' },
     'subasm.thDropped': { en: 'internal joints', ja: '内部joint' },
-    'subasm.thOrigin': { en: 'origin link', ja: '原点link' },
+    'subasm.thOrigin': { en: 'coordinate frame', ja: '座標系' },
     'subasm.collapsedTag': { en: 'collapsed', ja: '畳み込み' },
     'subasm.parentChoicesTitle': { en: 'Attach parent choices',
                                    ja: '接続先parent候補' },
@@ -1090,29 +1090,39 @@ the config and does NOT re-detect). Needs graph.json (CAD mode).">🔗 re-detect
                               ja: a => `接続先parentを保存中: ${a.name} → ${a.parent} ...` },
     'subasm.parentSetFail': { en: a => `attach parent failed: ${a.e}`,
                               ja: a => `接続先parentの保存に失敗: ${a.e}` },
-    'subasm.originLinkChoicesTitle': { en: 'Sub-assembly origin links',
-                                      ja: 'サブアセンブリ原点link' },
-    'subasm.originLinkChoicesHelp': {
-      en: 'Choose which internal link frame represents each collapsed sub-assembly. If it contains the robot root, the base link is used automatically.',
-      ja: '畳み込んだサブアセンブリの座標系として使う内部linkを選びます。ロボットrootを含む場合は base link を自動で使います。' },
-    'subasm.originLinkAuto': { en: 'auto', ja: 'auto' },
-    'subasm.originEffective': { en: 'used origin link', ja: '使う原点link' },
-    'subasm.originConfigured': { en: 'manual choice', ja: '手動選択' },
-    'subasm.originSourceUser': { en: 'manual', ja: '手動' },
-    'subasm.originSourceCanonicalBase': { en: 'base link', ja: 'base link' },
-    'subasm.originSourceAuto': { en: 'auto', ja: 'auto' },
-    'subasm.originConfiguredIgnored': {
-      en: 'The manual choice is saved, but this root sub-assembly uses the base link.',
-      ja: '手動選択は保存されていますが、root のサブアセンブリでは base link を使います。' },
     'subasm.originStaleFallback': {
       en: a => `Saved origin link ${a.link} is unavailable; a member link is selected automatically.`,
       ja: a => `保存済み原点link ${a.link} は利用できないため、構成linkを自動選択します。` },
-    'subasm.originLinkSetOk': { en: a => `${a.name}: origin link ${a.originLink} ✓`,
-                                ja: a => `${a.name}: origin link ${a.originLink} ✓` },
-    'subasm.originLinkSetting': { en: a => `saving origin link: ${a.name} → ${a.originLink} ...`,
-                                  ja: a => `サブアセンブリ原点linkを保存中: ${a.name} → ${a.originLink} ...` },
-    'subasm.originLinkSetFail': { en: a => `origin link failed: ${a.e}`,
-                                  ja: a => `サブアセンブリ原点linkの保存に失敗: ${a.e}` },
+    'subasm.frameChoicesTitle': { en: 'Collapsed link coordinate frames',
+                                  ja: '畳み込みlink座標系' },
+    'subasm.frameChoicesHelp': {
+      en: 'Choose the origin and axes of each collapsed link. A representative link is used by default; named coordinate systems are read from CAD.',
+      ja: '畳み込みlinkの原点と軸を選びます。既定では代表linkを使い、CADに保存された座標系も選択できます。' },
+    'subasm.frameSourceOrigin': { en: 'Representative link', ja: '代表link' },
+    'subasm.frameSourceSubassembly': {
+      en: 'CAD coordinate system in sub-assembly',
+      ja: 'サブアセンブリ内のCAD座標系' },
+    'subasm.frameSourceTop': {
+      en: 'CAD coordinate system in top assembly',
+      ja: 'トップアセンブリ上のCAD座標系' },
+    'subasm.frameAutoRepresentative': {
+      en: 'auto representative link', ja: '代表linkを自動選択' },
+    'subasm.frameNoneFound': {
+      en: 'no coordinate systems found', ja: '座標系が見つかりません' },
+    'subasm.frameUnavailable': {
+      en: 'saved choice is unavailable', ja: '保存済みの選択を利用できません' },
+    'subasm.frameUsed': { en: 'used frame', ja: '使用する座標系' },
+    'subasm.frameSelectionAuto': { en: 'auto', ja: '自動' },
+    'subasm.frameSelectionManual': { en: 'manual choice', ja: '手動選択' },
+    'subasm.frameSelectionBase': { en: 'base link', ja: 'base link' },
+    'subasm.frameSetOk': {
+      en: a => `${a.name}: coordinate frame ${a.frame} ✓`,
+      ja: a => `${a.name}: 座標系 ${a.frame} ✓` },
+    'subasm.frameSetting': {
+      en: a => `saving coordinate frame: ${a.name} → ${a.frame} ...`,
+      ja: a => `座標系を保存中: ${a.name} → ${a.frame} ...` },
+    'subasm.frameSetFail': { en: a => `coordinate frame failed: ${a.e}`,
+                             ja: a => `座標系の保存に失敗: ${a.e}` },
     'subasm.driverJointChoicesTitle': { en: 'Motion driver joints',
                                         ja: 'motion代表joint' },
     'subasm.driverJointChoicesHelp': {
@@ -2996,98 +3006,124 @@ function bindSubassemblyParentChoices(root, ov) {
   });
 }
 
-function originSourceLabel(src) {
-  if (src === 'canonical_base') { return t('subasm.originSourceCanonicalBase'); }
-  if (src === 'user') { return t('subasm.originSourceUser'); }
-  return t('subasm.originSourceAuto');
+function subassemblyFrameSourceLabel(source) {
+  if (source === 'subassembly_coordinate_system') {
+    return t('subasm.frameSourceSubassembly');
+  }
+  if (source === 'top_level_coordinate_system') {
+    return t('subasm.frameSourceTop');
+  }
+  return t('subasm.frameSourceOrigin');
 }
 
-function originDiagnosticsHtml(s) {
-  const selected = s.selected_origin_link || '';
-  const configured = s.configured_origin_link || '';
-  const stale = s.stale_origin_link || '';
-  const source = originSourceLabel(s.selected_origin_source || '');
-  const lines = [
-    `<div style="color:#a9bdd8">${htmlEsc(t('subasm.originEffective'))}: ` +
-      `<span style="color:#cfe3ff">` +
-      `${htmlEsc(selected || t('subasm.originLinkAuto'))}</span> ` +
-      `<span style="color:#6b7480">(${htmlEsc(source)})</span></div>`,
-  ];
-  if (configured && configured !== selected &&
-      s.selected_origin_source === 'canonical_base') {
-    lines.push(`<div style="color:#d6b36b">` +
-      `${htmlEsc(t('subasm.originConfiguredIgnored'))}</div>`);
+function subassemblyFrameSelectionLabel(selection) {
+  if (selection === 'manual') { return t('subasm.frameSelectionManual'); }
+  if (selection === 'base_link') { return t('subasm.frameSelectionBase'); }
+  return t('subasm.frameSelectionAuto');
+}
+
+function subassemblyFrameDiagnosticsHtml(choice) {
+  const source = choice.selected_frame_source || choice.configured_source ||
+    choice.configured_frame_source || 'origin_link';
+  const name = choice.selected_frame_name || choice.configured_frame_name ||
+    t('subasm.frameAutoRepresentative');
+  const selection = choice.selection || choice.frame_selection || 'auto';
+  let html = `<div style="color:#a9bdd8">${htmlEsc(t('subasm.frameUsed'))}: ` +
+    `<span style="color:#cfe3ff">${htmlEsc(name)}</span> ` +
+    `<span style="color:#6b7480">(` +
+    `${htmlEsc(subassemblyFrameSourceLabel(source))}, ` +
+    `${htmlEsc(subassemblyFrameSelectionLabel(selection))})</span></div>`;
+  if (choice.error || choice.frame_error) {
+    html += `<div style="color:#d68c8c">` +
+      `${htmlEsc(choice.error || choice.frame_error)}</div>`;
   }
+  const stale = choice.stale_origin_link || '';
   if (stale) {
-    lines.push(`<div style="color:#d68c8c">` +
-      `${htmlEsc(t('subasm.originStaleFallback', { link: stale }))}</div>`);
+    html += `<div style="color:#d68c8c">` +
+      `${htmlEsc(t('subasm.originStaleFallback', { link: stale }))}</div>`;
   }
-  return lines.join('');
+  return html;
 }
 
-function originLinkChoicesHtml(groupChoices) {
-  const choices = (groupChoices || []).filter(c =>
-    (c.groups || []).length > 1 || c.selected_origin_link ||
-    c.stale_origin_link);
+function subassemblyFrameChoicesHtml(frameChoices) {
+  const choices = frameChoices || [];
   if (!choices.length) { return ''; }
-  const rows = choices.map(c => {
-    const selected = c.selected_origin_link || '';
-    const configured = c.configured_origin_link || '';
-    const groupOrigins = new Set((c.groups || []).map(g =>
-      g.origin_link || (g.links || [])[0] || '').filter(Boolean));
-    const extraOpts = [];
-    if (selected && !groupOrigins.has(selected)) {
-      extraOpts.push(`<option value="${htmlEsc(selected)}" selected>` +
-        `${htmlEsc(t('subasm.originEffective'))}: ${htmlEsc(selected)}</option>`);
+  const rows = choices.map(choice => {
+    const source = choice.configured_source || choice.selected_frame_source ||
+      'origin_link';
+    const origins = choice.origin_links || [];
+    const localFrames = choice.subassembly_coordinate_systems || [];
+    const topFrames = choice.top_level_coordinate_systems || [];
+    const sourceOption = (value, label, available = true) =>
+      `<option value="${value}"${source === value ? ' selected' : ''}` +
+      `${available ? '' : ' disabled'}>${htmlEsc(label)}` +
+      `${available ? '' : ` (${htmlEsc(t('subasm.frameNoneFound'))})`}` +
+      `</option>`;
+    const sourceOptions = [
+      sourceOption('origin_link', t('subasm.frameSourceOrigin')),
+      sourceOption('subassembly_coordinate_system',
+        t('subasm.frameSourceSubassembly'), localFrames.length > 0),
+      sourceOption('top_level_coordinate_system',
+        t('subasm.frameSourceTop'), topFrames.length > 0),
+    ].join('');
+
+    let candidates = origins;
+    let selected = choice.selected_origin_source === 'user' &&
+      !choice.stale_origin_link ? (choice.configured_origin_link || '') : '';
+    const nameOptions = [];
+    if (source === 'origin_link') {
+      nameOptions.push(`<option value=""${selected ? '' : ' selected'}>` +
+        `${htmlEsc(t('subasm.frameAutoRepresentative'))}</option>`);
+    } else {
+      candidates = source === 'subassembly_coordinate_system'
+        ? localFrames : topFrames;
+      selected = choice.configured_frame_name || choice.selected_frame_name || '';
     }
-    if (configured && configured !== selected && !c.stale_origin_link &&
-        !groupOrigins.has(configured)) {
-      extraOpts.push(`<option value="${htmlEsc(configured)}">` +
-        `${htmlEsc(t('subasm.originConfigured'))}: ${htmlEsc(configured)}</option>`);
+    if (selected && !candidates.includes(selected)) {
+      nameOptions.push(`<option value="${htmlEsc(selected)}" selected disabled>` +
+        `${htmlEsc(selected)} (${htmlEsc(t('subasm.frameUnavailable'))})</option>`);
     }
-    const opts = [`<option value=""${selected ? '' : ' selected'}>` +
-      `${t('subasm.originLinkAuto')}</option>`].concat(extraOpts).concat((c.groups || []).map((g, i) => {
-      const label = `group ${i + 1} (${g.size || (g.links || []).length})`;
-      const originLink = g.origin_link || (g.links || [])[0] || '';
-      return `<option value="${htmlEsc(originLink)}"` +
-        `${selected === originLink ? ' selected' : ''}>` +
-        `${htmlEsc(label)} origin link: ${htmlEsc(originLink)}</option>`;
-    })).join('');
-    const diag = originDiagnosticsHtml(c);
-    const groups = (c.groups || []).map((g, i) => {
-      const links = (g.links || []).slice(0, 4).map(htmlEsc).join(', ');
-      const more = (g.links || []).length > 4
-        ? `, +${(g.links || []).length - 4} more` : '';
-      return `<div style="color:#6b7480">group ${i + 1} links: ${links}${more}</div>`;
-    }).join('');
-    return `<div style="display:grid;grid-template-columns:minmax(110px,1fr) ` +
-      `minmax(120px,1.4fr);gap:6px;align-items:start;margin-top:5px">` +
-      `<div><div style="color:#cfe3ff">${htmlEsc(c.subassembly)}</div>` +
-      `<div style="color:#6b7480">${htmlEsc(c.link_name)}</div></div>` +
-      `<div><select class="subasm-origin-link-choice" ` +
-      `data-name="${htmlEsc(c.subassembly)}">` +
-      opts + `</select><div style="margin-top:3px">${diag}</div>${groups}</div></div>`;
+    for (const name of candidates) {
+      nameOptions.push(`<option value="${htmlEsc(name)}"` +
+        `${selected === name ? ' selected' : ''}>${htmlEsc(name)}</option>`);
+    }
+    if (!nameOptions.length) {
+      nameOptions.push(`<option value="" selected disabled>` +
+        `${htmlEsc(t('subasm.frameNoneFound'))}</option>`);
+    }
+    return `<div class="subasm-frame-row" style="display:grid;` +
+      `grid-template-columns:minmax(110px,1fr) minmax(170px,2fr);` +
+      `gap:6px;align-items:start;margin-top:7px">` +
+      `<div><div style="color:#cfe3ff">${htmlEsc(choice.subassembly)}</div>` +
+      `<div style="color:#6b7480">${htmlEsc(choice.link_name)}</div></div>` +
+      `<div><select class="subasm-frame-source" ` +
+      `data-name="${htmlEsc(choice.subassembly)}">${sourceOptions}</select> ` +
+      `<select class="subasm-frame-name" ` +
+      `data-name="${htmlEsc(choice.subassembly)}">` +
+      `${nameOptions.join('')}</select>` +
+      `<div style="margin-top:3px">` +
+      `${subassemblyFrameDiagnosticsHtml(choice)}</div></div></div>`;
   }).join('');
   return `<div style="border:1px solid #4d4536;background:#24231d;` +
     `border-radius:4px;padding:6px 8px;margin:8px 0;font-size:11px">` +
-    `<div style="color:#d6c18c">${t('subasm.originLinkChoicesTitle')}</div>` +
+    `<div style="color:#d6c18c">${htmlEsc(t('subasm.frameChoicesTitle'))}</div>` +
     `<div style="color:#8a93a3;margin:2px 0 5px">` +
-    `${htmlEsc(t('subasm.originLinkChoicesHelp'))}</div>` +
-    rows + `</div>`;
+    `${htmlEsc(t('subasm.frameChoicesHelp'))}</div>${rows}</div>`;
 }
 
-async function setSubassemblyOriginLinkChoice(name, originLink, ov) {
-  const label = originLink || t('subasm.originLinkAuto');
-  op('subassembly_origin_link', { name, origin_link: originLink });
-  log(t('subasm.originLinkSetting', { name, originLink: label }));
+async function setSubassemblyFrameChoice(name, source, frameName, ov) {
+  const label = frameName || t('subasm.frameAutoRepresentative');
+  op('subassembly_frame', { name, source, frame_name: frameName });
+  log(t('subasm.frameSetting', { name, frame: label }));
   try {
-    const resp = await fetch('/api/set_subassembly_origin_link', {
+    const resp = await fetch('/api/set_subassembly_frame', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, origin_link: originLink }) });
+      body: JSON.stringify({ name, source, frame_name: frameName }),
+    });
     const r = await resp.json();
     if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
-    log(t('subasm.originLinkSetOk', { name, originLink: label }), 'ok');
+    log(t('subasm.frameSetOk', { name, frame: label }), 'ok');
     refreshHistory();
     if (ov) {
       await openSubassemblyPreview(ov);
@@ -3096,33 +3132,61 @@ async function setSubassemblyOriginLinkChoice(name, originLink, ov) {
       buildJointRows(viewer.robot);
     }
   } catch (e) {
-    log(t('subasm.originLinkSetFail', { e: e.message ?? e }), 'err');
+    log(t('subasm.frameSetFail', { e: e.message ?? e }), 'err');
     if (ov) {
       await openSubassemblyPreview(ov);
+    } else if (viewer.robot && effectiveTreeViewMode() === 'subassembly') {
+      buildJointRows(viewer.robot);
     } else {
-      document.querySelectorAll('.subasm-origin-link-choice')
+      document.querySelectorAll('.subasm-frame-source, .subasm-frame-name')
         .forEach(x => { x.disabled = false; });
-      if (viewer.robot && effectiveTreeViewMode() === 'subassembly') {
-        buildJointRows(viewer.robot);
-      }
     }
   }
 }
 
-function bindSubassemblyOriginLinkChoices(root, ov) {
-  root.querySelectorAll('.subasm-origin-link-choice').forEach(sel => {
+function bindSubassemblyFrameChoices(root, ov, frameChoices) {
+  const byName = new Map((frameChoices || []).map(choice =>
+    [choice.subassembly, choice]));
+  const disableAll = () => root
+    .querySelectorAll('.subasm-frame-source, .subasm-frame-name')
+    .forEach(x => { x.disabled = true; });
+  root.querySelectorAll('.subasm-frame-source').forEach(sel => {
     sel.addEventListener('change', () => {
       const name = sel.dataset.name;
-      const originLink = sel.value;
-      root.querySelectorAll('.subasm-origin-link-choice')
-        .forEach(x => { x.disabled = true; });
-      setSubassemblyOriginLinkChoice(name, originLink, ov);
+      const source = sel.value;
+      const choice = byName.get(name) || {};
+      let candidates = choice.origin_links || [];
+      let frameName = choice.configured_origin_link || '';
+      if (source === 'subassembly_coordinate_system') {
+        candidates = choice.subassembly_coordinate_systems || [];
+        frameName = choice.configured_source === source &&
+          candidates.includes(choice.configured_frame_name)
+          ? choice.configured_frame_name : (candidates[0] || '');
+      } else if (source === 'top_level_coordinate_system') {
+        candidates = choice.top_level_coordinate_systems || [];
+        frameName = choice.configured_source === source &&
+          candidates.includes(choice.configured_frame_name)
+          ? choice.configured_frame_name : (candidates[0] || '');
+      } else if (!candidates.includes(frameName)) {
+        frameName = '';
+      }
+      disableAll();
+      setSubassemblyFrameChoice(name, source, frameName, ov);
+    });
+  });
+  root.querySelectorAll('.subasm-frame-name').forEach(sel => {
+    sel.addEventListener('change', () => {
+      const row = sel.closest('.subasm-frame-row');
+      const source = row?.querySelector('.subasm-frame-source')?.value ||
+        'origin_link';
+      disableAll();
+      setSubassemblyFrameChoice(sel.dataset.name, source, sel.value, ov);
     });
   });
 }
 
-function subassemblyOriginSummaryHtml(s) {
-  return originDiagnosticsHtml(s);
+function subassemblyFrameSummaryHtml(s) {
+  return subassemblyFrameDiagnosticsHtml(s);
 }
 
 function driverJointChoicesHtml(driverChoices) {
@@ -3516,7 +3580,7 @@ async function openSubassemblyPreview(ov) {
       }) + '</div>' +
       validationIssuesHtml(r.validation) +
       parentChoicesHtml(r.parent_choices) +
-      originLinkChoicesHtml(r.group_choices) +
+      subassemblyFrameChoicesHtml(r.frame_choices) +
       driverJointChoicesHtml(r.driver_joint_choices) +
       cycleBreakChoicesHtml(r.cycle_break_choices);
     const rows = r.collapsed_subassemblies || [];
@@ -3535,7 +3599,7 @@ async function openSubassemblyPreview(ov) {
           `<td style="color:#cfe3ff">${htmlEsc(s.link_name)}</td>` +
           `<td>${s.member_links?.length ?? 0}</td>` +
           `<td>${s.internal_joints?.length ?? 0}</td>` +
-          `<td>${subassemblyOriginSummaryHtml(s)}</td>` +
+          `<td>${subassemblyFrameSummaryHtml(s)}</td>` +
           `<td>${subasmOverrideLabel(s.override)}</td></tr>`;
       }
       html += '</tbody></table>';
@@ -3562,7 +3626,7 @@ async function openSubassemblyPreview(ov) {
     }
     card.innerHTML = html;
     bindSubassemblyParentChoices(card, owned);
-    bindSubassemblyOriginLinkChoices(card, owned);
+    bindSubassemblyFrameChoices(card, owned, r.frame_choices);
     bindSubassemblyDriverJointChoices(card, owned);
     bindSubassemblyCycleBreakChoices(card, owned);
     const bar = document.createElement('div');
@@ -4040,12 +4104,12 @@ async function renderSubassemblyTreeRows(robot, movable) {
       jointsEl.appendChild(choices);
       bindSubassemblyParentChoices(choices);
     }
-    const groupChoices = originLinkChoicesHtml(r.group_choices);
-    if (groupChoices) {
-      const groups = document.createElement('div');
-      groups.innerHTML = groupChoices;
-      jointsEl.appendChild(groups);
-      bindSubassemblyOriginLinkChoices(groups);
+    const frameChoices = subassemblyFrameChoicesHtml(r.frame_choices);
+    if (frameChoices) {
+      const frames = document.createElement('div');
+      frames.innerHTML = frameChoices;
+      jointsEl.appendChild(frames);
+      bindSubassemblyFrameChoices(frames, null, r.frame_choices);
     }
     const driverChoices = driverJointChoicesHtml(r.driver_joint_choices);
     if (driverChoices) {

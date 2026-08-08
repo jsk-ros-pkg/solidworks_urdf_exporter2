@@ -1957,6 +1957,8 @@ def _collapse_frame_choices(graph, collapsed, canonical, frame_sources,
             "error": error,
             "origin_links": member_links,
             "configured_origin_link": sub.get("configured_origin_link", ""),
+            "selected_origin_source": sub.get("selected_origin_source", ""),
+            "stale_origin_link": sub.get("stale_origin_link", ""),
             "subassembly_coordinate_systems": sorted(local_frames),
             "top_level_coordinate_systems": sorted(top_frames),
         })
@@ -2718,6 +2720,10 @@ def _collapsed_preview_urdf_text(urdf_text, plan, robot_name=None,
         return None, link_poses
 
     def collapsed_pose(plan_link):
+        selected_frame = list(
+            plan_link.get("selected_frame_transform") or [])
+        if len(selected_frame) == 16:
+            return _np.asarray(selected_frame, float).reshape(4, 4)
         selected = plan_link.get("selected_origin_link")
         candidates = ([selected] if selected else []) + \
             list(plan_link.get("member_links") or [])
