@@ -15,6 +15,7 @@ from test_classify_geo import O, Z, coinc_planes, conc, dup
 from sw2robot.exporter.model import build_model, from_graph
 from sw2robot.exporter.state import (
     ComponentState,
+    CoordinateSystemState,
     GraphState,
     MateEdge,
     MateGeo,
@@ -69,6 +70,27 @@ def make_graph():
                       components=[plate, inst], edges=[mount],
                       ground=["plate-1"],
                       subassemblies={"X:/fake/servo_unit.SLDASM": sub})
+
+
+def make_coordinate_frame_graph():
+    graph = make_graph()
+    sub_frame = np.eye(4)
+    sub_frame[:3, 3] = [0.0, 0.02, 0.03]
+    top_frame = np.eye(4)
+    top_frame[:3, :3] = np.array([
+        [0.0, -1.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0],
+    ])
+    top_frame[:3, 3] = [0.3, 0.4, 0.5]
+    graph.coordinate_systems = [CoordinateSystemState(
+        name="top_servo_frame",
+        document_from_frame=[float(x) for x in top_frame.flatten()])]
+    graph.subassemblies["X:/fake/servo_unit.SLDASM"].coordinate_systems = [
+        CoordinateSystemState(
+            name="servo_mount_frame",
+            document_from_frame=[float(x) for x in sub_frame.flatten()])]
+    return graph
 
 
 def _free_port():
@@ -657,6 +679,184 @@ subassembly_origin_links:
         i for i in payload["validation"]["issues"]
         if i["code"] == "invalid_origin_link")
     assert issue["origin_link"] == "missing_link"
+
+
+def test_collapse_preview_resolves_all_three_coordinate_frame_options():
+    from sw2robot.editor.webserver import _collapse_preview_payload
+
+    graph = make_coordinate_frame_graph()
+    base_txt = "base: plate-1\nno_expand:\n- servo\n"
+
+    representative = _collapse_preview_payload(graph, base_txt)
+    choice = representative["frame_choices"][0]
+    assert choice["selected_frame_source"] == "origin_link"
+    assert choice["selected_frame_name"] == "servo_1__case_1"
+    assert choice["selection"] == "auto"
+    assert choice["resolved"] is True
+    representative_T = np.asarray(
+        choice["selected_frame_transform"]).reshape(4, 4)
+    assert np.allclose(representative_T[:3, 3], [0.1, 0.0, 0.0])
+
+    subassembly_txt = base_txt + """
+subassembly_frame_sources:
+  servo-1: subassembly_coordinate_system
+subassembly_frame_names:
+  servo-1: servo_mount_frame
+"""
+    subassembly = _collapse_preview_payload(graph, subassembly_txt)
+    choice = subassembly["frame_choices"][0]
+    assert choice["selected_frame_source"] == \
+        "subassembly_coordinate_system"
+    assert choice["selected_frame_name"] == "servo_mount_frame"
+    subassembly_T = np.asarray(
+        choice["selected_frame_transform"]).reshape(4, 4)
+    assert np.allclose(subassembly_T[:3, 3], [0.1, 0.02, 0.03])
+
+    top_txt = base_txt + """
+subassembly_frame_sources:
+  servo-1: top_level_coordinate_system
+subassembly_frame_names:
+  servo-1: top_servo_frame
+"""
+    top = _collapse_preview_payload(graph, top_txt)
+    choice = top["frame_choices"][0]
+    assert choice["selected_frame_source"] == "top_level_coordinate_system"
+    assert choice["selected_frame_name"] == "top_servo_frame"
+    top_T = np.asarray(choice["selected_frame_transform"]).reshape(4, 4)
+    assert np.allclose(top_T[:3, 3], [0.3, 0.4, 0.5])
+    assert np.allclose(top_T[:3, :3], np.array([
+        [0.0, -1.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0],
+    ]))
+    plan_link = next(
+        row for row in top["collapse_plan"]["links"]
+        if row["link"] == "servo_1")
+    assert plan_link["configured_frame_source"] == \
+        "top_level_coordinate_system"
+    assert plan_link["selected_frame_name"] == "top_servo_frame"
+    assert plan_link["selected_frame_transform"] == \
+        choice["selected_frame_transform"]
+
+
+def test_missing_saved_coordinate_frame_blocks_preview_urdf():
+    from sw2robot.editor.webserver import _collapse_preview_payload
+
+    payload = _collapse_preview_payload(
+        make_coordinate_frame_graph(), """
+base: plate-1
+no_expand:
+- servo
+subassembly_frame_sources:
+  servo-1: top_level_coordinate_system
+subassembly_frame_names:
+  servo-1: removed_frame
+""")
+
+    choice = payload["frame_choices"][0]
+    assert choice["resolved"] is False
+    assert "removed_frame" in choice["error"]
+    issue = next(
+        row for row in payload["validation"]["issues"]
+        if row["code"] == "unresolved_coordinate_frame")
+    assert issue["severity"] == "error"
+    assert issue["frame_name"] == "removed_frame"
+    assert payload["collapse_plan"]["ready_for_urdf"] is False
+
+
+def test_set_subassembly_frame_yaml_preserves_origin_link_choice():
+    from sw2robot.editor.webserver import (
+        _set_subassembly_frame_yaml,
+        _subassembly_frame_names,
+        _subassembly_frame_sources,
+        _subassembly_origin_links,
+    )
+
+    graph = make_coordinate_frame_graph()
+    txt = _set_subassembly_frame_yaml(
+        "", graph, "servo-1", "origin_link", "servo_1__horn_1")
+    assert _subassembly_origin_links(txt) == {
+        "servo-1": "servo_1__horn_1"
+    }
+
+    txt = _set_subassembly_frame_yaml(
+        txt, graph, "servo-1", "subassembly_coordinate_system",
+        "servo_mount_frame")
+    assert _subassembly_frame_sources(txt) == {
+        "servo-1": "subassembly_coordinate_system"
+    }
+    assert _subassembly_frame_names(txt) == {
+        "servo-1": "servo_mount_frame"
+    }
+    assert _subassembly_origin_links(txt) == {
+        "servo-1": "servo_1__horn_1"
+    }
+
+    txt = _set_subassembly_frame_yaml(
+        txt, graph, "servo-1", "origin_link", "")
+    assert _subassembly_frame_sources(txt) == {}
+    assert _subassembly_frame_names(txt) == {}
+    assert _subassembly_origin_links(txt) == {}
+
+
+def test_set_subassembly_frame_endpoint_validates_and_saves_choice(tmp_path):
+    from sw2robot.editor import webserver
+
+    graph = make_coordinate_frame_graph()
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "urdf").mkdir()
+    graph.save(pkg / "graph.json")
+    yml = pkg / "t.joints.yaml"
+    yml.write_text(
+        "base: plate-1\nno_expand:\n- servo\n", encoding="utf-8")
+
+    old_state = (
+        webserver._Handler.pkg_dir,
+        webserver._Handler.urdf_rel,
+        webserver._Handler.robot_name,
+        webserver._Handler.root_dir,
+    )
+    webserver._Handler.pkg_dir = str(pkg)
+    webserver._Handler.urdf_rel = "urdf/t.urdf"
+    webserver._Handler.robot_name = "t"
+    webserver._Handler.root_dir = str(pkg)
+    httpd, port = webserver._bind_free_port(
+        webserver._Handler, _free_port())
+    httpd.daemon_threads = True
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        base = f"http://127.0.0.1:{port}"
+        code, payload = _post_json(
+            base, "/api/set_subassembly_frame", {
+                "name": "servo-1",
+                "source": "top_level_coordinate_system",
+                "frame_name": "top_servo_frame",
+            })
+        assert code == 200
+        assert payload["ok"] is True
+        saved = yml.read_text(encoding="utf-8")
+        assert "servo-1: top_level_coordinate_system" in saved
+        assert "servo-1: top_servo_frame" in saved
+
+        code, payload = _post_json(
+            base, "/api/set_subassembly_frame", {
+                "name": "servo-1",
+                "source": "top_level_coordinate_system",
+                "frame_name": "not_in_cad",
+            })
+        assert code == 400
+        assert "not a top_level_coordinate_system candidate" in \
+            payload["error"]
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        (
+            webserver._Handler.pkg_dir,
+            webserver._Handler.urdf_rel,
+            webserver._Handler.robot_name,
+            webserver._Handler.root_dir,
+        ) = old_state
 
 
 def test_set_subassembly_origin_link_rejects_non_candidate(tmp_path):
