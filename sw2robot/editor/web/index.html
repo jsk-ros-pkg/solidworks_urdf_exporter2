@@ -1165,20 +1165,20 @@ the config and does NOT re-detect). Needs graph.json (CAD mode).">🔗 re-detect
       ja: a => `参照軸を保存中: ${a.edge} → ${a.axis} ...` },
     'subasm.axisSetFail': { en: a => `reference axis failed: ${a.e}`,
                             ja: a => `参照軸の保存に失敗: ${a.e}` },
-    'subasm.coordinateApplyBtn': { en: 'Apply coordinate settings',
-                                    ja: '座標系設定を適用' },
+    'subasm.coordinateApplyBtn': { en: 'Apply frame / motion settings',
+                                    ja: 'frame / motion設定を適用' },
     'subasm.coordinateApplyTitle': {
-      en: 'Apply all changed coordinate frames and Reference Joint axes together',
-      ja: '変更した座標系とReference Joint軸をまとめて適用します' },
+      en: 'Apply changed coordinate frames, Motion driver joints, and Reference Joint axes together',
+      ja: '変更した座標系、motion代表joint、Reference Joint軸をまとめて適用します' },
     'subasm.coordinateApplySetting': {
-      en: 'applying coordinate settings...',
-      ja: '座標系設定をまとめて適用中...' },
+      en: 'applying frame / motion settings...',
+      ja: 'frame / motion設定をまとめて適用中...' },
     'subasm.coordinateApplyOk': {
-      en: a => `coordinate settings applied: ${a.frames} frame(s), ${a.axes} axis/axes ✓`,
-      ja: a => `座標系設定を適用しました: frame ${a.frames}件、axis ${a.axes}件 ✓` },
+      en: a => `preview settings applied: ${a.frames} frame(s), ${a.drivers} driver(s), ${a.axes} axis/axes ✓`,
+      ja: a => `preview設定を適用しました: frame ${a.frames}件、driver ${a.drivers}件、axis ${a.axes}件 ✓` },
     'subasm.coordinateApplyFail': {
-      en: a => `coordinate settings failed: ${a.e}`,
-      ja: a => `座標系設定の適用に失敗: ${a.e}` },
+      en: a => `frame / motion settings failed: ${a.e}`,
+      ja: a => `frame / motion設定の適用に失敗: ${a.e}` },
     'subasm.cycleBreakChoicesTitle': { en: 'Cycle break joints',
                                        ja: 'cycle解消joint' },
     'subasm.cycleBreakAuto': { en: 'auto', ja: 'auto' },
@@ -3149,10 +3149,10 @@ function subassemblyFrameChoicesHtml(frameChoices) {
     `${htmlEsc(t('subasm.frameChoicesHelp'))}</div>${rows}</div>`;
 }
 
-function markCollapsedCoordinateChoicesDirty(root, row) {
-  root.dataset.coordinateChoicesDirty = '1';
-  row.dataset.coordinateChoiceDirty = '1';
-  const apply = root.querySelector('.subasm-coordinate-apply');
+function markCollapsedPreviewChoicesDirty(root, row) {
+  root.dataset.previewChoicesDirty = '1';
+  row.dataset.previewChoiceDirty = '1';
+  const apply = root.querySelector('.subasm-preview-apply');
   if (apply) { apply.disabled = false; }
   const preview = root.querySelector('.subasm-preview-robot');
   if (preview) { preview.disabled = true; }
@@ -3217,11 +3217,11 @@ function bindSubassemblyFrameChoices(root, frameChoices) {
         row, choice, source, preferred || '');
       remembered.set(source, selected);
       row.dataset.frameSource = source;
-      markCollapsedCoordinateChoicesDirty(root, row);
+      markCollapsedPreviewChoicesDirty(root, row);
     });
     nameSelect.addEventListener('change', () => {
       remembered.set(sourceSelect.value, nameSelect.value);
-      markCollapsedCoordinateChoicesDirty(root, row);
+      markCollapsedPreviewChoicesDirty(root, row);
     });
   });
 }
@@ -3275,7 +3275,8 @@ function driverJointChoicesHtml(driverChoices) {
       `</div>` +
       (selected ? `<div style="color:#6b7480">` +
         `${htmlEsc(t('subasm.driverConfigured'))}: ${htmlEsc(selected)}</div>` : '');
-    return `<div style="display:grid;grid-template-columns:minmax(110px,1fr) ` +
+    return `<div class="subasm-driver-row" style="display:grid;` +
+      `grid-template-columns:minmax(110px,1fr) ` +
       `minmax(150px,1.7fr);gap:6px;align-items:start;margin-top:5px">` +
       `<div><div style="color:#cfe3ff">${htmlEsc(edgeLabel)}</div>` +
       `<div style="color:#6b7480">${htmlEsc(c.subassembly || c.link_name || edge)}</div></div>` +
@@ -3294,50 +3295,11 @@ function driverJointChoicesHtml(driverChoices) {
     rows + `</div>`;
 }
 
-async function setSubassemblyDriverJointChoice(edge, sourceJoint, ov) {
-  const label = sourceJoint || t('subasm.driverJointAuto');
-  op('collapsed_driver_joint', { edge, source_joint: sourceJoint });
-  log(t('subasm.driverJointSetting', { name: edge, sourceJoint: label }));
-  try {
-    const resp = await fetch('/api/set_collapsed_driver_joint', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ edge, source_joint: sourceJoint }) });
-    const r = await resp.json();
-    if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
-    log(t('subasm.driverJointSetOk', { name: edge, sourceJoint: label }), 'ok');
-    refreshHistory();
-    if (ov) {
-      await openSubassemblyPreview(ov);
-    } else {
-      document.querySelectorAll('.subasm-driver-joint-choice')
-        .forEach(x => { x.disabled = false; });
-    }
-    if (viewer.robot && effectiveTreeViewMode() === 'subassembly') {
-      buildJointRows(viewer.robot);
-    }
-  } catch (e) {
-    log(t('subasm.driverJointSetFail', { e: e.message ?? e }), 'err');
-    if (ov) {
-      await openSubassemblyPreview(ov);
-    } else {
-      document.querySelectorAll('.subasm-driver-joint-choice')
-        .forEach(x => { x.disabled = false; });
-      if (viewer.robot && effectiveTreeViewMode() === 'subassembly') {
-        buildJointRows(viewer.robot);
-      }
-    }
-  }
-}
-
-function bindSubassemblyDriverJointChoices(root, ov) {
+function bindSubassemblyDriverJointChoices(root) {
   root.querySelectorAll('.subasm-driver-joint-choice').forEach(sel => {
     sel.addEventListener('change', () => {
-      const edge = sel.dataset.edge;
-      const sourceJoint = sel.value;
-      root.querySelectorAll('.subasm-driver-joint-choice')
-        .forEach(x => { x.disabled = true; });
-      setSubassemblyDriverJointChoice(edge, sourceJoint, ov);
+      const row = sel.closest('.subasm-driver-row');
+      if (row) { markCollapsedPreviewChoicesDirty(root, row); }
     });
   });
 }
@@ -3452,17 +3414,17 @@ function bindCollapsedJointAxisChoices(root, axisChoices) {
         row, choice, source, preferred || '');
       remembered.set(source, selected);
       row.dataset.axisSource = source;
-      markCollapsedCoordinateChoicesDirty(root, row);
+      markCollapsedPreviewChoicesDirty(root, row);
     });
     nameSelect.addEventListener('change', () => {
       remembered.set(sourceSelect.value, nameSelect.value);
-      markCollapsedCoordinateChoicesDirty(root, row);
+      markCollapsedPreviewChoicesDirty(root, row);
     });
   });
 }
 
-function collapsedCoordinateChoicePayload(root) {
-  const changed = '[data-coordinate-choice-dirty="1"]';
+function collapsedPreviewChoicePayload(root) {
+  const changed = '[data-preview-choice-dirty="1"]';
   const frames = [...root.querySelectorAll(`.subasm-frame-row${changed}`)]
     .map(row => {
       const source = row.querySelector('.subasm-frame-source');
@@ -3473,6 +3435,15 @@ function collapsedCoordinateChoicePayload(root) {
         frame_name: name?.value || '',
       };
     });
+  const drivers = [
+    ...root.querySelectorAll(`.subasm-driver-row${changed}`),
+  ].map(row => {
+    const select = row.querySelector('.subasm-driver-joint-choice');
+    return {
+      edge: select?.dataset.edge || '',
+      source_joint: select?.value || '',
+    };
+  });
   const axes = [...root.querySelectorAll(`.subasm-axis-row${changed}`)]
     .map(row => {
       const source = row.querySelector('.subasm-axis-source');
@@ -3483,11 +3454,12 @@ function collapsedCoordinateChoicePayload(root) {
         axis_name: name?.value || '',
       };
     });
-  return { frames, axes };
+  return { frames, drivers, axes };
 }
 
-function setCollapsedCoordinateControlsDisabled(root, disabled) {
-  root.querySelectorAll('.subasm-frame-source, .subasm-axis-source')
+function setCollapsedPreviewControlsDisabled(root, disabled) {
+  root.querySelectorAll(
+    '.subasm-frame-source, .subasm-driver-joint-choice, .subasm-axis-source')
     .forEach(select => { select.disabled = disabled; });
   root.querySelectorAll('.subasm-frame-name').forEach(select => {
     const available = [...select.options].some(option => !option.disabled);
@@ -3499,18 +3471,18 @@ function setCollapsedCoordinateControlsDisabled(root, disabled) {
     const available = [...select.options].some(option => !option.disabled);
     select.disabled = disabled || source === 'normal_joint' || !available;
   });
-  const apply = root.querySelector('.subasm-coordinate-apply');
+  const apply = root.querySelector('.subasm-preview-apply');
   if (apply) { apply.disabled = disabled; }
 }
 
-async function applyCollapsedCoordinateChoices(root, ov, onApplied = null) {
-  if (root.dataset.coordinateChoicesDirty !== '1') { return; }
-  const choices = collapsedCoordinateChoicePayload(root);
+async function applyCollapsedPreviewChoices(root, ov, onApplied = null) {
+  if (root.dataset.previewChoicesDirty !== '1') { return; }
+  const choices = collapsedPreviewChoicePayload(root);
   op('collapsed_coordinate_choices', choices);
   log(t('subasm.coordinateApplySetting'));
-  setCollapsedCoordinateControlsDisabled(root, true);
+  setCollapsedPreviewControlsDisabled(root, true);
   try {
-    const resp = await fetch('/api/set_collapsed_coordinate_choices', {
+    const resp = await fetch('/api/set_collapsed_preview_choices', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(choices),
@@ -3521,6 +3493,7 @@ async function applyCollapsedCoordinateChoices(root, ov, onApplied = null) {
     }
     log(t('subasm.coordinateApplyOk', {
       frames: result.frames_applied ?? choices.frames.length,
+      drivers: result.drivers_applied ?? choices.drivers.length,
       axes: result.axes_applied ?? choices.axes.length,
     }), 'ok');
     refreshHistory();
@@ -3535,8 +3508,8 @@ async function applyCollapsedCoordinateChoices(root, ov, onApplied = null) {
     }
   } catch (e) {
     log(t('subasm.coordinateApplyFail', { e: e.message ?? e }), 'err');
-    setCollapsedCoordinateControlsDisabled(root, false);
-    const apply = root.querySelector('.subasm-coordinate-apply');
+    setCollapsedPreviewControlsDisabled(root, false);
+    const apply = root.querySelector('.subasm-preview-apply');
     if (apply) { apply.disabled = false; }
   }
 }
@@ -3871,7 +3844,7 @@ async function openSubassemblyPreview(ov, preparedPayload = null) {
     card.innerHTML = html;
     bindSubassemblyParentChoices(card, owned);
     bindSubassemblyFrameChoices(card, r.frame_choices);
-    bindSubassemblyDriverJointChoices(card, owned);
+    bindSubassemblyDriverJointChoices(card);
     bindCollapsedJointAxisChoices(card, r.joint_axis_choices);
     bindSubassemblyCycleBreakChoices(card, owned);
     const bar = document.createElement('div');
@@ -3880,12 +3853,12 @@ async function openSubassemblyPreview(ov, preparedPayload = null) {
     back.textContent = t('subasm.backSubasm');
     back.addEventListener('click', () => openSubassemblyList(owned));
     const applyCoordinates = document.createElement('button');
-    applyCoordinates.className = 'subasm-coordinate-apply';
+    applyCoordinates.className = 'subasm-preview-apply';
     applyCoordinates.textContent = t('subasm.coordinateApplyBtn');
     applyCoordinates.title = t('subasm.coordinateApplyTitle');
     applyCoordinates.disabled = true;
     applyCoordinates.addEventListener('click', () =>
-      applyCollapsedCoordinateChoices(card, owned));
+      applyCollapsedPreviewChoices(card, owned));
     const previewRobot = document.createElement('button');
     previewRobot.className = 'subasm-preview-robot';
     previewRobot.textContent = t('subasm.previewRobotBtn');
@@ -4368,7 +4341,6 @@ async function renderSubassemblyTreeRows(robot, movable) {
       const drivers = document.createElement('div');
       drivers.innerHTML = driverChoices;
       jointsEl.appendChild(drivers);
-      bindSubassemblyDriverJointChoices(drivers);
     }
     const axisChoices = collapsedJointAxisChoicesHtml(r.joint_axis_choices);
     if (axisChoices) {
@@ -4376,16 +4348,16 @@ async function renderSubassemblyTreeRows(robot, movable) {
       axes.innerHTML = axisChoices;
       jointsEl.appendChild(axes);
     }
-    if (frameChoices || axisChoices) {
+    if (frameChoices || driverChoices || axisChoices) {
       const coordinateBar = document.createElement('div');
       coordinateBar.style.cssText = 'display:flex;margin:6px 0 10px';
       const applyCoordinates = document.createElement('button');
-      applyCoordinates.className = 'subasm-coordinate-apply';
+      applyCoordinates.className = 'subasm-preview-apply';
       applyCoordinates.textContent = t('subasm.coordinateApplyBtn');
       applyCoordinates.title = t('subasm.coordinateApplyTitle');
       applyCoordinates.disabled = true;
       applyCoordinates.addEventListener('click', () =>
-        applyCollapsedCoordinateChoices(jointsEl, null, async () => {
+        applyCollapsedPreviewChoices(jointsEl, null, async () => {
           if (viewer.robot && effectiveTreeViewMode() === 'subassembly') {
             buildJointRows(viewer.robot);
           }
@@ -4393,6 +4365,7 @@ async function renderSubassemblyTreeRows(robot, movable) {
       coordinateBar.appendChild(applyCoordinates);
       jointsEl.appendChild(coordinateBar);
       bindSubassemblyFrameChoices(jointsEl, r.frame_choices);
+      bindSubassemblyDriverJointChoices(jointsEl);
       bindCollapsedJointAxisChoices(jointsEl, r.joint_axis_choices);
     }
     const cycleChoices = cycleBreakChoicesHtml(r.cycle_break_choices);

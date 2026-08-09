@@ -928,6 +928,45 @@ collapsed_joint_axis_names:
     assert payload["collapse_plan"]["ready_for_urdf"] is False
 
 
+def test_reference_joint_axes_only_cover_collapsed_boundary_edges():
+    from sw2robot.editor.webserver import _collapse_preview_payload
+
+    graph = make_coordinate_frame_graph()
+    graph.components.append(
+        _comp("bracket-1", "bracket_1", xyz=(0.0, 0.1, 0.0)))
+    graph.edges.append(_edge(
+        "plate-1", "bracket-1",
+        dup(conc([0.0, 0.1, 0.0], Z))))
+    current_joints = [
+        {
+            "name": "plate_1__servo_1",
+            "parent": "plate_1",
+            "child": "servo_1",
+            "type": "revolute",
+        },
+        {
+            "name": "plate_1__bracket_1",
+            "parent": "plate_1",
+            "child": "bracket_1",
+            "type": "revolute",
+        },
+    ]
+
+    payload = _collapse_preview_payload(
+        graph, "base: plate-1\nno_expand:\n- servo\n",
+        current_joints=current_joints)
+
+    driver_edges = {
+        choice["edge"] for choice in payload["driver_joint_choices"]
+    }
+    axis_edges = {
+        choice["edge"] for choice in payload["joint_axis_choices"]
+    }
+    assert driver_edges == {"plate_1__servo_1"}
+    assert axis_edges == driver_edges
+    assert "plate_1__bracket_1" not in axis_edges
+
+
 def test_set_collapsed_joint_axis_yaml_is_isolated_from_normal_joint():
     from sw2robot.editor.webserver import (
         _collapsed_joint_axis_names,
@@ -1061,11 +1100,15 @@ def test_set_collapsed_coordinate_choices_endpoint_applies_atomically(tmp_path):
     try:
         base = f"http://127.0.0.1:{port}"
         code, payload = _post_json(
-            base, "/api/set_collapsed_coordinate_choices", {
+            base, "/api/set_collapsed_preview_choices", {
                 "frames": [{
                     "name": "servo-1",
                     "source": "top_level_coordinate_system",
                     "frame_name": "top_servo_frame",
+                }],
+                "drivers": [{
+                    "edge": "plate_1__servo_1",
+                    "source_joint": "plate_1__servo_1",
                 }],
                 "axes": [{
                     "edge": "plate_1__servo_1",
@@ -1076,6 +1119,7 @@ def test_set_collapsed_coordinate_choices_endpoint_applies_atomically(tmp_path):
         assert code == 200
         assert payload["ok"] is True
         assert payload["frames_applied"] == 1
+        assert payload["drivers_applied"] == 1
         assert payload["axes_applied"] == 1
         assert payload["frame_choices"][0]["selected_frame_name"] == \
             "top_servo_frame"
@@ -1084,12 +1128,14 @@ def test_set_collapsed_coordinate_choices_endpoint_applies_atomically(tmp_path):
         saved = yml.read_text(encoding="utf-8")
         assert "servo-1: top_level_coordinate_system" in saved
         assert "servo-1: top_servo_frame" in saved
+        assert "collapsed_driver_joints:" in saved
+        assert "plate_1__servo_1: plate_1__servo_1" in saved
         assert "plate_1__servo_1: top_level_reference_axis" in saved
         assert "plate_1__servo_1: fl_hip" in saved
 
         before_invalid = saved
         code, payload = _post_json(
-            base, "/api/set_collapsed_coordinate_choices", {
+            base, "/api/set_collapsed_preview_choices", {
                 "frames": [{
                     "name": "servo-1",
                     "source": "origin_link",

@@ -1471,6 +1471,21 @@ def _validate_collapsed_joint_axis_selection(
             f"for {edge}")
 
 
+def _validate_collapsed_driver_selection(choice, edge, source_joint):
+    """Validate one normal-joint driver for a collapsed boundary edge."""
+    if choice is None:
+        raise ValueError(f"'{edge}' is not a collapsed edge")
+    if not source_joint:
+        return
+    allowed = {
+        candidate.get("source_joint")
+        for candidate in choice.get("candidates", [])
+    }
+    if source_joint not in allowed:
+        raise ValueError(
+            f"'{source_joint}' is not a driver joint candidate for {edge}")
+
+
 def _set_subassembly_cycle_break_joint_yaml(
         txt, source_joint, drop, previous_source_joint=""):
     """Set/reset one preview-only source joint dropped for cycle breaking."""
@@ -2113,14 +2128,18 @@ def _collapse_joint_axis_choices(graph, joints, canonical, driver_choices,
         axis.name: axis
         for axis in (getattr(graph, "reference_axes", None) or [])
     }
-    drivers = {
-        choice.get("edge"): choice for choice in (driver_choices or [])
-    }
+    joints_by_edge = {}
+    for joint in joints:
+        if joint.get("decision") != "kept_boundary":
+            continue
+        edge = joint.get("name") or \
+            f"{joint.get('parent')}__{joint.get('child')}"
+        joints_by_edge.setdefault(edge, joint)
     choices = []
     movable_types = {"revolute", "continuous", "prismatic"}
-    for joint in joints:
-        edge = joint.get("name", "")
-        driver = drivers.get(edge, {})
+    for driver in driver_choices or []:
+        edge = driver.get("edge", "")
+        joint = joints_by_edge.get(edge, {})
         effective_driver = driver.get("effective_driver_joint", "")
         effective_candidate = next((
             candidate for candidate in (driver.get("candidates") or [])
@@ -2128,7 +2147,8 @@ def _collapse_joint_axis_choices(graph, joints, canonical, driver_choices,
         ), None)
         effective_type = (effective_candidate or {}).get("type") or \
             joint.get("type") or "fixed"
-        applies = effective_type in movable_types
+        applies = bool(
+            effective_driver and effective_type in movable_types)
         configured_source = axis_sources.get(edge, "")
         configured_name = axis_names.get(edge, "")
         source = configured_source or "normal_joint"
@@ -2147,7 +2167,7 @@ def _collapse_joint_axis_choices(graph, joints, canonical, driver_choices,
             elif axis is None:
                 error = (f"top-level reference axis "
                          f"'{selected_name}' is unavailable")
-            else:
+            elif applies:
                 direction = root_from_cad[:3, :3] @ _np.asarray(
                     axis.document_direction, float)
                 norm = float(_np.linalg.norm(direction))
@@ -2163,8 +2183,8 @@ def _collapse_joint_axis_choices(graph, joints, canonical, driver_choices,
 
         choices.append({
             "edge": edge,
-            "parent": joint.get("parent", ""),
-            "child": joint.get("child", ""),
+            "parent": driver.get("parent") or joint.get("parent", ""),
+            "child": driver.get("child") or joint.get("child", ""),
             "joint_type": effective_type,
             "applies": applies,
             "configured_source": configured_source,
@@ -5935,20 +5955,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                         c.get("edge"): c
                         for c in preview.get("driver_joint_choices", [])
                     }
-                    if edge not in choices:
-                        return self._send_json(
-                            {"error": f"'{edge}' is not a collapsed edge"},
-                            400)
-                    if source_joint:
-                        allowed = {
-                            c.get("source_joint")
-                            for c in choices.get(edge, {}).get("candidates", [])
-                        }
-                        if source_joint not in allowed:
-                            return self._send_json(
-                                {"error": f"'{source_joint}' is not a driver "
-                                          f"joint candidate for {edge}"},
-                                400)
+                    _validate_collapsed_driver_selection(
+                        choices.get(edge), edge, source_joint)
                     txt = _set_collapsed_driver_joint_yaml(
                         txt, edge, source_joint)
                 except ValueError as e:
@@ -6025,18 +6033,24 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 print(f"[sw2robot.web] set_collapsed_joint_axis: "
                       f"{edge} -> {source}: {label} (preview only)")
                 return self._send_json(payload)
-            if parsed.path == "/api/set_collapsed_coordinate_choices":
+            if parsed.path in (
+                    "/api/set_collapsed_coordinate_choices",
+                    "/api/set_collapsed_preview_choices"):
                 cls = type(self)
                 n = int(self.headers.get("Content-Length", 0))
                 body = json.loads(self.rfile.read(n) or b"{}")
                 frames = body.get("frames") or []
+                drivers = body.get("drivers") or []
                 axes = body.get("axes") or []
-                if not isinstance(frames, list) or not isinstance(axes, list):
+                if (not isinstance(frames, list)
+                        or not isinstance(drivers, list)
+                        or not isinstance(axes, list)):
                     return self._send_json(
-                        {"error": "frames and axes must be lists"}, 400)
-                if len(frames) + len(axes) > 10000:
+                        {"error": "frames, drivers, and axes must be lists"},
+                        400)
+                if len(frames) + len(drivers) + len(axes) > 10000:
                     return self._send_json(
-                        {"error": "too many coordinate choices"}, 400)
+                        {"error": "too many collapsed preview choices"}, 400)
                 if not cls.pkg_dir:
                     return self._send_json({"error": "no package open"}, 400)
                 if not _cad_mode(cls.pkg_dir):
@@ -6064,6 +6078,10 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                         choice.get("subassembly"): choice
                         for choice in preview.get("frame_choices", [])
                     }
+                    driver_choices = {
+                        choice.get("edge"): choice
+                        for choice in preview.get("driver_joint_choices", [])
+                    }
                     axis_choices = {
                         choice.get("edge"): choice
                         for choice in preview.get("joint_axis_choices", [])
@@ -6089,6 +6107,24 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                             frame_name)
                         next_txt = _set_subassembly_frame_yaml(
                             next_txt, graph, name_in, source, frame_name)
+                    seen_drivers = set()
+                    for row in drivers:
+                        if not isinstance(row, dict):
+                            raise ValueError(
+                                "each driver choice must be a map")
+                        edge = str(row.get("edge") or "").strip()
+                        source_joint = str(
+                            row.get("source_joint") or "").strip()
+                        if not edge:
+                            raise ValueError("driver choice edge required")
+                        if edge in seen_drivers:
+                            raise ValueError(
+                                f"duplicate driver choice for '{edge}'")
+                        seen_drivers.add(edge)
+                        _validate_collapsed_driver_selection(
+                            driver_choices.get(edge), edge, source_joint)
+                        next_txt = _set_collapsed_driver_joint_yaml(
+                            next_txt, edge, source_joint)
                     seen_axes = set()
                     for row in axes:
                         if not isinstance(row, dict):
@@ -6115,8 +6151,9 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 if changed:
                     _snapshot(
                         cls.pkg_dir, yml,
-                        f"collapsed coordinate choices: {len(frames)} "
-                        f"frame(s), {len(axes)} axis/axes")
+                        f"collapsed preview choices: {len(frames)} "
+                        f"frame(s), {len(drivers)} driver(s), "
+                        f"{len(axes)} axis/axes")
                     with open(yml, "w", encoding="utf-8") as f:
                         f.write(next_txt)
                 payload = _collapse_preview_payload_cached(
@@ -6124,13 +6161,15 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 payload.update({
                     "ok": True,
                     "frames_applied": len(frames),
+                    "drivers_applied": len(drivers),
                     "axes_applied": len(axes),
                     "changed": changed,
                     "preview_only": True,
                     "rebuilt": False,
                 })
-                print("[sw2robot.web] set_collapsed_coordinate_choices: "
-                      f"{len(frames)} frame(s), {len(axes)} axis/axes "
+                print("[sw2robot.web] set_collapsed_preview_choices: "
+                      f"{len(frames)} frame(s), {len(drivers)} driver(s), "
+                      f"{len(axes)} axis/axes "
                       f"(changed={changed}, preview only)")
                 return self._send_json(payload)
             if parsed.path == "/api/set_subassembly_cycle_break":
