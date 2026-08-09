@@ -1079,7 +1079,7 @@ the config and does NOT re-detect). Needs graph.json (CAD mode).">🔗 re-detect
     'subasm.thTreeJoint': { en: 'joint', ja: 'joint' },
     'subasm.thMembers': { en: 'members', ja: '構成link' },
     'subasm.thDropped': { en: 'internal joints', ja: '内部joint' },
-    'subasm.thOrigin': { en: 'origin link', ja: '原点link' },
+    'subasm.thOrigin': { en: 'coordinate frame', ja: '座標系' },
     'subasm.collapsedTag': { en: 'collapsed', ja: '畳み込み' },
     'subasm.parentChoicesTitle': { en: 'Attach parent choices',
                                    ja: '接続先parent候補' },
@@ -1090,34 +1090,36 @@ the config and does NOT re-detect). Needs graph.json (CAD mode).">🔗 re-detect
                               ja: a => `接続先parentを保存中: ${a.name} → ${a.parent} ...` },
     'subasm.parentSetFail': { en: a => `attach parent failed: ${a.e}`,
                               ja: a => `接続先parentの保存に失敗: ${a.e}` },
-    'subasm.originLinkChoicesTitle': { en: 'Sub-assembly origin links',
-                                      ja: 'サブアセンブリ原点link' },
-    'subasm.originLinkChoicesHelp': {
-      en: 'Choose which internal link frame represents each collapsed sub-assembly. If it contains the robot root, the base link is used automatically.',
-      ja: '畳み込んだサブアセンブリの座標系として使う内部linkを選びます。ロボットrootを含む場合は base link を自動で使います。' },
-    'subasm.originLinkAuto': { en: 'auto', ja: 'auto' },
-    'subasm.originEffective': { en: 'used origin link', ja: '使う原点link' },
-    'subasm.originConfigured': { en: 'manual choice', ja: '手動選択' },
-    'subasm.originSourceUser': { en: 'manual', ja: '手動' },
-    'subasm.originSourceCanonicalBase': { en: 'base link', ja: 'base link' },
-    'subasm.originSourceAuto': { en: 'auto', ja: 'auto' },
-    'subasm.originConfiguredIgnored': {
-      en: 'The manual choice is saved, but this root sub-assembly uses the base link.',
-      ja: '手動選択は保存されていますが、root のサブアセンブリでは base link を使います。' },
     'subasm.originStaleFallback': {
       en: a => `Saved origin link ${a.link} is unavailable; a member link is selected automatically.`,
       ja: a => `保存済み原点link ${a.link} は利用できないため、構成linkを自動選択します。` },
-    'subasm.originLinkSetOk': { en: a => `${a.name}: origin link ${a.originLink} ✓`,
-                                ja: a => `${a.name}: origin link ${a.originLink} ✓` },
-    'subasm.originLinkSetting': { en: a => `saving origin link: ${a.name} → ${a.originLink} ...`,
-                                  ja: a => `サブアセンブリ原点linkを保存中: ${a.name} → ${a.originLink} ...` },
-    'subasm.originLinkSetFail': { en: a => `origin link failed: ${a.e}`,
-                                  ja: a => `サブアセンブリ原点linkの保存に失敗: ${a.e}` },
+    'subasm.frameChoicesTitle': { en: 'Collapsed link coordinate frames',
+                                  ja: '畳み込みlink座標系' },
+    'subasm.frameChoicesHelp': {
+      en: 'Choose the origin and axes of each collapsed link. A representative link is used by default; named coordinate systems are read from CAD.',
+      ja: '畳み込みlinkの原点と軸を選びます。既定では代表linkを使い、CADに保存された座標系も選択できます。' },
+    'subasm.frameSourceOrigin': { en: 'Representative link', ja: '代表link' },
+    'subasm.frameSourceSubassembly': {
+      en: 'CAD coordinate system in sub-assembly',
+      ja: 'サブアセンブリ内のCAD座標系' },
+    'subasm.frameSourceTop': {
+      en: 'CAD coordinate system in top assembly',
+      ja: 'トップアセンブリ上のCAD座標系' },
+    'subasm.frameAutoRepresentative': {
+      en: 'auto representative link', ja: '代表linkを自動選択' },
+    'subasm.frameNoneFound': {
+      en: 'no coordinate systems found', ja: '座標系が見つかりません' },
+    'subasm.frameUnavailable': {
+      en: 'saved choice is unavailable', ja: '保存済みの選択を利用できません' },
+    'subasm.frameUsed': { en: 'used frame', ja: '使用する座標系' },
+    'subasm.frameSelectionAuto': { en: 'auto', ja: '自動' },
+    'subasm.frameSelectionManual': { en: 'manual choice', ja: '手動選択' },
+    'subasm.frameSelectionBase': { en: 'base link', ja: 'base link' },
     'subasm.driverJointChoicesTitle': { en: 'Motion driver joints',
                                         ja: 'motion代表joint' },
     'subasm.driverJointChoicesHelp': {
-      en: 'Choose the normal robot joint whose type, axis, and limits are copied to each collapsed preview joint.',
-      ja: '畳み込みpreviewのjointにコピーする、通常ロボット側のjoint type / axis / limit の元を選びます。' },
+      en: 'Choose the normal robot joint whose type, limits, and default axis are copied to each collapsed preview joint.',
+      ja: '畳み込みpreviewのjointにコピーする、通常ロボット側のjoint type / limit / 既定axisの元を選びます。' },
     'subasm.driverJointAuto': { en: 'auto', ja: 'auto' },
     'subasm.driverJointAmbiguous': {
       en: 'Ambiguous: select a motion joint',
@@ -1125,12 +1127,36 @@ the config and does NOT re-detect). Needs graph.json (CAD mode).">🔗 re-detect
     'subasm.driverJointNotSelected': { en: 'not selected', ja: '未選択' },
     'subasm.driverEffective': { en: 'copy from normal joint', ja: 'コピー元normal joint' },
     'subasm.driverConfigured': { en: 'manual choice', ja: '手動選択' },
-    'subasm.driverJointSetOk': { en: a => `${a.name}: driver joint ${a.sourceJoint} ✓`,
-                                 ja: a => `${a.name}: driver joint ${a.sourceJoint} ✓` },
-    'subasm.driverJointSetting': { en: a => `saving driver joint: ${a.name} → ${a.sourceJoint} ...`,
-                                   ja: a => `motion代表jointを保存中: ${a.name} → ${a.sourceJoint} ...` },
-    'subasm.driverJointSetFail': { en: a => `driver joint failed: ${a.e}`,
-                                   ja: a => `motion代表jointの保存に失敗: ${a.e}` },
+    'subasm.axisChoicesTitle': { en: 'Reference Joint axes',
+                                 ja: 'Reference Joint軸' },
+    'subasm.axisChoicesHelp': {
+      en: 'The collapsed link frame determines the joint origin. Use the normal joint direction by default, or copy the direction of a top-assembly Reference Axis as in the official SolidWorks URDF Exporter.',
+      ja: 'joint原点は畳み込みlink座標系で決まります。既定ではnormal jointの向きを使い、公式SolidWorks URDF Exporterと同様にトップアセンブリのReference Axisから向きだけをコピーすることもできます。' },
+    'subasm.axisSourceNormal': { en: 'Copy from normal joint',
+                                 ja: 'normal jointからコピー' },
+    'subasm.axisSourceTop': { en: 'CAD Reference Axis in top assembly',
+                              ja: 'トップアセンブリ上のCAD参照軸' },
+    'subasm.axisNoneFound': { en: 'no reference axes found',
+                              ja: '参照軸が見つかりません' },
+    'subasm.axisUnavailable': { en: 'saved choice is unavailable',
+                                ja: '保存済みの選択を利用できません' },
+    'subasm.axisUsed': { en: 'used axis', ja: '使用する軸' },
+    'subasm.axisSelectionDefault': { en: 'default', ja: '既定値' },
+    'subasm.axisSelectionManual': { en: 'manual choice', ja: '手動選択' },
+    'subasm.coordinateApplyBtn': { en: 'Apply frame / motion settings',
+                                    ja: 'frame / motion設定を適用' },
+    'subasm.coordinateApplyTitle': {
+      en: 'Apply changed coordinate frames, Motion driver joints, and Reference Joint axes together',
+      ja: '変更した座標系、motion代表joint、Reference Joint軸をまとめて適用します' },
+    'subasm.coordinateApplySetting': {
+      en: 'applying frame / motion settings...',
+      ja: 'frame / motion設定をまとめて適用中...' },
+    'subasm.coordinateApplyOk': {
+      en: a => `preview settings applied: ${a.frames} frame(s), ${a.drivers} driver(s), ${a.axes} axis/axes ✓`,
+      ja: a => `preview設定を適用しました: frame ${a.frames}件、driver ${a.drivers}件、axis ${a.axes}件 ✓` },
+    'subasm.coordinateApplyFail': {
+      en: a => `frame / motion settings failed: ${a.e}`,
+      ja: a => `frame / motion設定の適用に失敗: ${a.e}` },
     'subasm.cycleBreakChoicesTitle': { en: 'Cycle break joints',
                                        ja: 'cycle解消joint' },
     'subasm.cycleBreakAuto': { en: 'auto', ja: 'auto' },
@@ -2996,133 +3022,190 @@ function bindSubassemblyParentChoices(root, ov) {
   });
 }
 
-function originSourceLabel(src) {
-  if (src === 'canonical_base') { return t('subasm.originSourceCanonicalBase'); }
-  if (src === 'user') { return t('subasm.originSourceUser'); }
-  return t('subasm.originSourceAuto');
+function subassemblyFrameSourceLabel(source) {
+  if (source === 'subassembly_coordinate_system') {
+    return t('subasm.frameSourceSubassembly');
+  }
+  if (source === 'top_level_coordinate_system') {
+    return t('subasm.frameSourceTop');
+  }
+  return t('subasm.frameSourceOrigin');
 }
 
-function originDiagnosticsHtml(s) {
-  const selected = s.selected_origin_link || '';
-  const configured = s.configured_origin_link || '';
-  const stale = s.stale_origin_link || '';
-  const source = originSourceLabel(s.selected_origin_source || '');
-  const lines = [
-    `<div style="color:#a9bdd8">${htmlEsc(t('subasm.originEffective'))}: ` +
-      `<span style="color:#cfe3ff">` +
-      `${htmlEsc(selected || t('subasm.originLinkAuto'))}</span> ` +
-      `<span style="color:#6b7480">(${htmlEsc(source)})</span></div>`,
-  ];
-  if (configured && configured !== selected &&
-      s.selected_origin_source === 'canonical_base') {
-    lines.push(`<div style="color:#d6b36b">` +
-      `${htmlEsc(t('subasm.originConfiguredIgnored'))}</div>`);
+function subassemblyFrameSelectionLabel(selection) {
+  if (selection === 'manual') { return t('subasm.frameSelectionManual'); }
+  if (selection === 'base_link') { return t('subasm.frameSelectionBase'); }
+  return t('subasm.frameSelectionAuto');
+}
+
+function subassemblyFrameDiagnosticsHtml(choice) {
+  const source = choice.selected_frame_source || choice.configured_source ||
+    choice.configured_frame_source || 'origin_link';
+  const name = choice.selected_frame_name || choice.configured_frame_name ||
+    t('subasm.frameAutoRepresentative');
+  const selection = choice.selection || choice.frame_selection || 'auto';
+  let html = `<div style="color:#a9bdd8">${htmlEsc(t('subasm.frameUsed'))}: ` +
+    `<span style="color:#cfe3ff">${htmlEsc(name)}</span> ` +
+    `<span style="color:#6b7480">(` +
+    `${htmlEsc(subassemblyFrameSourceLabel(source))}, ` +
+    `${htmlEsc(subassemblyFrameSelectionLabel(selection))})</span></div>`;
+  if (choice.error || choice.frame_error) {
+    html += `<div style="color:#d68c8c">` +
+      `${htmlEsc(choice.error || choice.frame_error)}</div>`;
   }
+  const stale = choice.stale_origin_link || '';
   if (stale) {
-    lines.push(`<div style="color:#d68c8c">` +
-      `${htmlEsc(t('subasm.originStaleFallback', { link: stale }))}</div>`);
+    html += `<div style="color:#d68c8c">` +
+      `${htmlEsc(t('subasm.originStaleFallback', { link: stale }))}</div>`;
   }
-  return lines.join('');
+  return html;
 }
 
-function originLinkChoicesHtml(groupChoices) {
-  const choices = (groupChoices || []).filter(c =>
-    (c.groups || []).length > 1 || c.selected_origin_link ||
-    c.stale_origin_link);
+function subassemblyFrameChoicesHtml(frameChoices) {
+  const choices = frameChoices || [];
   if (!choices.length) { return ''; }
-  const rows = choices.map(c => {
-    const selected = c.selected_origin_link || '';
-    const configured = c.configured_origin_link || '';
-    const groupOrigins = new Set((c.groups || []).map(g =>
-      g.origin_link || (g.links || [])[0] || '').filter(Boolean));
-    const extraOpts = [];
-    if (selected && !groupOrigins.has(selected)) {
-      extraOpts.push(`<option value="${htmlEsc(selected)}" selected>` +
-        `${htmlEsc(t('subasm.originEffective'))}: ${htmlEsc(selected)}</option>`);
+  const rows = choices.map(choice => {
+    const source = choice.configured_source || choice.selected_frame_source ||
+      'origin_link';
+    const origins = choice.origin_links || [];
+    const localFrames = choice.subassembly_coordinate_systems || [];
+    const topFrames = choice.top_level_coordinate_systems || [];
+    const sourceOption = (value, label, available = true) =>
+      `<option value="${value}"${source === value ? ' selected' : ''}` +
+      `${available ? '' : ' disabled'}>${htmlEsc(label)}` +
+      `${available ? '' : ` (${htmlEsc(t('subasm.frameNoneFound'))})`}` +
+      `</option>`;
+    const sourceOptions = [
+      sourceOption('origin_link', t('subasm.frameSourceOrigin')),
+      sourceOption('subassembly_coordinate_system',
+        t('subasm.frameSourceSubassembly'), localFrames.length > 0),
+      sourceOption('top_level_coordinate_system',
+        t('subasm.frameSourceTop'), topFrames.length > 0),
+    ].join('');
+
+    let candidates = origins;
+    let selected = choice.selected_origin_source === 'user' &&
+      !choice.stale_origin_link ? (choice.configured_origin_link || '') : '';
+    const nameOptions = [];
+    if (source === 'origin_link') {
+      nameOptions.push(`<option value=""${selected ? '' : ' selected'}>` +
+        `${htmlEsc(t('subasm.frameAutoRepresentative'))}</option>`);
+    } else {
+      candidates = source === 'subassembly_coordinate_system'
+        ? localFrames : topFrames;
+      selected = choice.configured_frame_name || choice.selected_frame_name || '';
     }
-    if (configured && configured !== selected && !c.stale_origin_link &&
-        !groupOrigins.has(configured)) {
-      extraOpts.push(`<option value="${htmlEsc(configured)}">` +
-        `${htmlEsc(t('subasm.originConfigured'))}: ${htmlEsc(configured)}</option>`);
+    if (selected && !candidates.includes(selected)) {
+      nameOptions.push(`<option value="${htmlEsc(selected)}" selected disabled>` +
+        `${htmlEsc(selected)} (${htmlEsc(t('subasm.frameUnavailable'))})</option>`);
     }
-    const opts = [`<option value=""${selected ? '' : ' selected'}>` +
-      `${t('subasm.originLinkAuto')}</option>`].concat(extraOpts).concat((c.groups || []).map((g, i) => {
-      const label = `group ${i + 1} (${g.size || (g.links || []).length})`;
-      const originLink = g.origin_link || (g.links || [])[0] || '';
-      return `<option value="${htmlEsc(originLink)}"` +
-        `${selected === originLink ? ' selected' : ''}>` +
-        `${htmlEsc(label)} origin link: ${htmlEsc(originLink)}</option>`;
-    })).join('');
-    const diag = originDiagnosticsHtml(c);
-    const groups = (c.groups || []).map((g, i) => {
-      const links = (g.links || []).slice(0, 4).map(htmlEsc).join(', ');
-      const more = (g.links || []).length > 4
-        ? `, +${(g.links || []).length - 4} more` : '';
-      return `<div style="color:#6b7480">group ${i + 1} links: ${links}${more}</div>`;
-    }).join('');
-    return `<div style="display:grid;grid-template-columns:minmax(110px,1fr) ` +
-      `minmax(120px,1.4fr);gap:6px;align-items:start;margin-top:5px">` +
-      `<div><div style="color:#cfe3ff">${htmlEsc(c.subassembly)}</div>` +
-      `<div style="color:#6b7480">${htmlEsc(c.link_name)}</div></div>` +
-      `<div><select class="subasm-origin-link-choice" ` +
-      `data-name="${htmlEsc(c.subassembly)}">` +
-      opts + `</select><div style="margin-top:3px">${diag}</div>${groups}</div></div>`;
+    for (const name of candidates) {
+      nameOptions.push(`<option value="${htmlEsc(name)}"` +
+        `${selected === name ? ' selected' : ''}>${htmlEsc(name)}</option>`);
+    }
+    if (!nameOptions.length) {
+      nameOptions.push(`<option value="" selected disabled>` +
+        `${htmlEsc(t('subasm.frameNoneFound'))}</option>`);
+    }
+    return `<div class="subasm-frame-row" style="display:grid;` +
+      `grid-template-columns:minmax(110px,1fr) minmax(170px,2fr);` +
+      `gap:6px;align-items:start;margin-top:7px">` +
+      `<div><div style="color:#cfe3ff">${htmlEsc(choice.subassembly)}</div>` +
+      `<div style="color:#6b7480">${htmlEsc(choice.link_name)}</div></div>` +
+      `<div><select class="subasm-frame-source" ` +
+      `data-name="${htmlEsc(choice.subassembly)}">${sourceOptions}</select> ` +
+      `<select class="subasm-frame-name" ` +
+      `data-name="${htmlEsc(choice.subassembly)}">` +
+      `${nameOptions.join('')}</select>` +
+      `<div style="margin-top:3px">` +
+      `${subassemblyFrameDiagnosticsHtml(choice)}</div></div></div>`;
   }).join('');
   return `<div style="border:1px solid #4d4536;background:#24231d;` +
     `border-radius:4px;padding:6px 8px;margin:8px 0;font-size:11px">` +
-    `<div style="color:#d6c18c">${t('subasm.originLinkChoicesTitle')}</div>` +
+    `<div style="color:#d6c18c">${htmlEsc(t('subasm.frameChoicesTitle'))}</div>` +
     `<div style="color:#8a93a3;margin:2px 0 5px">` +
-    `${htmlEsc(t('subasm.originLinkChoicesHelp'))}</div>` +
-    rows + `</div>`;
+    `${htmlEsc(t('subasm.frameChoicesHelp'))}</div>${rows}</div>`;
 }
 
-async function setSubassemblyOriginLinkChoice(name, originLink, ov) {
-  const label = originLink || t('subasm.originLinkAuto');
-  op('subassembly_origin_link', { name, origin_link: originLink });
-  log(t('subasm.originLinkSetting', { name, originLink: label }));
-  try {
-    const resp = await fetch('/api/set_subassembly_origin_link', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, origin_link: originLink }) });
-    const r = await resp.json();
-    if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
-    log(t('subasm.originLinkSetOk', { name, originLink: label }), 'ok');
-    refreshHistory();
-    if (ov) {
-      await openSubassemblyPreview(ov);
-    }
-    if (viewer.robot && effectiveTreeViewMode() === 'subassembly') {
-      buildJointRows(viewer.robot);
-    }
-  } catch (e) {
-    log(t('subasm.originLinkSetFail', { e: e.message ?? e }), 'err');
-    if (ov) {
-      await openSubassemblyPreview(ov);
-    } else {
-      document.querySelectorAll('.subasm-origin-link-choice')
-        .forEach(x => { x.disabled = false; });
-      if (viewer.robot && effectiveTreeViewMode() === 'subassembly') {
-        buildJointRows(viewer.robot);
-      }
-    }
+function markCollapsedPreviewChoicesDirty(root, row) {
+  root.dataset.previewChoicesDirty = '1';
+  row.dataset.previewChoiceDirty = '1';
+  const apply = root.querySelector('.subasm-preview-apply');
+  if (apply) { apply.disabled = false; }
+  const preview = root.querySelector('.subasm-preview-robot');
+  if (preview) { preview.disabled = true; }
+}
+
+function replaceSelectOptions(select, rows, selected) {
+  select.replaceChildren(...rows.map(row => {
+    const option = document.createElement('option');
+    option.value = row.value;
+    option.textContent = row.label;
+    option.disabled = !!row.disabled;
+    return option;
+  }));
+  select.value = selected;
+}
+
+function populateSubassemblyFrameName(row, choice, source, preferred) {
+  const select = row.querySelector('.subasm-frame-name');
+  let candidates = choice.origin_links || [];
+  const options = [];
+  if (source === 'origin_link') {
+    options.push({ value: '', label: t('subasm.frameAutoRepresentative') });
+  } else if (source === 'subassembly_coordinate_system') {
+    candidates = choice.subassembly_coordinate_systems || [];
+  } else {
+    candidates = choice.top_level_coordinate_systems || [];
   }
+  for (const name of candidates) {
+    options.push({ value: name, label: name });
+  }
+  if (!options.length) {
+    options.push({ value: '', label: t('subasm.frameNoneFound'), disabled: true });
+  }
+  const selected = candidates.includes(preferred)
+    ? preferred : (source === 'origin_link' ? '' : (candidates[0] || ''));
+  replaceSelectOptions(select, options, selected);
+  select.disabled = !options.some(option => !option.disabled);
+  return selected;
 }
 
-function bindSubassemblyOriginLinkChoices(root, ov) {
-  root.querySelectorAll('.subasm-origin-link-choice').forEach(sel => {
-    sel.addEventListener('change', () => {
-      const name = sel.dataset.name;
-      const originLink = sel.value;
-      root.querySelectorAll('.subasm-origin-link-choice')
-        .forEach(x => { x.disabled = true; });
-      setSubassemblyOriginLinkChoice(name, originLink, ov);
+function bindSubassemblyFrameChoices(root, frameChoices) {
+  const byName = new Map((frameChoices || []).map(choice =>
+    [choice.subassembly, choice]));
+  root.querySelectorAll('.subasm-frame-row').forEach(row => {
+    const sourceSelect = row.querySelector('.subasm-frame-source');
+    const nameSelect = row.querySelector('.subasm-frame-name');
+    const name = sourceSelect?.dataset.name || '';
+    const choice = byName.get(name) || {};
+    const remembered = new Map([[sourceSelect.value, nameSelect.value]]);
+    row.dataset.frameSource = sourceSelect.value;
+    sourceSelect.addEventListener('change', () => {
+      remembered.set(row.dataset.frameSource || 'origin_link', nameSelect.value);
+      const source = sourceSelect.value;
+      let preferred = remembered.get(source);
+      if (preferred === undefined && source === 'origin_link') {
+        preferred = choice.selected_origin_source === 'user'
+          ? (choice.configured_origin_link || '') : '';
+      } else if (preferred === undefined && choice.configured_source === source) {
+        preferred = choice.configured_frame_name || '';
+      }
+      const selected = populateSubassemblyFrameName(
+        row, choice, source, preferred || '');
+      remembered.set(source, selected);
+      row.dataset.frameSource = source;
+      markCollapsedPreviewChoicesDirty(root, row);
+    });
+    nameSelect.addEventListener('change', () => {
+      remembered.set(sourceSelect.value, nameSelect.value);
+      markCollapsedPreviewChoicesDirty(root, row);
     });
   });
 }
 
-function subassemblyOriginSummaryHtml(s) {
-  return originDiagnosticsHtml(s);
+function subassemblyFrameSummaryHtml(s) {
+  return subassemblyFrameDiagnosticsHtml(s);
 }
 
 function driverJointChoicesHtml(driverChoices) {
@@ -3170,7 +3253,8 @@ function driverJointChoicesHtml(driverChoices) {
       `</div>` +
       (selected ? `<div style="color:#6b7480">` +
         `${htmlEsc(t('subasm.driverConfigured'))}: ${htmlEsc(selected)}</div>` : '');
-    return `<div style="display:grid;grid-template-columns:minmax(110px,1fr) ` +
+    return `<div class="subasm-driver-row" style="display:grid;` +
+      `grid-template-columns:minmax(110px,1fr) ` +
       `minmax(150px,1.7fr);gap:6px;align-items:start;margin-top:5px">` +
       `<div><div style="color:#cfe3ff">${htmlEsc(edgeLabel)}</div>` +
       `<div style="color:#6b7480">${htmlEsc(c.subassembly || c.link_name || edge)}</div></div>` +
@@ -3189,52 +3273,223 @@ function driverJointChoicesHtml(driverChoices) {
     rows + `</div>`;
 }
 
-async function setSubassemblyDriverJointChoice(edge, sourceJoint, ov) {
-  const label = sourceJoint || t('subasm.driverJointAuto');
-  op('collapsed_driver_joint', { edge, source_joint: sourceJoint });
-  log(t('subasm.driverJointSetting', { name: edge, sourceJoint: label }));
+function bindSubassemblyDriverJointChoices(root) {
+  root.querySelectorAll('.subasm-driver-joint-choice').forEach(sel => {
+    sel.addEventListener('change', () => {
+      const row = sel.closest('.subasm-driver-row');
+      if (row) { markCollapsedPreviewChoicesDirty(root, row); }
+    });
+  });
+}
+
+function collapsedJointAxisChoicesHtml(axisChoices) {
+  const choices = (axisChoices || []).filter(choice =>
+    choice.applies || choice.configured_source);
+  if (!choices.length) { return ''; }
+  const rows = choices.map(choice => {
+    const source = choice.configured_source ||
+      choice.selected_axis_source || 'normal_joint';
+    const axes = choice.top_level_reference_axes || [];
+    const normal = choice.normal_source_joint ||
+      choice.selected_axis_name || t('subasm.driverJointNotSelected');
+    const sourceOptions = [
+      `<option value="normal_joint"` +
+        `${source === 'normal_joint' ? ' selected' : ''}>` +
+        `${htmlEsc(t('subasm.axisSourceNormal'))}</option>`,
+      `<option value="top_level_reference_axis"` +
+        `${source === 'top_level_reference_axis' ? ' selected' : ''}` +
+        `${axes.length ? '' : ' disabled'}>` +
+        `${htmlEsc(t('subasm.axisSourceTop'))}` +
+        `${axes.length ? '' : ` (${htmlEsc(t('subasm.axisNoneFound'))})`}` +
+        `</option>`,
+    ].join('');
+    const selected = choice.configured_axis_name ||
+      choice.selected_axis_name || '';
+    const nameOptions = [];
+    if (source === 'normal_joint') {
+      nameOptions.push(`<option value="" selected>${htmlEsc(normal)}</option>`);
+    } else {
+      if (selected && !axes.includes(selected)) {
+        nameOptions.push(`<option value="${htmlEsc(selected)}" selected disabled>` +
+          `${htmlEsc(selected)} (${htmlEsc(t('subasm.axisUnavailable'))})</option>`);
+      }
+      for (const axis of axes) {
+        nameOptions.push(`<option value="${htmlEsc(axis)}"` +
+          `${selected === axis ? ' selected' : ''}>${htmlEsc(axis)}</option>`);
+      }
+      if (!nameOptions.length) {
+        nameOptions.push(`<option value="" selected disabled>` +
+          `${htmlEsc(t('subasm.axisNoneFound'))}</option>`);
+      }
+    }
+    const edgeLabel = choice.parent && choice.child
+      ? `${choice.parent} → ${choice.child}` : choice.edge;
+    const used = choice.selected_axis_name || selected || normal;
+    const selection = choice.selection === 'manual'
+      ? t('subasm.axisSelectionManual') : t('subasm.axisSelectionDefault');
+    const diagnostics = `<div style="color:#a9bdd8;margin-top:3px">` +
+      `${htmlEsc(t('subasm.axisUsed'))}: ` +
+      `<span style="color:#cfe3ff">${htmlEsc(used)}</span> ` +
+      `<span style="color:#6b7480">(${htmlEsc(selection)})</span></div>` +
+      (choice.error ? `<div style="color:#d68c8c">` +
+        `${htmlEsc(choice.error)}</div>` : '');
+    return `<div class="subasm-axis-row" style="display:grid;` +
+      `grid-template-columns:minmax(110px,1fr) minmax(170px,2fr);` +
+      `gap:6px;align-items:start;margin-top:7px">` +
+      `<div><div style="color:#cfe3ff">${htmlEsc(edgeLabel)}</div>` +
+      `<div style="color:#6b7480">${htmlEsc(choice.joint_type || '')}</div></div>` +
+      `<div><select class="subasm-axis-source" ` +
+      `data-edge="${htmlEsc(choice.edge)}">${sourceOptions}</select> ` +
+      `<select class="subasm-axis-name" ` +
+      `data-edge="${htmlEsc(choice.edge)}"` +
+      `${source === 'normal_joint' ? ' disabled' : ''}>` +
+      `${nameOptions.join('')}</select>${diagnostics}</div></div>`;
+  }).join('');
+  return `<div style="border:1px solid #46506a;background:#20242d;` +
+    `border-radius:4px;padding:6px 8px;margin:8px 0;font-size:11px">` +
+    `<div style="color:#aebfe8">${htmlEsc(t('subasm.axisChoicesTitle'))}</div>` +
+    `<div style="color:#8a93a3;margin:2px 0 5px">` +
+    `${htmlEsc(t('subasm.axisChoicesHelp'))}</div>${rows}</div>`;
+}
+
+function populateCollapsedJointAxisName(row, choice, source, preferred) {
+  const select = row.querySelector('.subasm-axis-name');
+  const axes = choice.top_level_reference_axes || [];
+  if (source === 'normal_joint') {
+    const normal = choice.normal_source_joint ||
+      choice.selected_axis_name || t('subasm.driverJointNotSelected');
+    replaceSelectOptions(select, [{ value: '', label: normal }], '');
+    select.disabled = true;
+    return '';
+  }
+  const options = axes.length
+    ? axes.map(name => ({ value: name, label: name }))
+    : [{ value: '', label: t('subasm.axisNoneFound'), disabled: true }];
+  const selected = axes.includes(preferred) ? preferred : (axes[0] || '');
+  replaceSelectOptions(select, options, selected);
+  select.disabled = !axes.length;
+  return selected;
+}
+
+function bindCollapsedJointAxisChoices(root, axisChoices) {
+  const byEdge = new Map((axisChoices || []).map(choice =>
+    [choice.edge, choice]));
+  root.querySelectorAll('.subasm-axis-row').forEach(row => {
+    const sourceSelect = row.querySelector('.subasm-axis-source');
+    const nameSelect = row.querySelector('.subasm-axis-name');
+    const edge = sourceSelect?.dataset.edge || '';
+    const choice = byEdge.get(edge) || {};
+    const remembered = new Map([[sourceSelect.value, nameSelect.value]]);
+    row.dataset.axisSource = sourceSelect.value;
+    sourceSelect.addEventListener('change', () => {
+      remembered.set(row.dataset.axisSource || 'normal_joint', nameSelect.value);
+      const source = sourceSelect.value;
+      let preferred = remembered.get(source);
+      if (preferred === undefined && choice.configured_source === source) {
+        preferred = choice.configured_axis_name || '';
+      }
+      const selected = populateCollapsedJointAxisName(
+        row, choice, source, preferred || '');
+      remembered.set(source, selected);
+      row.dataset.axisSource = source;
+      markCollapsedPreviewChoicesDirty(root, row);
+    });
+    nameSelect.addEventListener('change', () => {
+      remembered.set(sourceSelect.value, nameSelect.value);
+      markCollapsedPreviewChoicesDirty(root, row);
+    });
+  });
+}
+
+function collapsedPreviewChoicePayload(root) {
+  const changed = '[data-preview-choice-dirty="1"]';
+  const frames = [...root.querySelectorAll(`.subasm-frame-row${changed}`)]
+    .map(row => {
+      const source = row.querySelector('.subasm-frame-source');
+      const name = row.querySelector('.subasm-frame-name');
+      return {
+        name: source?.dataset.name || '',
+        source: source?.value || 'origin_link',
+        frame_name: name?.value || '',
+      };
+    });
+  const drivers = [
+    ...root.querySelectorAll(`.subasm-driver-row${changed}`),
+  ].map(row => {
+    const select = row.querySelector('.subasm-driver-joint-choice');
+    return {
+      edge: select?.dataset.edge || '',
+      source_joint: select?.value || '',
+    };
+  });
+  const axes = [...root.querySelectorAll(`.subasm-axis-row${changed}`)]
+    .map(row => {
+      const source = row.querySelector('.subasm-axis-source');
+      const name = row.querySelector('.subasm-axis-name');
+      return {
+        edge: source?.dataset.edge || '',
+        source: source?.value || 'normal_joint',
+        axis_name: name?.value || '',
+      };
+    });
+  return { frames, drivers, axes };
+}
+
+function setCollapsedPreviewControlsDisabled(root, disabled) {
+  root.querySelectorAll(
+    '.subasm-frame-source, .subasm-driver-joint-choice, .subasm-axis-source')
+    .forEach(select => { select.disabled = disabled; });
+  root.querySelectorAll('.subasm-frame-name').forEach(select => {
+    const available = [...select.options].some(option => !option.disabled);
+    select.disabled = disabled || !available;
+  });
+  root.querySelectorAll('.subasm-axis-name').forEach(select => {
+    const source = select.closest('.subasm-axis-row')
+      ?.querySelector('.subasm-axis-source')?.value || 'normal_joint';
+    const available = [...select.options].some(option => !option.disabled);
+    select.disabled = disabled || source === 'normal_joint' || !available;
+  });
+  const apply = root.querySelector('.subasm-preview-apply');
+  if (apply) { apply.disabled = disabled; }
+}
+
+async function applyCollapsedPreviewChoices(root, ov, onApplied = null) {
+  if (root.dataset.previewChoicesDirty !== '1') { return; }
+  const choices = collapsedPreviewChoicePayload(root);
+  op('collapsed_coordinate_choices', choices);
+  log(t('subasm.coordinateApplySetting'));
+  setCollapsedPreviewControlsDisabled(root, true);
   try {
-    const resp = await fetch('/api/set_collapsed_driver_joint', {
+    const resp = await fetch('/api/set_collapsed_preview_choices', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ edge, source_joint: sourceJoint }) });
-    const r = await resp.json();
-    if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
-    log(t('subasm.driverJointSetOk', { name: edge, sourceJoint: label }), 'ok');
-    refreshHistory();
-    if (ov) {
-      await openSubassemblyPreview(ov);
-    } else {
-      document.querySelectorAll('.subasm-driver-joint-choice')
-        .forEach(x => { x.disabled = false; });
+      body: JSON.stringify(choices),
+    });
+    const result = await resp.json();
+    if (!resp.ok || result.error) {
+      throw new Error(result.error ?? resp.status);
     }
-    if (viewer.robot && effectiveTreeViewMode() === 'subassembly') {
+    log(t('subasm.coordinateApplyOk', {
+      frames: result.frames_applied ?? choices.frames.length,
+      drivers: result.drivers_applied ?? choices.drivers.length,
+      axes: result.axes_applied ?? choices.axes.length,
+    }), 'ok');
+    refreshHistory();
+    if (onApplied) {
+      await onApplied(result);
+    } else {
+      await openSubassemblyPreview(ov, result);
+    }
+    if (!onApplied && viewer.robot &&
+        effectiveTreeViewMode() === 'subassembly') {
       buildJointRows(viewer.robot);
     }
   } catch (e) {
-    log(t('subasm.driverJointSetFail', { e: e.message ?? e }), 'err');
-    if (ov) {
-      await openSubassemblyPreview(ov);
-    } else {
-      document.querySelectorAll('.subasm-driver-joint-choice')
-        .forEach(x => { x.disabled = false; });
-      if (viewer.robot && effectiveTreeViewMode() === 'subassembly') {
-        buildJointRows(viewer.robot);
-      }
-    }
+    log(t('subasm.coordinateApplyFail', { e: e.message ?? e }), 'err');
+    setCollapsedPreviewControlsDisabled(root, false);
+    const apply = root.querySelector('.subasm-preview-apply');
+    if (apply) { apply.disabled = false; }
   }
-}
-
-function bindSubassemblyDriverJointChoices(root, ov) {
-  root.querySelectorAll('.subasm-driver-joint-choice').forEach(sel => {
-    sel.addEventListener('change', () => {
-      const edge = sel.dataset.edge;
-      const sourceJoint = sel.value;
-      root.querySelectorAll('.subasm-driver-joint-choice')
-        .forEach(x => { x.disabled = true; });
-      setSubassemblyDriverJointChoice(edge, sourceJoint, ov);
-    });
-  });
 }
 
 function cycleBreakChoicesHtml(cycleChoices) {
@@ -3491,15 +3746,18 @@ async function openSubassemblyList(ov) {
   }
 }
 
-async function openSubassemblyPreview(ov) {
+async function openSubassemblyPreview(ov, preparedPayload = null) {
   if (!viewer.robot && !currentInfo) { log(t('common.openFirst'), 'wrn'); return; }
   const owned = ov || document.getElementById('renamelist') ||
     document.createElement('div');
   owned.id = 'renamelist';
   try {
-    const resp = await fetch('/api/collapse_preview');
-    const r = await resp.json();
-    if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
+    let r = preparedPayload;
+    if (!r) {
+      const resp = await fetch('/api/collapse_preview');
+      r = await resp.json();
+      if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
+    }
     const card = document.createElement('div');
     card.className = 'card';
     const cc = r.canonical_counts || {};
@@ -3516,8 +3774,9 @@ async function openSubassemblyPreview(ov) {
       }) + '</div>' +
       validationIssuesHtml(r.validation) +
       parentChoicesHtml(r.parent_choices) +
-      originLinkChoicesHtml(r.group_choices) +
+      subassemblyFrameChoicesHtml(r.frame_choices) +
       driverJointChoicesHtml(r.driver_joint_choices) +
+      collapsedJointAxisChoicesHtml(r.joint_axis_choices) +
       cycleBreakChoicesHtml(r.cycle_break_choices);
     const rows = r.collapsed_subassemblies || [];
     if (!rows.length) {
@@ -3535,7 +3794,7 @@ async function openSubassemblyPreview(ov) {
           `<td style="color:#cfe3ff">${htmlEsc(s.link_name)}</td>` +
           `<td>${s.member_links?.length ?? 0}</td>` +
           `<td>${s.internal_joints?.length ?? 0}</td>` +
-          `<td>${subassemblyOriginSummaryHtml(s)}</td>` +
+          `<td>${subassemblyFrameSummaryHtml(s)}</td>` +
           `<td>${subasmOverrideLabel(s.override)}</td></tr>`;
       }
       html += '</tbody></table>';
@@ -3562,15 +3821,24 @@ async function openSubassemblyPreview(ov) {
     }
     card.innerHTML = html;
     bindSubassemblyParentChoices(card, owned);
-    bindSubassemblyOriginLinkChoices(card, owned);
-    bindSubassemblyDriverJointChoices(card, owned);
+    bindSubassemblyFrameChoices(card, r.frame_choices);
+    bindSubassemblyDriverJointChoices(card);
+    bindCollapsedJointAxisChoices(card, r.joint_axis_choices);
     bindSubassemblyCycleBreakChoices(card, owned);
     const bar = document.createElement('div');
     bar.style.cssText = 'display:flex;gap:8px;margin-top:10px';
     const back = document.createElement('button');
     back.textContent = t('subasm.backSubasm');
     back.addEventListener('click', () => openSubassemblyList(owned));
+    const applyCoordinates = document.createElement('button');
+    applyCoordinates.className = 'subasm-preview-apply';
+    applyCoordinates.textContent = t('subasm.coordinateApplyBtn');
+    applyCoordinates.title = t('subasm.coordinateApplyTitle');
+    applyCoordinates.disabled = true;
+    applyCoordinates.addEventListener('click', () =>
+      applyCollapsedPreviewChoices(card, owned));
     const previewRobot = document.createElement('button');
+    previewRobot.className = 'subasm-preview-robot';
     previewRobot.textContent = t('subasm.previewRobotBtn');
     previewRobot.addEventListener('click', () => loadCollapsedPreviewRobot());
     const normalRobot = document.createElement('button');
@@ -3579,7 +3847,7 @@ async function openSubassemblyPreview(ov) {
     const close = document.createElement('button');
     close.textContent = t('common.close');
     close.addEventListener('click', () => owned.remove());
-    bar.append(back, previewRobot, normalRobot, close);
+    bar.append(back, applyCoordinates, previewRobot, normalRobot, close);
     card.appendChild(bar);
     owned.replaceChildren(card);
     if (!owned.parentElement) {
@@ -4040,19 +4308,43 @@ async function renderSubassemblyTreeRows(robot, movable) {
       jointsEl.appendChild(choices);
       bindSubassemblyParentChoices(choices);
     }
-    const groupChoices = originLinkChoicesHtml(r.group_choices);
-    if (groupChoices) {
-      const groups = document.createElement('div');
-      groups.innerHTML = groupChoices;
-      jointsEl.appendChild(groups);
-      bindSubassemblyOriginLinkChoices(groups);
+    const frameChoices = subassemblyFrameChoicesHtml(r.frame_choices);
+    if (frameChoices) {
+      const frames = document.createElement('div');
+      frames.innerHTML = frameChoices;
+      jointsEl.appendChild(frames);
     }
     const driverChoices = driverJointChoicesHtml(r.driver_joint_choices);
     if (driverChoices) {
       const drivers = document.createElement('div');
       drivers.innerHTML = driverChoices;
       jointsEl.appendChild(drivers);
-      bindSubassemblyDriverJointChoices(drivers);
+    }
+    const axisChoices = collapsedJointAxisChoicesHtml(r.joint_axis_choices);
+    if (axisChoices) {
+      const axes = document.createElement('div');
+      axes.innerHTML = axisChoices;
+      jointsEl.appendChild(axes);
+    }
+    if (frameChoices || driverChoices || axisChoices) {
+      const coordinateBar = document.createElement('div');
+      coordinateBar.style.cssText = 'display:flex;margin:6px 0 10px';
+      const applyCoordinates = document.createElement('button');
+      applyCoordinates.className = 'subasm-preview-apply';
+      applyCoordinates.textContent = t('subasm.coordinateApplyBtn');
+      applyCoordinates.title = t('subasm.coordinateApplyTitle');
+      applyCoordinates.disabled = true;
+      applyCoordinates.addEventListener('click', () =>
+        applyCollapsedPreviewChoices(jointsEl, null, async () => {
+          if (viewer.robot && effectiveTreeViewMode() === 'subassembly') {
+            buildJointRows(viewer.robot);
+          }
+        }));
+      coordinateBar.appendChild(applyCoordinates);
+      jointsEl.appendChild(coordinateBar);
+      bindSubassemblyFrameChoices(jointsEl, r.frame_choices);
+      bindSubassemblyDriverJointChoices(jointsEl);
+      bindCollapsedJointAxisChoices(jointsEl, r.joint_axis_choices);
     }
     const cycleChoices = cycleBreakChoicesHtml(r.cycle_break_choices);
     if (cycleChoices) {

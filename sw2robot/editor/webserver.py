@@ -1234,6 +1234,72 @@ def _set_subassembly_origin_link_yaml(txt, graph, name, origin_link):
     return _remove_yaml_map_entry(txt, "subassembly_origin_links", name)
 
 
+_SUBASSEMBLY_FRAME_SOURCES = {
+    "origin_link",
+    "subassembly_coordinate_system",
+    "top_level_coordinate_system",
+}
+
+
+def _subassembly_frame_sources(yml_txt):
+    """Explicit coordinate-frame source overrides by CAD instance name."""
+    import yaml as _yaml
+
+    try:
+        cfg = _yaml.safe_load(yml_txt) or {}
+        if not isinstance(cfg, dict):
+            return {}
+    except Exception:
+        return {}
+    raw = cfg.get("subassembly_frame_sources") or {}
+    if not isinstance(raw, dict):
+        return {}
+    return {str(k): str(v) for k, v in raw.items() if v is not None}
+
+
+def _subassembly_frame_names(yml_txt):
+    """Named CAD coordinate system selected for each sub-assembly."""
+    import yaml as _yaml
+
+    try:
+        cfg = _yaml.safe_load(yml_txt) or {}
+        if not isinstance(cfg, dict):
+            return {}
+    except Exception:
+        return {}
+    raw = cfg.get("subassembly_frame_names") or {}
+    if not isinstance(raw, dict):
+        return {}
+    return {str(k): str(v) for k, v in raw.items() if v is not None}
+
+
+def _set_subassembly_frame_yaml(txt, graph, name, source, frame_name=""):
+    """Persist one collapsed sub-assembly coordinate-frame selection.
+
+    Representative-link selection continues to use the existing
+    ``subassembly_origin_links`` map.  Coordinate-system sources use two flat
+    maps so the editor can preserve comments and formatting with its existing
+    targeted YAML helpers.
+    """
+    names = _subassembly_names(graph)
+    if name not in names:
+        raise ValueError(f"no CAD sub-assembly '{name}'")
+    if source not in _SUBASSEMBLY_FRAME_SOURCES:
+        raise ValueError("unknown sub-assembly frame source")
+    if source == "origin_link":
+        txt = _remove_yaml_map_entry(
+            txt, "subassembly_frame_sources", name)
+        txt = _remove_yaml_map_entry(txt, "subassembly_frame_names", name)
+        return _set_subassembly_origin_link_yaml(
+            txt, graph, name, frame_name)
+    if not frame_name:
+        raise ValueError("coordinate system name required")
+    txt = _upsert_yaml_map(
+        txt, "subassembly_frame_sources", name, _yaml_scalar(source))
+    return _upsert_yaml_map(
+        txt, "subassembly_frame_names", name, _yaml_scalar(frame_name))
+
+
 def _subassembly_cycle_break_joints(yml_txt):
     """Preview-only source joints dropped to break collapsed-tree cycles."""
     import yaml as _yaml
@@ -1306,6 +1372,120 @@ def _set_collapsed_driver_joint_yaml(txt, edge, source_joint):
     return _remove_yaml_map_entry(txt, "collapsed_driver_joints", edge)
 
 
+_COLLAPSED_JOINT_AXIS_SOURCES = {
+    "normal_joint",
+    "top_level_reference_axis",
+}
+
+
+def _collapsed_joint_axis_sources(yml_txt):
+    """Explicit axis-source overrides for collapsed preview joints."""
+    import yaml as _yaml
+
+    try:
+        cfg = _yaml.safe_load(yml_txt) or {}
+        if not isinstance(cfg, dict):
+            return {}
+    except Exception:
+        return {}
+    raw = cfg.get("collapsed_joint_axis_sources") or {}
+    if not isinstance(raw, dict):
+        return {}
+    return {str(k): str(v) for k, v in raw.items() if v is not None}
+
+
+def _collapsed_joint_axis_names(yml_txt):
+    """Named CAD reference-axis overrides for collapsed preview joints."""
+    import yaml as _yaml
+
+    try:
+        cfg = _yaml.safe_load(yml_txt) or {}
+        if not isinstance(cfg, dict):
+            return {}
+    except Exception:
+        return {}
+    raw = cfg.get("collapsed_joint_axis_names") or {}
+    if not isinstance(raw, dict):
+        return {}
+    return {str(k): str(v) for k, v in raw.items() if v is not None}
+
+
+def _set_collapsed_joint_axis_yaml(txt, edge, source, axis_name=""):
+    """Set/reset one collapsed-edge reference-axis selection."""
+    edge = str(edge or "").strip()
+    if not edge:
+        raise ValueError("edge required")
+    if source not in _COLLAPSED_JOINT_AXIS_SOURCES:
+        raise ValueError("unknown collapsed joint axis source")
+    if source == "normal_joint":
+        txt = _remove_yaml_map_entry(
+            txt, "collapsed_joint_axis_sources", edge)
+        return _remove_yaml_map_entry(
+            txt, "collapsed_joint_axis_names", edge)
+    if not axis_name:
+        raise ValueError("reference axis name required")
+    txt = _upsert_yaml_map(
+        txt, "collapsed_joint_axis_sources", edge, _yaml_scalar(source))
+    return _upsert_yaml_map(
+        txt, "collapsed_joint_axis_names", edge, _yaml_scalar(axis_name))
+
+
+def _validate_subassembly_frame_selection(choice, name, source, frame_name):
+    """Validate one frame selection against an existing preview choice."""
+    if choice is None:
+        raise ValueError(f"'{name}' is not currently collapsed")
+    candidates_key = {
+        "origin_link": "origin_links",
+        "subassembly_coordinate_system":
+            "subassembly_coordinate_systems",
+        "top_level_coordinate_system":
+            "top_level_coordinate_systems",
+    }.get(source)
+    if candidates_key is None:
+        raise ValueError("unknown sub-assembly frame source")
+    allowed = set(choice.get(candidates_key) or [])
+    if source != "origin_link" and not frame_name:
+        raise ValueError("coordinate system name required")
+    if frame_name and frame_name not in allowed:
+        raise ValueError(
+            f"'{frame_name}' is not a {source} candidate for {name}")
+
+
+def _validate_collapsed_joint_axis_selection(
+        choice, edge, source, axis_name):
+    """Validate one Reference Joint axis against an existing preview edge."""
+    if choice is None:
+        raise ValueError(f"'{edge}' is not a collapsed edge")
+    if source not in _COLLAPSED_JOINT_AXIS_SOURCES:
+        raise ValueError("unknown collapsed joint axis source")
+    if source != "top_level_reference_axis":
+        return
+    if not choice.get("applies"):
+        raise ValueError(f"'{edge}' is not a movable collapsed joint")
+    allowed = set(choice.get("top_level_reference_axes") or [])
+    if not axis_name:
+        raise ValueError("reference axis name required")
+    if axis_name not in allowed:
+        raise ValueError(
+            f"'{axis_name}' is not a top-level reference axis candidate "
+            f"for {edge}")
+
+
+def _validate_collapsed_driver_selection(choice, edge, source_joint):
+    """Validate one normal-joint driver for a collapsed boundary edge."""
+    if choice is None:
+        raise ValueError(f"'{edge}' is not a collapsed edge")
+    if not source_joint:
+        return
+    allowed = {
+        candidate.get("source_joint")
+        for candidate in choice.get("candidates", [])
+    }
+    if source_joint not in allowed:
+        raise ValueError(
+            f"'{source_joint}' is not a driver joint candidate for {edge}")
+
+
 def _set_subassembly_cycle_break_joint_yaml(
         txt, source_joint, drop, previous_source_joint=""):
     """Set/reset one preview-only source joint dropped for cycle breaking."""
@@ -1344,6 +1524,22 @@ def _canonical_tree_payload(graph, yml_txt=""):
     full_cfg["no_expand"] = []
     model = _M.build_model(graph, config=full_cfg)
 
+    import numpy as _np
+
+    def anchor_world(component):
+        from sw2robot.exporter.geometry import matrix_from_rpy
+
+        visual = matrix_from_rpy(component.visual_rpy)
+        visual[:3, 3] = _np.asarray(component.visual_xyz, float)
+        return component.world @ _np.linalg.inv(visual)
+
+    anchors = {c.link_name: anchor_world(c) for c in model.components}
+    base_anchor = anchors.get(model.base_link, _np.eye(4))
+    root_from_cad = _np.linalg.inv(base_anchor)
+    link_frames = {
+        name: [float(x) for x in (root_from_cad @ frame).flatten()]
+        for name, frame in anchors.items()
+    }
     links = [{"name": c.name, "link_name": c.link_name}
              for c in model.components]
     joints = [{"name": j.name, "parent": j.parent, "child": j.child,
@@ -1384,6 +1580,8 @@ def _canonical_tree_payload(graph, yml_txt=""):
         "joints": joints,
         "subassemblies": subassemblies,
         "link_to_component": link_to_name,
+        "link_frames": link_frames,
+        "root_from_cad": [float(x) for x in root_from_cad.flatten()],
     }
 
 
@@ -1452,9 +1650,13 @@ def _collapse_preview_payload(graph, yml_txt="", current_joints=None):
     states = _subassemblies_payload(graph, yml_txt)
     parent_overrides = _subassembly_parent_overrides(yml_txt)
     origin_links = _subassembly_origin_links(yml_txt)
+    frame_sources = _subassembly_frame_sources(yml_txt)
+    frame_names = _subassembly_frame_names(yml_txt)
     cycle_break_joints = _subassembly_cycle_break_joints(yml_txt)
     driver_joints = _subassembly_driver_joints(yml_txt)
     edge_driver_joints = _collapsed_driver_joints(yml_txt)
+    axis_sources = _collapsed_joint_axis_sources(yml_txt)
+    axis_names = _collapsed_joint_axis_names(yml_txt)
     by_sub = {s["name"]: s for s in canonical["subassemblies"]}
     canonical_base = canonical["base_link"]
     collapse_link = {}
@@ -1476,6 +1678,7 @@ def _collapse_preview_payload(graph, yml_txt="", current_joints=None):
             "link_name": row["link_name"],
             "override": row["override"],
             "reason": row["reason"],
+            "path": row["path"],
             "member_links": sub["member_links"],
             "member_components": sub["member_components"],
             "internal_joints": sub["internal_joints"],
@@ -1512,6 +1715,25 @@ def _collapse_preview_payload(graph, yml_txt="", current_joints=None):
         stale = choice.get("stale_origin_link", "")
         if stale:
             sub["stale_origin_link"] = stale
+
+    frame_choices = _collapse_frame_choices(
+        graph, collapsed, canonical, frame_sources, frame_names)
+    frame_choice_by_subassembly = {
+        choice.get("subassembly"): choice for choice in frame_choices
+    }
+    for sub in collapsed:
+        choice = frame_choice_by_subassembly.get(sub["name"], {})
+        sub.update({
+            "configured_frame_source": choice.get("configured_source", ""),
+            "configured_frame_name": choice.get("configured_frame_name", ""),
+            "selected_frame_source": choice.get("selected_frame_source", ""),
+            "selected_frame_name": choice.get("selected_frame_name", ""),
+            "selected_frame_transform": choice.get(
+                "selected_frame_transform", ""),
+            "frame_selection": choice.get("selection", ""),
+            "frame_resolved": choice.get("resolved", False),
+            "frame_error": choice.get("error", ""),
+        })
 
     links = []
     inserted = set()
@@ -1574,13 +1796,17 @@ def _collapse_preview_payload(graph, yml_txt="", current_joints=None):
     driver_choices = _collapse_driver_joint_choices(
         joints, current_joints, collapsed, collapse_link,
         edge_driver_joints, driver_joints)
+    axis_choices = _collapse_joint_axis_choices(
+        graph, joints, canonical, driver_choices, axis_sources, axis_names)
 
     validation = _validate_collapsed_tree(base, links, joints, collapsed,
                                           collapse_link)
+    validation = _add_frame_validation(validation, frame_choices)
+    validation = _add_joint_axis_validation(validation, axis_choices)
     collapse_plan = _collapse_plan_payload(
         base, links, joints, collapsed, collapse_link, dropped,
         dropped_parent_override, dropped_cycle_joints, validation,
-        driver_choices)
+        driver_choices, axis_choices)
     return {
         "base_link": base,
         "links": links,
@@ -1593,15 +1819,17 @@ def _collapse_preview_payload(graph, yml_txt="", current_joints=None):
         "collapsed_subassemblies": collapsed,
         "parent_choices": parent_choices,
         "group_choices": group_choices,
+        "frame_choices": frame_choices,
         "driver_joint_choices": driver_choices,
+        "joint_axis_choices": axis_choices,
         "cycle_break_choices": cycle_break_choices,
         "canonical_counts": {
             "links": len(canonical["links"]),
             "joints": len(canonical["joints"]),
         },
         "preview_counts": {
-            "links": len(links),
-            "joints": len(joints),
+            "links": len(collapse_plan["links"]),
+            "joints": len(collapse_plan["joints"]),
         },
     }
 
@@ -1746,6 +1974,258 @@ def _collapse_group_choices(collapsed, origin_links):
             ],
         })
     return choices
+
+
+def _collapse_frame_choices(graph, collapsed, canonical, frame_sources,
+                            frame_names):
+    """Resolve Option 1-3 frame choices into expanded-URDF root poses."""
+    import numpy as _np
+
+    root_from_cad_raw = canonical.get("root_from_cad") or []
+    root_from_cad = _np.asarray(root_from_cad_raw, float).reshape(4, 4) \
+        if len(root_from_cad_raw) == 16 else _np.eye(4)
+    link_frames = canonical.get("link_frames") or {}
+    top_frames = {
+        frame.name: frame
+        for frame in (getattr(graph, "coordinate_systems", None) or [])
+    }
+    graph_components = {
+        component.name: component
+        for component in (getattr(graph, "components", None) or [])
+    }
+    graph_subassemblies = getattr(graph, "subassemblies", None) or {}
+    choices = []
+
+    for sub in collapsed:
+        name = sub.get("name", "")
+        source = frame_sources.get(name, "origin_link")
+        configured_source = frame_sources.get(name, "")
+        configured_frame = frame_names.get(name, "")
+        member_links = list(sub.get("member_links") or [])
+        component = graph_components.get(name)
+        subgraph = graph_subassemblies.get(
+            getattr(component, "part_path", None)) if component else None
+        local_frames = {
+            frame.name: frame
+            for frame in (
+                getattr(subgraph, "coordinate_systems", None) or [])
+        }
+
+        selected_name = ""
+        selected_transform = []
+        selection = "manual" if configured_source else "default"
+        error = ""
+        if source == "origin_link":
+            selected_name = sub.get("selected_origin_link") or \
+                (member_links[0] if member_links else "")
+            raw = link_frames.get(selected_name) or []
+            if len(raw) == 16:
+                selected_transform = [float(x) for x in raw]
+            else:
+                error = f"representative link '{selected_name}' is unavailable"
+            origin_source = sub.get("selected_origin_source", "")
+            if origin_source == "canonical_base":
+                selection = "base_link"
+            elif origin_source == "user":
+                selection = "manual"
+            else:
+                selection = "auto"
+        elif source == "subassembly_coordinate_system":
+            selected_name = configured_frame
+            frame = local_frames.get(selected_name)
+            if not selected_name:
+                error = "no sub-assembly coordinate system is selected"
+            elif frame is None:
+                error = (f"sub-assembly coordinate system "
+                         f"'{selected_name}' is unavailable")
+            elif component is None:
+                error = f"CAD sub-assembly instance '{name}' is unavailable"
+            else:
+                cad_from_frame = component.world_matrix() @ \
+                    frame.document_from_frame_matrix()
+                selected_transform = [
+                    float(x) for x in
+                    (root_from_cad @ cad_from_frame).flatten()
+                ]
+        elif source == "top_level_coordinate_system":
+            selected_name = configured_frame
+            frame = top_frames.get(selected_name)
+            if not selected_name:
+                error = "no top-level coordinate system is selected"
+            elif frame is None:
+                error = (f"top-level coordinate system "
+                         f"'{selected_name}' is unavailable")
+            else:
+                selected_transform = [
+                    float(x) for x in
+                    (root_from_cad @
+                     frame.document_from_frame_matrix()).flatten()
+                ]
+        else:
+            error = f"unknown coordinate-frame source '{source}'"
+
+        choices.append({
+            "subassembly": name,
+            "link_name": sub.get("link_name", ""),
+            "configured_source": configured_source,
+            "configured_frame_name": configured_frame,
+            "selected_frame_source": source if not error else "",
+            "selected_frame_name": selected_name,
+            "selected_frame_transform": selected_transform,
+            "selection": selection,
+            "resolved": not error and len(selected_transform) == 16,
+            "error": error,
+            "origin_links": member_links,
+            "configured_origin_link": sub.get("configured_origin_link", ""),
+            "selected_origin_source": sub.get("selected_origin_source", ""),
+            "stale_origin_link": sub.get("stale_origin_link", ""),
+            "subassembly_coordinate_systems": sorted(local_frames),
+            "top_level_coordinate_systems": sorted(top_frames),
+        })
+    return choices
+
+
+def _add_frame_validation(validation, frame_choices):
+    """Add unresolved selected CAD frames to collapsed-tree validation."""
+    issues = list(validation.get("issues") or [])
+    for choice in frame_choices:
+        if choice.get("resolved"):
+            continue
+        issues.append({
+            "severity": "error",
+            "code": "unresolved_coordinate_frame",
+            "subassembly": choice.get("subassembly"),
+            "link": choice.get("link_name"),
+            "frame_source": choice.get("configured_source") or
+                            "origin_link",
+            "frame_name": choice.get("configured_frame_name") or
+                          choice.get("selected_frame_name"),
+            "message": choice.get("error") or
+                       "the selected coordinate frame could not be resolved",
+        })
+    return {
+        "ok": not any(issue.get("severity") == "error" for issue in issues),
+        "issue_count": len(issues),
+        "issues": issues,
+    }
+
+
+def _collapse_joint_axis_choices(graph, joints, canonical, driver_choices,
+                                 axis_sources, axis_names):
+    """Resolve optional official-Exporter-style Reference Joint axes.
+
+    The default path remains the final axis of the selected normal driver
+    joint.  A top-level ``RefAxis`` selection contributes only a direction,
+    matching the official SolidWorks URDF Exporter; the collapsed link frame
+    continues to determine the joint origin.
+    """
+    import numpy as _np
+
+    root_from_cad_raw = canonical.get("root_from_cad") or []
+    root_from_cad = _np.asarray(root_from_cad_raw, float).reshape(4, 4) \
+        if len(root_from_cad_raw) == 16 else _np.eye(4)
+    top_axes = {
+        axis.name: axis
+        for axis in (getattr(graph, "reference_axes", None) or [])
+    }
+    joints_by_edge = {}
+    for joint in joints:
+        if joint.get("decision") != "kept_boundary":
+            continue
+        edge = joint.get("name") or \
+            f"{joint.get('parent')}__{joint.get('child')}"
+        joints_by_edge.setdefault(edge, joint)
+    choices = []
+    movable_types = {"revolute", "continuous", "prismatic"}
+    for driver in driver_choices or []:
+        edge = driver.get("edge", "")
+        joint = joints_by_edge.get(edge, {})
+        effective_driver = driver.get("effective_driver_joint", "")
+        effective_candidate = next((
+            candidate for candidate in (driver.get("candidates") or [])
+            if candidate.get("source_joint") == effective_driver
+        ), None)
+        effective_type = (effective_candidate or {}).get("type") or \
+            joint.get("type") or "fixed"
+        applies = bool(
+            effective_driver and effective_type in movable_types)
+        configured_source = axis_sources.get(edge, "")
+        configured_name = axis_names.get(edge, "")
+        source = configured_source or "normal_joint"
+        selected_name = ""
+        selected_direction = []
+        error = ""
+
+        if source == "normal_joint":
+            selected_name = effective_driver or \
+                _joint_source_name(joint) or edge
+        elif source == "top_level_reference_axis":
+            selected_name = configured_name
+            axis = top_axes.get(selected_name)
+            if not selected_name:
+                error = "no top-level reference axis is selected"
+            elif axis is None:
+                error = (f"top-level reference axis "
+                         f"'{selected_name}' is unavailable")
+            elif applies:
+                direction = root_from_cad[:3, :3] @ _np.asarray(
+                    axis.document_direction, float)
+                norm = float(_np.linalg.norm(direction))
+                if norm <= 1e-12:
+                    error = (f"top-level reference axis "
+                             f"'{selected_name}' has no direction")
+                else:
+                    selected_direction = [
+                        float(x) for x in direction / norm
+                    ]
+        else:
+            error = f"unknown collapsed joint axis source '{source}'"
+
+        choices.append({
+            "edge": edge,
+            "parent": driver.get("parent") or joint.get("parent", ""),
+            "child": driver.get("child") or joint.get("child", ""),
+            "joint_type": effective_type,
+            "applies": applies,
+            "configured_source": configured_source,
+            "configured_axis_name": configured_name,
+            "selected_axis_source": source if not error else "",
+            "selected_axis_name": selected_name,
+            "selected_axis_direction": selected_direction,
+            "normal_source_joint": effective_driver or
+                                   _joint_source_name(joint),
+            "selection": "manual" if configured_source else "default",
+            "resolved": not error,
+            "error": error,
+            "top_level_reference_axes": sorted(top_axes),
+        })
+    return choices
+
+
+def _add_joint_axis_validation(validation, axis_choices):
+    """Block collapsed URDF output only for unresolved active axis choices."""
+    issues = list(validation.get("issues") or [])
+    for choice in axis_choices:
+        if not choice.get("applies") or choice.get("resolved"):
+            continue
+        issues.append({
+            "severity": "error",
+            "code": "unresolved_reference_axis",
+            "joint": choice.get("edge"),
+            "parent": choice.get("parent"),
+            "child": choice.get("child"),
+            "axis_source": choice.get("configured_source") or
+                           "normal_joint",
+            "axis_name": choice.get("configured_axis_name") or
+                         choice.get("selected_axis_name"),
+            "message": choice.get("error") or
+                       "the selected reference axis could not be resolved",
+        })
+    return {
+        "ok": not any(issue.get("severity") == "error" for issue in issues),
+        "issue_count": len(issues),
+        "issues": issues,
+    }
 
 
 def _collapse_driver_joint_choices(joints, current_joints, collapsed,
@@ -2106,19 +2586,33 @@ def _validate_collapsed_tree(base_link, links, joints, collapsed,
                     f"{stale_origin_link}"),
             })
         selected_origin_link = sub.get("selected_origin_link")
+        explicit_frame_source = sub.get("selected_frame_source") in {
+            "subassembly_coordinate_system",
+            "top_level_coordinate_system",
+        }
+        resolved_explicit_frame = bool(
+            explicit_frame_source and sub.get("frame_resolved"))
         if len(comps) <= 1:
             continue
-        if selected_origin_link:
+        if selected_origin_link or resolved_explicit_frame:
+            frame_name = sub.get("selected_frame_name", "")
+            resolution = (
+                f"framed at {frame_name}"
+                if resolved_explicit_frame
+                else f"anchored at {selected_origin_link}"
+            )
             issues.append({
                 "severity": "info",
                 "code": "disconnected_members",
                 "subassembly": sub.get("name"),
                 "link": sub.get("link_name"),
                 "origin_link": selected_origin_link,
+                "frame_source": sub.get("selected_frame_source", ""),
+                "frame_name": frame_name,
                 "components": comps,
                 "message": (
                     f"{sub.get('name')} maps to {len(comps)} disconnected "
-                    f"member groups; anchored at {selected_origin_link}"),
+                    f"member groups; {resolution}"),
             })
         else:
             issues.append({
@@ -2167,7 +2661,8 @@ def _validate_collapsed_tree(base_link, links, joints, collapsed,
 
 def _collapse_plan_payload(base_link, links, joints, collapsed, collapse_link,
                            dropped_internal, dropped_parent_override,
-                           dropped_cycle, validation, driver_choices=None):
+                           dropped_cycle, validation, driver_choices=None,
+                           axis_choices=None):
     """Stable preview IR shared by the UI and future collapsed URDF output."""
     sub_by_link = {s.get("link_name"): s for s in collapsed}
     driver_by_sub = {
@@ -2195,6 +2690,10 @@ def _collapse_plan_payload(base_link, links, joints, collapsed, collapse_link,
                 **driver,
                 "source_joint": selected,
             }
+    axis_by_edge = {
+        choice.get("edge"): choice for choice in (axis_choices or [])
+        if choice.get("edge")
+    }
 
     def plan_link(row):
         link = row.get("link_name")
@@ -2212,6 +2711,14 @@ def _collapse_plan_payload(base_link, links, joints, collapsed, collapse_link,
             "selected_origin_link": sub.get("selected_origin_link", ""),
             "selected_origin_source": sub.get("selected_origin_source", ""),
             "configured_origin_link": sub.get("configured_origin_link", ""),
+            "configured_frame_source": sub.get(
+                "configured_frame_source", ""),
+            "configured_frame_name": sub.get("configured_frame_name", ""),
+            "selected_frame_source": sub.get("selected_frame_source", ""),
+            "selected_frame_name": sub.get("selected_frame_name", ""),
+            "selected_frame_transform": list(
+                sub.get("selected_frame_transform") or []),
+            "frame_selection": sub.get("frame_selection", ""),
             "selected_driver_joint": sub.get("selected_driver_joint", ""),
         }
 
@@ -2232,6 +2739,21 @@ def _collapse_plan_payload(base_link, links, joints, collapsed, collapse_link,
                 "driver_source_kind": driver.get("source_kind", ""),
                 "driver_type": driver.get("type", ""),
             })
+        axis = axis_by_edge.get(out["name"])
+        if axis:
+            out.update({
+                "configured_axis_source": axis.get(
+                    "configured_source", ""),
+                "configured_axis_name": axis.get(
+                    "configured_axis_name", ""),
+                "selected_axis_source": axis.get(
+                    "selected_axis_source", ""),
+                "selected_axis_name": axis.get("selected_axis_name", ""),
+                "selected_axis_direction": list(
+                    axis.get("selected_axis_direction") or []),
+                "axis_selection": axis.get("selection", ""),
+                "axis_resolved": axis.get("resolved", False),
+            })
         return out
 
     dropped_joints = []
@@ -2243,6 +2765,18 @@ def _collapse_plan_payload(base_link, links, joints, collapsed, collapse_link,
     for row in dropped_cycle:
         dropped_joints.append(plan_joint(row, "dropped_cycle_break"))
 
+    planned_joints = []
+    seen_boundary_edges = set()
+    for row in joints:
+        edge = (row.get("parent"), row.get("child"))
+        if row.get("decision") == "kept_boundary":
+            if edge in seen_boundary_edges:
+                dropped_joints.append(plan_joint(
+                    row, "dropped_duplicate_boundary"))
+                continue
+            seen_boundary_edges.add(edge)
+        planned_joints.append(plan_joint(row))
+
     blocking_issue_count = sum(
         issue.get("severity") != "info"
         for issue in (validation.get("issues") or []))
@@ -2253,7 +2787,7 @@ def _collapse_plan_payload(base_link, links, joints, collapsed, collapse_link,
         "ready_for_urdf": blocking_issue_count == 0,
         "blocking_issue_count": blocking_issue_count,
         "links": [plan_link(row) for row in links],
-        "joints": [plan_joint(row) for row in joints],
+        "joints": planned_joints,
         "dropped_joints": dropped_joints,
         "collapsed_subassemblies": [{
             "name": s.get("name"),
@@ -2264,6 +2798,14 @@ def _collapse_plan_payload(base_link, links, joints, collapsed, collapse_link,
             "selected_origin_link": s.get("selected_origin_link", ""),
             "selected_origin_source": s.get("selected_origin_source", ""),
             "configured_origin_link": s.get("configured_origin_link", ""),
+            "configured_frame_source": s.get(
+                "configured_frame_source", ""),
+            "configured_frame_name": s.get("configured_frame_name", ""),
+            "selected_frame_source": s.get("selected_frame_source", ""),
+            "selected_frame_name": s.get("selected_frame_name", ""),
+            "selected_frame_transform": list(
+                s.get("selected_frame_transform") or []),
+            "frame_selection": s.get("frame_selection", ""),
             "selected_driver_joint": s.get("selected_driver_joint", ""),
             "auto_driver_joint": driver_by_sub.get(
                 s.get("name"), {}).get("auto_driver_joint", ""),
@@ -2271,6 +2813,7 @@ def _collapse_plan_payload(base_link, links, joints, collapsed, collapse_link,
                 s.get("name"), {}).get("candidates", []),
         } for s in collapsed],
         "driver_joint_choices": list(driver_choices or []),
+        "joint_axis_choices": list(axis_choices or []),
         "link_replacements": [
             {"source_link": src, "collapsed_link": dst}
             for src, dst in sorted(collapse_link.items())
@@ -2462,6 +3005,10 @@ def _collapsed_preview_urdf_text(urdf_text, plan, robot_name=None,
         return None, link_poses
 
     def collapsed_pose(plan_link):
+        selected_frame = list(
+            plan_link.get("selected_frame_transform") or [])
+        if len(selected_frame) == 16:
+            return _np.asarray(selected_frame, float).reshape(4, 4)
         selected = plan_link.get("selected_origin_link")
         candidates = ([selected] if selected else []) + \
             list(plan_link.get("member_links") or [])
@@ -2541,7 +3088,16 @@ def _collapsed_preview_urdf_text(urdf_text, plan, robot_name=None,
             src_ce = src.find("child")
             src_child = src_ce.get("link") if src_ce is not None else ""
         src_child_T = src_link_poses.get(src_child)
-        if axis_elem is not None and src_child_T is not None:
+        selected_axis = list(row.get("selected_axis_direction") or [])
+        if len(selected_axis) == 3 and joint.get("type") in (
+                "revolute", "continuous", "prismatic"):
+            # Reference Joint axes are stored in the expanded URDF root frame.
+            # The official SolidWorks exporter expresses the selected RefAxis
+            # in the selected Reference Coordinate System, which is the child
+            # joint frame here.
+            world_axis = _np.asarray(selected_axis, float)
+            _set_urdf_axis(joint, child_T[:3, :3].T @ world_axis)
+        elif axis_elem is not None and src_child_T is not None:
             axis = _np.asarray(_urdf_vec(axis_elem.get("xyz"), 3), float)
             # Both source URDFs describe the zero pose with their root at the
             # identity, so their link poses share one world frame.  Convert the
@@ -5370,20 +5926,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                         c.get("edge"): c
                         for c in preview.get("driver_joint_choices", [])
                     }
-                    if edge not in choices:
-                        return self._send_json(
-                            {"error": f"'{edge}' is not a collapsed edge"},
-                            400)
-                    if source_joint:
-                        allowed = {
-                            c.get("source_joint")
-                            for c in choices.get(edge, {}).get("candidates", [])
-                        }
-                        if source_joint not in allowed:
-                            return self._send_json(
-                                {"error": f"'{source_joint}' is not a driver "
-                                          f"joint candidate for {edge}"},
-                                400)
+                    _validate_collapsed_driver_selection(
+                        choices.get(edge), edge, source_joint)
                     txt = _set_collapsed_driver_joint_yaml(
                         txt, edge, source_joint)
                 except ValueError as e:
@@ -5401,6 +5945,143 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                                 "rebuilt": False})
                 print(f"[sw2robot.web] set_collapsed_driver_joint: "
                       f"{edge} -> {label} (preview only)")
+                return self._send_json(payload)
+            if parsed.path == "/api/set_collapsed_preview_choices":
+                cls = type(self)
+                n = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(n) or b"{}")
+                frames = body.get("frames") or []
+                drivers = body.get("drivers") or []
+                axes = body.get("axes") or []
+                if (not isinstance(frames, list)
+                        or not isinstance(drivers, list)
+                        or not isinstance(axes, list)):
+                    return self._send_json(
+                        {"error": "frames, drivers, and axes must be lists"},
+                        400)
+                if len(frames) + len(drivers) + len(axes) > 10000:
+                    return self._send_json(
+                        {"error": "too many collapsed preview choices"}, 400)
+                if not cls.pkg_dir:
+                    return self._send_json({"error": "no package open"}, 400)
+                if not _cad_mode(cls.pkg_dir):
+                    return self._send_json(
+                        {"error": "collapsed coordinate choices need the CAD "
+                                  "graph.json"}, 400)
+                from sw2robot.exporter.state import GraphState
+                graph = GraphState.load(os.path.join(cls.pkg_dir, "graph.json"))
+                name = os.path.splitext(os.path.basename(cls.urdf_rel))[0]
+                yml = os.path.join(cls.pkg_dir, name + ".joints.yaml")
+                if not os.path.exists(yml):
+                    return self._send_json(
+                        {"error": "joints.yaml not found -- re-extract once"},
+                        400)
+                with open(yml, encoding="utf-8") as f:
+                    txt = f.read()
+                try:
+                    # The panel was built from this same payload, so this is
+                    # normally a cache hit.  Validate every staged selection
+                    # before changing the YAML, then rebuild the collapse
+                    # payload once after all choices have been applied.
+                    preview = _collapse_preview_payload_cached(
+                        cls.pkg_dir, graph, yml, txt, cls.urdf_rel)
+                    frame_choices = {
+                        choice.get("subassembly"): choice
+                        for choice in preview.get("frame_choices", [])
+                    }
+                    driver_choices = {
+                        choice.get("edge"): choice
+                        for choice in preview.get("driver_joint_choices", [])
+                    }
+                    axis_choices = {
+                        choice.get("edge"): choice
+                        for choice in preview.get("joint_axis_choices", [])
+                    }
+                    next_txt = txt
+                    seen_frames = set()
+                    for row in frames:
+                        if not isinstance(row, dict):
+                            raise ValueError("each frame choice must be a map")
+                        name_in = str(row.get("name") or "").strip()
+                        source = str(
+                            row.get("source") or "origin_link").strip()
+                        frame_name = str(
+                            row.get("frame_name") or "").strip()
+                        if not name_in:
+                            raise ValueError("frame choice name required")
+                        if name_in in seen_frames:
+                            raise ValueError(
+                                f"duplicate frame choice for '{name_in}'")
+                        seen_frames.add(name_in)
+                        _validate_subassembly_frame_selection(
+                            frame_choices.get(name_in), name_in, source,
+                            frame_name)
+                        next_txt = _set_subassembly_frame_yaml(
+                            next_txt, graph, name_in, source, frame_name)
+                    seen_drivers = set()
+                    for row in drivers:
+                        if not isinstance(row, dict):
+                            raise ValueError(
+                                "each driver choice must be a map")
+                        edge = str(row.get("edge") or "").strip()
+                        source_joint = str(
+                            row.get("source_joint") or "").strip()
+                        if not edge:
+                            raise ValueError("driver choice edge required")
+                        if edge in seen_drivers:
+                            raise ValueError(
+                                f"duplicate driver choice for '{edge}'")
+                        seen_drivers.add(edge)
+                        _validate_collapsed_driver_selection(
+                            driver_choices.get(edge), edge, source_joint)
+                        next_txt = _set_collapsed_driver_joint_yaml(
+                            next_txt, edge, source_joint)
+                    seen_axes = set()
+                    for row in axes:
+                        if not isinstance(row, dict):
+                            raise ValueError("each axis choice must be a map")
+                        edge = str(row.get("edge") or "").strip()
+                        source = str(
+                            row.get("source") or "normal_joint").strip()
+                        axis_name = str(
+                            row.get("axis_name") or "").strip()
+                        if not edge:
+                            raise ValueError("axis choice edge required")
+                        if edge in seen_axes:
+                            raise ValueError(
+                                f"duplicate axis choice for '{edge}'")
+                        seen_axes.add(edge)
+                        _validate_collapsed_joint_axis_selection(
+                            axis_choices.get(edge), edge, source, axis_name)
+                        next_txt = _set_collapsed_joint_axis_yaml(
+                            next_txt, edge, source, axis_name)
+                except ValueError as e:
+                    return self._send_json({"error": str(e)}, 400)
+
+                changed = next_txt != txt
+                if changed:
+                    _snapshot(
+                        cls.pkg_dir, yml,
+                        f"collapsed preview choices: {len(frames)} "
+                        f"frame(s), {len(drivers)} driver(s), "
+                        f"{len(axes)} axis/axes")
+                    with open(yml, "w", encoding="utf-8") as f:
+                        f.write(next_txt)
+                payload = _collapse_preview_payload_cached(
+                    cls.pkg_dir, graph, yml, next_txt, cls.urdf_rel)
+                payload.update({
+                    "ok": True,
+                    "frames_applied": len(frames),
+                    "drivers_applied": len(drivers),
+                    "axes_applied": len(axes),
+                    "changed": changed,
+                    "preview_only": True,
+                    "rebuilt": False,
+                })
+                print("[sw2robot.web] set_collapsed_preview_choices: "
+                      f"{len(frames)} frame(s), {len(drivers)} driver(s), "
+                      f"{len(axes)} axis/axes "
+                      f"(changed={changed}, preview only)")
                 return self._send_json(payload)
             if parsed.path == "/api/set_subassembly_cycle_break":
                 cls = type(self)

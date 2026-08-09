@@ -104,6 +104,35 @@ class LimitJoint(BaseModel):
     upper: float
 
 
+class CoordinateSystemState(BaseModel):
+    """A named SolidWorks coordinate system in its document frame.
+
+    ``document_from_frame`` is a row-major 4x4 matrix that maps coordinates
+    from this named frame into the owning ``.SLDASM`` document frame.  Using
+    one direction everywhere makes an instance frame simply
+    ``instance.world @ document_from_frame``.
+    """
+    name: str
+    document_from_frame: list[float]
+
+    def document_from_frame_matrix(self):
+        return np.array(self.document_from_frame, float).reshape(4, 4)
+
+
+class ReferenceAxisState(BaseModel):
+    """A named SolidWorks reference axis in its document frame.
+
+    SolidWorks exposes a reference axis as two points.  ``document_point`` is
+    one point on that line and ``document_direction`` follows the direction
+    convention used by the official SolidWorks URDF Exporter.  The collapsed
+    exporter currently consumes only the direction, but retaining the point
+    keeps the extracted CAD geometry complete for future diagnostics.
+    """
+    name: str
+    document_point: list[float]
+    document_direction: list[float]
+
+
 class SubGraph(BaseModel):
     """Internal structure of ONE sub-assembly part file, in ITS OWN frame.
 
@@ -113,6 +142,7 @@ class SubGraph(BaseModel):
     components: list[ComponentState] = []
     edges: list[MateEdge] = []
     ground: list[str] = []
+    coordinate_systems: list[CoordinateSystemState] = []
 
 
 class GraphState(BaseModel):
@@ -123,6 +153,13 @@ class GraphState(BaseModel):
     edges: list[MateEdge] = []
     ground: list[str] = []          # components mated to the assembly itself
     assembly_mesh: str | None = None
+    # Named coordinate systems authored directly in the top-level assembly.
+    # Their transforms are expressed in that assembly document's frame.
+    coordinate_systems: list[CoordinateSystemState] = []
+    # Named reference axes authored directly in the top-level assembly.  These
+    # correspond to the official SolidWorks URDF Exporter's Reference Joint
+    # choices and are intentionally separate from mate-derived joint axes.
+    reference_axes: list[ReferenceAxisState] = []
     # part_path -> internals (newer extracts; empty on graphs from older ones)
     subassemblies: dict[str, SubGraph] = {}
     # full nested Name2 ("inst-1/child-2/...") -> row-major 4x4 in the ROOT

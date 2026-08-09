@@ -32,10 +32,12 @@ from .geometry import (
 )
 from .state import (
     ComponentState,
+    CoordinateSystemState,
     GraphState,
     LimitJoint,
     MateEdge,
     MateGeo,
+    ReferenceAxisState,
     SubGraph,
 )
 from .swcom import as_iface, safe_call, safe_prop
@@ -2628,6 +2630,120 @@ def extract_graph(doc, robot_name, source_assembly, progress=None):
     return comps, adjacency, ground
 
 
+def _document_features(doc):
+    """Return every feature owned by ``doc``, with a legacy fallback.
+
+    ``FeatureManager.GetFeatures(False)`` is also what the official
+    SolidWorks URDF Exporter uses to populate its reference-geometry lists.  A
+    few test doubles and older COM wrappers do not expose FeatureManager, so
+    retain the top-level linked-list traversal as a fallback.
+    """
+    manager = as_iface(safe_prop(doc, "FeatureManager"), "IFeatureManager")
+    features = safe_call(manager, "GetFeatures", False) if manager else None
+    if features is not None:
+        return [as_iface(feature, "IFeature") for feature in list(features)]
+
+    out = []
+    feat = safe_call(doc, "FirstFeature")
+    guard = 0
+    while feat is not None and guard < 100000:
+        guard += 1
+        fi = as_iface(feat, "IFeature")
+        out.append(fi)
+        feat = safe_call(fi, "GetNextFeature")
+    return out
+
+
+def extract_coordinate_systems(doc):
+    """Return named ``CoordSys`` features in the owning document frame.
+
+    Use the same ``GetCoordinateSystemTransformByName`` result as the official
+    SolidWorks URDF Exporter and store it in the same column-vector convention
+    as ``ComponentState.world``.  Keeping both sources in one CAD-frame
+    convention lets the existing root-relative transform path handle them.
+
+    ``ICoordinateSystemFeatureData.Transform`` is retained as a fallback for
+    COM wrappers that do not expose ``IModelDocExtension``.
+    """
+    out = []
+    extension = as_iface(
+        safe_prop(doc, "Extension"), "IModelDocExtension")
+    for fi in _document_features(doc):
+        if safe_call(fi, "GetTypeName2") == "CoordSys":
+            name = safe_prop(fi, "Name") or ""
+            data = None
+            accessed = False
+            try:
+                transform = safe_call(
+                    extension, "GetCoordinateSystemTransformByName", name)
+                if transform is None:
+                    data = safe_call(fi, "GetDefinition")
+                    data = as_iface(data, "ICoordinateSystemFeatureData")
+                    # SolidWorks' examples access the feature selections before
+                    # reading Transform.  Some releases return the transform
+                    # without this call, but use the documented path here.
+                    accessed = bool(safe_call(
+                        data, "AccessSelections", doc, None))
+                    transform = safe_prop(data, "Transform")
+                if transform is None:
+                    raise ValueError("coordinate system has no Transform")
+                document_from_frame = transform_to_matrix(transform.ArrayData)
+                out.append(CoordinateSystemState(
+                    name=str(name),
+                    document_from_frame=[
+                        float(x) for x in document_from_frame.flatten()
+                    ]))
+            except Exception as e:
+                print(f"      WARN: coordinate system {name!r} could not be "
+                      f"read: {e!r}")
+            finally:
+                if accessed:
+                    safe_call(data, "ReleaseSelectionAccess")
+    if out:
+        print("      coordinate systems: " +
+              ", ".join(repr(c.name) for c in out))
+    return out
+
+
+def extract_reference_axes(doc):
+    """Return named top-level ``RefAxis`` features in the document frame.
+
+    ``IRefAxis.GetRefAxisParams`` returns ``start + end``.  The official
+    SolidWorks URDF Exporter computes ``start - end`` before localizing the
+    vector into the selected reference coordinate system, so preserve that
+    direction convention for compatible collapsed-joint output.
+    """
+    out = []
+    for fi in _document_features(doc):
+        if safe_call(fi, "GetTypeName2") != "RefAxis":
+            continue
+        name = str(safe_prop(fi, "Name") or "")
+        try:
+            axis = as_iface(safe_call(fi, "GetSpecificFeature2"), "IRefAxis")
+            params = np.asarray(
+                list(safe_call(axis, "GetRefAxisParams") or []), float)
+            if params.size < 6:
+                raise ValueError("reference axis has no start/end points")
+            start = params[:3]
+            end = params[3:6]
+            direction = start - end
+            norm = float(np.linalg.norm(direction))
+            if norm <= 1e-12:
+                raise ValueError("reference axis direction is degenerate")
+            out.append(ReferenceAxisState(
+                name=name,
+                document_point=[float(x) for x in start],
+                document_direction=[float(x) for x in direction / norm],
+            ))
+        except Exception as e:
+            print(f"      WARN: reference axis {name!r} could not be "
+                  f"read: {e!r}")
+    if out:
+        print("      reference axes: " +
+              ", ".join(repr(axis.name) for axis in out))
+    return out
+
+
 def extract_part_graph(doc, robot_name, part_path):
     """A single ``.SLDPRT`` -> the same ``(comps, adjacency, ground)`` triple
     ``extract_graph`` returns, but with exactly ONE component and no mates.
@@ -2793,16 +2909,23 @@ def _mate_edges(adjacency):
 
 def to_graph_state(comps, adjacency, ground, robot_name, source_assembly,
                    assembly_mesh=None, subassemblies=None, deep_worlds=None,
-                   hidden=None, limit_joints=None):
+                   hidden=None, limit_joints=None, coordinate_systems=None,
+                   subassembly_coordinate_systems=None, reference_axes=None):
     subs = {}
     for path, (scomps, sadj, sground) in (subassemblies or {}).items():
         subs[path] = SubGraph(components=_component_states(scomps),
                               edges=_mate_edges(sadj),
-                              ground=sorted(sground))
+                              ground=sorted(sground),
+                              coordinate_systems=list(
+                                  (subassembly_coordinate_systems or {})
+                                  .get(path, [])))
     return GraphState(robot_name=robot_name, source_assembly=source_assembly,
                       components=_component_states(comps),
                       edges=_mate_edges(adjacency), ground=sorted(ground),
-                      assembly_mesh=assembly_mesh, subassemblies=subs,
+                      assembly_mesh=assembly_mesh,
+                      coordinate_systems=list(coordinate_systems or []),
+                      reference_axes=list(reference_axes or []),
+                      subassemblies=subs,
                       deep_worlds=deep_worlds or {}, hidden=hidden or [],
                       limit_joints=[LimitJoint(**j) for j in
                                     (limit_joints or [])])
@@ -2836,7 +2959,8 @@ def capture_deep_worlds(doc):
     return out, hidden
 
 
-def extract_subgraphs(doc, comps, sw=None, progress=None):
+def extract_subgraphs(doc, comps, sw=None, progress=None,
+                      coordinate_systems_out=None):
     """{part_path: (comps, adjacency, ground)} for every unique sub-assembly
     appearing in ``comps``, RECURSIVELY (each sub-assembly's own internals in
     its own local frame).  Prefers the in-memory doc the parent resolved;
@@ -2895,6 +3019,8 @@ def extract_subgraphs(doc, comps, sw=None, progress=None):
         subcomps = extract_components(md, progress=progress)
         subadj, subground = build_mate_graph(md, subcomps)
         out[path] = (subcomps, subadj, subground)
+        if coordinate_systems_out is not None:
+            coordinate_systems_out[path] = extract_coordinate_systems(md)
         print(f"      sub-assembly {os.path.basename(path)}: "
               f"{len(subcomps)} children, {len(subadj)} internal mate pairs")
         live2 = {}

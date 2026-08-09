@@ -15,9 +15,11 @@ from test_classify_geo import O, Z, coinc_planes, conc, dup
 from sw2robot.exporter.model import build_model, from_graph
 from sw2robot.exporter.state import (
     ComponentState,
+    CoordinateSystemState,
     GraphState,
     MateEdge,
     MateGeo,
+    ReferenceAxisState,
     SubGraph,
 )
 
@@ -69,6 +71,31 @@ def make_graph():
                       components=[plate, inst], edges=[mount],
                       ground=["plate-1"],
                       subassemblies={"X:/fake/servo_unit.SLDASM": sub})
+
+
+def make_coordinate_frame_graph():
+    graph = make_graph()
+    sub_frame = np.eye(4)
+    sub_frame[:3, 3] = [0.0, 0.02, 0.03]
+    top_frame = np.eye(4)
+    top_frame[:3, :3] = np.array([
+        [0.0, -1.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0],
+    ])
+    top_frame[:3, 3] = [0.3, 0.4, 0.5]
+    graph.coordinate_systems = [CoordinateSystemState(
+        name="top_servo_frame",
+        document_from_frame=[float(x) for x in top_frame.flatten()])]
+    graph.reference_axes = [ReferenceAxisState(
+        name="fl_hip",
+        document_point=[0.3, 0.4, 0.5],
+        document_direction=[0.0, -1.0, 0.0])]
+    graph.subassemblies["X:/fake/servo_unit.SLDASM"].coordinate_systems = [
+        CoordinateSystemState(
+            name="servo_mount_frame",
+            document_from_frame=[float(x) for x in sub_frame.flatten()])]
+    return graph
 
 
 def _free_port():
@@ -430,7 +457,10 @@ subassembly_driver_joints:
             webserver._Handler.root_dir,
         ) = old_state
 def test_collapse_driver_joint_choices_are_unique_per_edge():
-    from sw2robot.editor.webserver import _collapse_driver_joint_choices
+    from sw2robot.editor.webserver import (
+        _collapse_driver_joint_choices,
+        _collapse_plan_payload,
+    )
 
     joints = [
         {"name": "parent__sub", "parent": "parent", "child": "sub",
@@ -455,6 +485,52 @@ def test_collapse_driver_joint_choices_are_unique_per_edge():
     assert len(choices) == 1
     assert choices[0]["edge"] == "parent__sub"
     assert choices[0]["auto_driver_joint"] == "parent__sub"
+
+    plan = _collapse_plan_payload(
+        "parent",
+        [{"link_name": "parent"},
+         {"link_name": "sub", "collapsed": True,
+          "member_links": ["sub__a", "sub__b"]}],
+        joints, collapsed, {"sub__a": "sub", "sub__b": "sub"},
+        [], [], [], {"issues": []}, choices)
+    assert [(row["parent"], row["child"]) for row in plan["joints"]] == [
+        ("parent", "sub")]
+    duplicate = next(
+        row for row in plan["dropped_joints"]
+        if row["decision"] == "dropped_duplicate_boundary")
+    assert duplicate["source_joint"] == "parent__sub__b"
+
+
+def test_collapse_preview_drops_duplicate_boundary_edges():
+    from sw2robot.editor.webserver import _collapse_preview_payload
+
+    payload = _collapse_preview_payload(
+        make_coordinate_frame_graph(), """
+base: plate-1
+no_expand:
+- servo
+subassembly_frame_sources:
+  servo-1: top_level_coordinate_system
+subassembly_frame_names:
+  servo-1: top_servo_frame
+joints:
+  - parent: plate-1
+    child:  servo-1/case-1
+    type:   fixed
+  - parent: plate-1
+    child:  servo-1/horn-1
+    type:   fixed
+""")
+
+    plan = payload["collapse_plan"]
+    assert [(row["parent"], row["child"]) for row in plan["joints"]] == [
+        ("plate_1", "servo_1")]
+    assert payload["preview_counts"] == {"links": 2, "joints": 1}
+    duplicates = [
+        row for row in plan["dropped_joints"]
+        if row["decision"] == "dropped_duplicate_boundary"]
+    assert len(duplicates) == 1
+    assert plan["ready_for_urdf"] is True
 
 
 def test_collapse_driver_joint_fuzzy_matches_require_explicit_selection():
@@ -657,6 +733,504 @@ subassembly_origin_links:
         i for i in payload["validation"]["issues"]
         if i["code"] == "invalid_origin_link")
     assert issue["origin_link"] == "missing_link"
+
+
+def test_collapse_preview_resolves_all_three_coordinate_frame_options():
+    from sw2robot.editor.webserver import _collapse_preview_payload
+
+    graph = make_coordinate_frame_graph()
+    base_txt = "base: plate-1\nno_expand:\n- servo\n"
+
+    representative = _collapse_preview_payload(graph, base_txt)
+    choice = representative["frame_choices"][0]
+    assert choice["selected_frame_source"] == "origin_link"
+    assert choice["selected_frame_name"] == "servo_1__case_1"
+    assert choice["selection"] == "auto"
+    assert choice["resolved"] is True
+    representative_T = np.asarray(
+        choice["selected_frame_transform"]).reshape(4, 4)
+    assert np.allclose(representative_T[:3, 3], [0.1, 0.0, 0.0])
+
+    subassembly_txt = base_txt + """
+subassembly_frame_sources:
+  servo-1: subassembly_coordinate_system
+subassembly_frame_names:
+  servo-1: servo_mount_frame
+"""
+    subassembly = _collapse_preview_payload(graph, subassembly_txt)
+    choice = subassembly["frame_choices"][0]
+    assert choice["selected_frame_source"] == \
+        "subassembly_coordinate_system"
+    assert choice["selected_frame_name"] == "servo_mount_frame"
+    subassembly_T = np.asarray(
+        choice["selected_frame_transform"]).reshape(4, 4)
+    assert np.allclose(subassembly_T[:3, 3], [0.1, 0.02, 0.03])
+
+    top_txt = base_txt + """
+subassembly_frame_sources:
+  servo-1: top_level_coordinate_system
+subassembly_frame_names:
+  servo-1: top_servo_frame
+"""
+    top = _collapse_preview_payload(graph, top_txt)
+    choice = top["frame_choices"][0]
+    assert choice["selected_frame_source"] == "top_level_coordinate_system"
+    assert choice["selected_frame_name"] == "top_servo_frame"
+    top_T = np.asarray(choice["selected_frame_transform"]).reshape(4, 4)
+    assert np.allclose(top_T[:3, 3], [0.3, 0.4, 0.5])
+    assert np.allclose(top_T[:3, :3], np.array([
+        [0.0, -1.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0],
+    ]))
+    plan_link = next(
+        row for row in top["collapse_plan"]["links"]
+        if row["link"] == "servo_1")
+    assert plan_link["configured_frame_source"] == \
+        "top_level_coordinate_system"
+    assert plan_link["selected_frame_name"] == "top_servo_frame"
+    assert plan_link["selected_frame_transform"] == \
+        choice["selected_frame_transform"]
+
+
+def test_collapse_frame_choices_reuse_normal_root_transform():
+    from sw2robot.editor.webserver import _collapse_frame_choices
+
+    graph = make_coordinate_frame_graph()
+    instance = next(c for c in graph.components if c.name == "servo-1")
+    cad_from_subassembly = np.eye(4)
+    cad_from_subassembly[:3, :3] = np.array([
+        [0.0, -1.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0],
+    ])
+    cad_from_subassembly[:3, 3] = [0.8, -0.4, 0.2]
+    instance.world = [float(x) for x in cad_from_subassembly.flatten()]
+
+    normal_root_from_cad = np.eye(4)
+    normal_root_from_cad[:3, :3] = np.array([
+        [-1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, -1.0],
+    ])
+    normal_root_from_cad[:3, 3] = [0.3, 0.1, -0.2]
+    canonical = {
+        "root_from_cad": [
+            float(x) for x in normal_root_from_cad.flatten()],
+        "link_frames": {},
+    }
+    collapsed = [{
+        "name": "servo-1",
+        "link_name": "servo_1",
+        "member_links": ["servo_1__case_1"],
+    }]
+
+    local_choice = _collapse_frame_choices(
+        graph, collapsed, canonical,
+        {"servo-1": "subassembly_coordinate_system"},
+        {"servo-1": "servo_mount_frame"},
+    )[0]
+    local_frame = graph.subassemblies[
+        instance.part_path].coordinate_systems[0].document_from_frame_matrix()
+    assert np.asarray(local_choice["selected_frame_transform"]).reshape(
+        4, 4) == pytest.approx(
+            normal_root_from_cad @ cad_from_subassembly @ local_frame)
+
+    top_choice = _collapse_frame_choices(
+        graph, collapsed, canonical,
+        {"servo-1": "top_level_coordinate_system"},
+        {"servo-1": "top_servo_frame"},
+    )[0]
+    top_frame = graph.coordinate_systems[0].document_from_frame_matrix()
+    assert np.asarray(top_choice["selected_frame_transform"]).reshape(
+        4, 4) == pytest.approx(normal_root_from_cad @ top_frame)
+
+
+def test_resolved_cad_frame_unblocks_disconnected_member_groups():
+    from sw2robot.editor.webserver import _collapse_preview_payload
+
+    graph = make_coordinate_frame_graph()
+    graph.components.append(
+        _comp("bracket-1", "bracket_1", xyz=(0.0, 0.1, 0.0)))
+    payload = _collapse_preview_payload(graph, """
+base: plate-1
+no_expand:
+- servo
+subassembly_parent_overrides:
+  servo-1: bracket_1
+subassembly_frame_sources:
+  servo-1: top_level_coordinate_system
+subassembly_frame_names:
+  servo-1: top_servo_frame
+joints:
+  - parent: plate-1
+    child:  servo-1/case-1
+    type:   fixed
+  - parent: bracket-1
+    child:  servo-1/horn-1
+    type:   fixed
+  - parent: plate-1
+    child:  bracket-1
+    type:   fixed
+""")
+
+    issue = next(
+        row for row in payload["validation"]["issues"]
+        if row["code"] == "disconnected_members")
+    assert issue["severity"] == "info"
+    assert issue["origin_link"] == ""
+    assert issue["frame_source"] == "top_level_coordinate_system"
+    assert issue["frame_name"] == "top_servo_frame"
+    assert "framed at top_servo_frame" in issue["message"]
+    assert payload["collapse_plan"]["ready_for_urdf"] is True
+    assert payload["collapse_plan"]["blocking_issue_count"] == 0
+
+
+def test_missing_saved_coordinate_frame_blocks_preview_urdf():
+    from sw2robot.editor.webserver import _collapse_preview_payload
+
+    payload = _collapse_preview_payload(
+        make_coordinate_frame_graph(), """
+base: plate-1
+no_expand:
+- servo
+subassembly_frame_sources:
+  servo-1: top_level_coordinate_system
+subassembly_frame_names:
+  servo-1: removed_frame
+""")
+
+    choice = payload["frame_choices"][0]
+    assert choice["resolved"] is False
+    assert "removed_frame" in choice["error"]
+    issue = next(
+        row for row in payload["validation"]["issues"]
+        if row["code"] == "unresolved_coordinate_frame")
+    assert issue["severity"] == "error"
+    assert issue["frame_name"] == "removed_frame"
+    assert payload["collapse_plan"]["ready_for_urdf"] is False
+
+
+def test_set_subassembly_frame_yaml_preserves_origin_link_choice():
+    from sw2robot.editor.webserver import (
+        _set_subassembly_frame_yaml,
+        _subassembly_frame_names,
+        _subassembly_frame_sources,
+        _subassembly_origin_links,
+    )
+
+    graph = make_coordinate_frame_graph()
+    txt = _set_subassembly_frame_yaml(
+        "", graph, "servo-1", "origin_link", "servo_1__horn_1")
+    assert _subassembly_origin_links(txt) == {
+        "servo-1": "servo_1__horn_1"
+    }
+
+    txt = _set_subassembly_frame_yaml(
+        txt, graph, "servo-1", "subassembly_coordinate_system",
+        "servo_mount_frame")
+    assert _subassembly_frame_sources(txt) == {
+        "servo-1": "subassembly_coordinate_system"
+    }
+    assert _subassembly_frame_names(txt) == {
+        "servo-1": "servo_mount_frame"
+    }
+    assert _subassembly_origin_links(txt) == {
+        "servo-1": "servo_1__horn_1"
+    }
+
+    txt = _set_subassembly_frame_yaml(
+        txt, graph, "servo-1", "origin_link", "")
+    assert _subassembly_frame_sources(txt) == {}
+    assert _subassembly_frame_names(txt) == {}
+    assert _subassembly_origin_links(txt) == {}
+
+
+def test_collapse_preview_resolves_top_level_reference_joint_axis():
+    from sw2robot.editor.webserver import _collapse_preview_payload
+
+    current_joints = [{
+        "name": "plate_1__servo_1",
+        "parent": "plate_1",
+        "child": "servo_1",
+        "type": "revolute",
+    }]
+    payload = _collapse_preview_payload(
+        make_coordinate_frame_graph(), """
+base: plate-1
+no_expand:
+- servo
+collapsed_joint_axis_sources:
+  plate_1__servo_1: top_level_reference_axis
+collapsed_joint_axis_names:
+  plate_1__servo_1: fl_hip
+""", current_joints=current_joints)
+
+    choice = payload["joint_axis_choices"][0]
+    assert choice["edge"] == "plate_1__servo_1"
+    assert choice["joint_type"] == "revolute"
+    assert choice["applies"] is True
+    assert choice["selected_axis_source"] == "top_level_reference_axis"
+    assert choice["selected_axis_name"] == "fl_hip"
+    assert choice["selected_axis_direction"] == pytest.approx(
+        [0.0, -1.0, 0.0])
+    plan_joint = payload["collapse_plan"]["joints"][0]
+    assert plan_joint["configured_axis_source"] == \
+        "top_level_reference_axis"
+    assert plan_joint["selected_axis_name"] == "fl_hip"
+    assert plan_joint["selected_axis_direction"] == pytest.approx(
+        [0.0, -1.0, 0.0])
+
+
+def test_missing_reference_joint_axis_blocks_collapsed_urdf():
+    from sw2robot.editor.webserver import _collapse_preview_payload
+
+    current_joints = [{
+        "name": "plate_1__servo_1",
+        "parent": "plate_1",
+        "child": "servo_1",
+        "type": "revolute",
+    }]
+    payload = _collapse_preview_payload(
+        make_coordinate_frame_graph(), """
+base: plate-1
+no_expand:
+- servo
+collapsed_joint_axis_sources:
+  plate_1__servo_1: top_level_reference_axis
+collapsed_joint_axis_names:
+  plate_1__servo_1: removed_axis
+""", current_joints=current_joints)
+
+    issue = next(
+        row for row in payload["validation"]["issues"]
+        if row["code"] == "unresolved_reference_axis")
+    assert issue["joint"] == "plate_1__servo_1"
+    assert issue["axis_name"] == "removed_axis"
+    assert payload["collapse_plan"]["ready_for_urdf"] is False
+
+
+def test_reference_joint_axes_only_cover_collapsed_boundary_edges():
+    from sw2robot.editor.webserver import _collapse_preview_payload
+
+    graph = make_coordinate_frame_graph()
+    graph.components.append(
+        _comp("bracket-1", "bracket_1", xyz=(0.0, 0.1, 0.0)))
+    graph.edges.append(_edge(
+        "plate-1", "bracket-1",
+        dup(conc([0.0, 0.1, 0.0], Z))))
+    current_joints = [
+        {
+            "name": "plate_1__servo_1",
+            "parent": "plate_1",
+            "child": "servo_1",
+            "type": "revolute",
+        },
+        {
+            "name": "plate_1__bracket_1",
+            "parent": "plate_1",
+            "child": "bracket_1",
+            "type": "revolute",
+        },
+    ]
+
+    payload = _collapse_preview_payload(
+        graph, "base: plate-1\nno_expand:\n- servo\n",
+        current_joints=current_joints)
+
+    driver_edges = {
+        choice["edge"] for choice in payload["driver_joint_choices"]
+    }
+    axis_edges = {
+        choice["edge"] for choice in payload["joint_axis_choices"]
+    }
+    assert driver_edges == {"plate_1__servo_1"}
+    assert axis_edges == driver_edges
+    assert "plate_1__bracket_1" not in axis_edges
+
+
+def test_set_collapsed_joint_axis_yaml_is_isolated_from_normal_joint():
+    from sw2robot.editor.webserver import (
+        _collapsed_joint_axis_names,
+        _collapsed_joint_axis_sources,
+        _set_collapsed_joint_axis_yaml,
+    )
+
+    txt = "joints:\n- parent: base\n  child: arm\n  type: revolute\n"
+    txt = _set_collapsed_joint_axis_yaml(
+        txt, "base__arm", "top_level_reference_axis", "fl_hip")
+    assert _collapsed_joint_axis_sources(txt) == {
+        "base__arm": "top_level_reference_axis"
+    }
+    assert _collapsed_joint_axis_names(txt) == {"base__arm": "fl_hip"}
+    assert "axis_dir" not in txt
+    assert "parent: base" in txt
+
+    txt = _set_collapsed_joint_axis_yaml(
+        txt, "base__arm", "normal_joint")
+    assert _collapsed_joint_axis_sources(txt) == {}
+    assert _collapsed_joint_axis_names(txt) == {}
+    assert "parent: base" in txt
+
+
+def test_set_collapsed_preview_choices_endpoint_applies_atomically(tmp_path):
+    from sw2robot.editor import webserver
+
+    graph = make_coordinate_frame_graph()
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "urdf").mkdir()
+    graph.save(pkg / "graph.json")
+    yml = pkg / "t.joints.yaml"
+    yml.write_text(
+        "base: plate-1\nno_expand:\n- servo\n", encoding="utf-8")
+    (pkg / "urdf" / "t.urdf").write_text("""<robot name="t">
+  <link name="plate_1"/><link name="servo_1"/>
+  <joint name="plate_1__servo_1" type="revolute">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <parent link="plate_1"/><child link="servo_1"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-1" upper="1" effort="1" velocity="1"/>
+  </joint>
+</robot>
+""", encoding="utf-8")
+
+    old_state = (
+        webserver._Handler.pkg_dir,
+        webserver._Handler.urdf_rel,
+        webserver._Handler.robot_name,
+        webserver._Handler.root_dir,
+    )
+    webserver._Handler.pkg_dir = str(pkg)
+    webserver._Handler.urdf_rel = "urdf/t.urdf"
+    webserver._Handler.robot_name = "t"
+    webserver._Handler.root_dir = str(pkg)
+    httpd, port = webserver._bind_free_port(
+        webserver._Handler, _free_port())
+    httpd.daemon_threads = True
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        base = f"http://127.0.0.1:{port}"
+        code, payload = _post_json(
+            base, "/api/set_collapsed_preview_choices", {
+                "frames": [{
+                    "name": "servo-1",
+                    "source": "top_level_coordinate_system",
+                    "frame_name": "top_servo_frame",
+                }],
+                "drivers": [{
+                    "edge": "plate_1__servo_1",
+                    "source_joint": "plate_1__servo_1",
+                }],
+                "axes": [{
+                    "edge": "plate_1__servo_1",
+                    "source": "top_level_reference_axis",
+                    "axis_name": "fl_hip",
+                }],
+            })
+        assert code == 200
+        assert payload["ok"] is True
+        assert payload["frames_applied"] == 1
+        assert payload["drivers_applied"] == 1
+        assert payload["axes_applied"] == 1
+        assert payload["frame_choices"][0]["selected_frame_name"] == \
+            "top_servo_frame"
+        assert payload["joint_axis_choices"][0]["selected_axis_name"] == \
+            "fl_hip"
+        saved = yml.read_text(encoding="utf-8")
+        assert "servo-1: top_level_coordinate_system" in saved
+        assert "servo-1: top_servo_frame" in saved
+        assert "collapsed_driver_joints:" in saved
+        assert "plate_1__servo_1: plate_1__servo_1" in saved
+        assert "plate_1__servo_1: top_level_reference_axis" in saved
+        assert "plate_1__servo_1: fl_hip" in saved
+
+        code, payload = _post_json(
+            base, "/api/set_collapsed_preview_choices", {
+                "drivers": [{
+                    "edge": "plate_1__servo_1",
+                    "source_joint": "",
+                }],
+            })
+        assert code == 200
+        assert payload["frames_applied"] == 0
+        assert payload["drivers_applied"] == 1
+        assert payload["axes_applied"] == 0
+        saved_after_driver = yml.read_text(encoding="utf-8")
+        assert "collapsed_driver_joints:" not in saved_after_driver
+        assert "servo-1: top_level_coordinate_system" in saved_after_driver
+        assert "servo-1: top_servo_frame" in saved_after_driver
+        assert "plate_1__servo_1: top_level_reference_axis" in \
+            saved_after_driver
+        assert "plate_1__servo_1: fl_hip" in saved_after_driver
+
+        before_invalid = saved_after_driver
+        code, payload = _post_json(
+            base, "/api/set_collapsed_preview_choices", {
+                "frames": [{
+                    "name": "servo-1",
+                    "source": "origin_link",
+                    "frame_name": "",
+                }],
+                "axes": [{
+                    "edge": "plate_1__servo_1",
+                    "source": "top_level_reference_axis",
+                    "axis_name": "not_in_cad",
+                }],
+            })
+        assert code == 400
+        assert "not a top-level reference axis candidate" in \
+            payload["error"]
+        assert yml.read_text(encoding="utf-8") == before_invalid
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        (
+            webserver._Handler.pkg_dir,
+            webserver._Handler.urdf_rel,
+            webserver._Handler.robot_name,
+            webserver._Handler.root_dir,
+        ) = old_state
+
+
+def test_collapsed_coordinate_choices_do_not_change_normal_model():
+    base_config = {
+        "base": "plate-1",
+        "expand": [""],
+    }
+    with_preview_choices = {
+        **base_config,
+        "subassembly_frame_sources": {
+            "servo-1": "top_level_coordinate_system",
+        },
+        "subassembly_frame_names": {
+            "servo-1": "top_servo_frame",
+        },
+        "collapsed_joint_axis_sources": {
+            "plate_1__servo_1__case_1": "top_level_reference_axis",
+        },
+        "collapsed_joint_axis_names": {
+            "plate_1__servo_1__case_1": "fl_hip",
+        },
+    }
+
+    normal = build_model(make_coordinate_frame_graph(), config=base_config)
+    configured = build_model(
+        make_coordinate_frame_graph(), config=with_preview_choices)
+
+    assert normal.base_link == configured.base_link
+    assert [component.name for component in normal.components] == \
+        [component.name for component in configured.components]
+    assert len(normal.joints) == len(configured.joints)
+    for expected, actual in zip(normal.joints, configured.joints, strict=True):
+        assert (expected.name, expected.parent, expected.child,
+                expected.jtype) == \
+            (actual.name, actual.parent, actual.child, actual.jtype)
+        assert np.allclose(expected.xyz, actual.xyz)
+        assert np.allclose(expected.rpy, actual.rpy)
+        assert np.allclose(expected.axis, actual.axis)
+        assert (expected.lower, expected.upper) == \
+            (actual.lower, actual.upper)
 
 
 def test_set_subassembly_origin_link_rejects_non_candidate(tmp_path):
@@ -1045,6 +1619,167 @@ def test_collapsed_preview_urdf_lumps_member_visuals():
     assert base_sub.find("origin").get("xyz") == "1 0 0"
     assert base_sub.find("axis").get("xyz") == "0 0 1"
     assert base_sub.find("limit").get("lower") == "-0.5"
+
+
+def test_collapsed_preview_urdf_uses_selected_coordinate_frame():
+    import xml.etree.ElementTree as ET
+
+    from sw2robot.editor.webserver import (
+        _collapsed_preview_urdf_text,
+        _urdf_origin_matrix,
+    )
+
+    expanded_urdf = """<robot name="demo">
+  <link name="base"/>
+  <link name="member">
+    <visual><origin xyz="0.25 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="../meshes/member.stl"/></geometry></visual>
+  </link>
+  <joint name="base__member" type="fixed">
+    <origin xyz="1 0 0" rpy="0 0 0"/>
+    <parent link="base"/><child link="member"/>
+  </joint>
+</robot>
+"""
+    normal_urdf = """<robot name="demo">
+  <link name="base"/>
+  <link name="normal_child"/>
+  <joint name="normal_driver" type="revolute">
+    <origin xyz="1 0 0" rpy="0 0 0"/>
+    <axis xyz="1 0 0"/>
+    <parent link="base"/><child link="normal_child"/>
+    <limit lower="-1" upper="1" effort="1" velocity="1"/>
+  </joint>
+</robot>
+"""
+    selected_frame = np.eye(4)
+    selected_frame[:3, :3] = np.array([
+        [0.0, -1.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0],
+    ])
+    selected_frame[:3, 3] = [0.5, 0.0, 0.0]
+    plan = {
+        "version": 1,
+        "base_link": "base",
+        "ready_for_urdf": True,
+        "links": [
+            {"link": "base", "name": "base", "kind": "expanded_link"},
+            {"link": "sub", "name": "sub",
+             "kind": "collapsed_subassembly",
+             "member_links": ["member"],
+             "selected_origin_link": "member",
+             "selected_frame_transform": [
+                 float(x) for x in selected_frame.flatten()],
+             },
+        ],
+        "joints": [{
+            "name": "base__sub", "parent": "base", "child": "sub",
+            "type": "fixed", "source_joint": "base__member",
+            "driver_source_joint": "normal_driver",
+            "driver_type": "revolute", "decision": "kept_boundary",
+        }],
+        "dropped_joints": [],
+        "collapsed_subassemblies": [],
+        "link_replacements": [
+            {"source_link": "member", "collapsed_link": "sub"},
+        ],
+    }
+
+    root = ET.fromstring(_collapsed_preview_urdf_text(
+        expanded_urdf, plan, driver_urdf_text=normal_urdf))
+    joint = next(j for j in root.findall("joint")
+                 if j.get("name") == "base__sub")
+    sub = next(link for link in root.findall("link")
+               if link.get("name") == "sub")
+    visual = sub.find("visual")
+
+    joint_T = _urdf_origin_matrix(joint.find("origin"))
+    visual_T = _urdf_origin_matrix(visual.find("origin"))
+    original_mesh_T = np.eye(4)
+    original_mesh_T[:3, 3] = [1.25, 0.0, 0.0]
+    assert joint_T == pytest.approx(selected_frame, abs=1e-6)
+    assert joint_T @ visual_T == pytest.approx(original_mesh_T, abs=1e-6)
+    axis = np.asarray([
+        float(v) for v in joint.find("axis").get("xyz").split()
+    ])
+    assert axis == pytest.approx([0.0, -1.0, 0.0], abs=1e-9)
+
+
+def test_collapsed_preview_urdf_uses_top_reference_axis_direction():
+    import xml.etree.ElementTree as ET
+
+    from sw2robot.editor.webserver import (
+        _collapsed_preview_urdf_text,
+        _urdf_origin_matrix,
+    )
+
+    expanded_urdf = """<robot name="demo">
+  <link name="base"/><link name="member"/>
+  <joint name="base__member" type="fixed">
+    <origin xyz="1 0 0" rpy="0 0 0"/>
+    <parent link="base"/><child link="member"/>
+  </joint>
+</robot>
+"""
+    normal_urdf = """<robot name="demo">
+  <link name="base"/><link name="normal_child"/>
+  <joint name="normal_driver" type="revolute">
+    <origin xyz="1 0 0" rpy="0 0 0"/>
+    <axis xyz="1 0 0"/>
+    <parent link="base"/><child link="normal_child"/>
+    <limit lower="-1" upper="1" effort="1" velocity="1"/>
+  </joint>
+</robot>
+"""
+    selected_frame = np.eye(4)
+    selected_frame[:3, :3] = np.array([
+        [0.0, -1.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0],
+    ])
+    selected_frame[:3, 3] = [0.5, 0.0, 0.0]
+    plan = {
+        "version": 1,
+        "base_link": "base",
+        "ready_for_urdf": True,
+        "links": [
+            {"link": "base", "name": "base", "kind": "expanded_link"},
+            {"link": "sub", "name": "sub",
+             "kind": "collapsed_subassembly",
+             "member_links": ["member"],
+             "selected_frame_transform": [
+                 float(x) for x in selected_frame.flatten()]},
+        ],
+        "joints": [{
+            "name": "base__sub", "parent": "base", "child": "sub",
+            "type": "fixed", "source_joint": "base__member",
+            "driver_source_joint": "normal_driver",
+            "driver_type": "revolute",
+            "selected_axis_source": "top_level_reference_axis",
+            "selected_axis_name": "fl_hip",
+            # Top/root-frame +Y becomes child-frame +X after the +90deg Z frame.
+            "selected_axis_direction": [0.0, 1.0, 0.0],
+            "decision": "kept_boundary",
+        }],
+        "dropped_joints": [],
+        "collapsed_subassemblies": [],
+        "link_replacements": [
+            {"source_link": "member", "collapsed_link": "sub"},
+        ],
+    }
+
+    root = ET.fromstring(_collapsed_preview_urdf_text(
+        expanded_urdf, plan, driver_urdf_text=normal_urdf))
+    joint = root.find("joint")
+
+    assert joint.get("type") == "revolute"
+    # A Reference Axis supplies direction only. The collapsed child frame is
+    # still the joint origin, matching the official SolidWorks exporter.
+    assert _urdf_origin_matrix(joint.find("origin")) == pytest.approx(
+        selected_frame, abs=1e-7)
+    assert joint.find("axis").get("xyz") == "1 0 0"
+    assert joint.find("limit").get("lower") == "-1"
 
 
 def test_collapsed_preview_urdf_maps_canonical_base_origin_to_urdf_root():
