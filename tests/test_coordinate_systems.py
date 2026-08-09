@@ -7,6 +7,11 @@ from sw2robot.exporter.model import (
     extract_reference_axes,
     to_graph_state,
 )
+from sw2robot.exporter.state import (
+    CoordinateSystemState,
+    GraphState,
+    ReferenceAxisState,
+)
 
 
 class _Transform:
@@ -42,6 +47,16 @@ class _DocumentExtension:
 
     def GetCoordinateSystemTransformByName(self, name):
         return self._transforms.get(name)
+
+
+class _FeatureManager:
+    def __init__(self, features):
+        self._features = features
+        self.top_only_args = []
+
+    def GetFeatures(self, top_only):
+        self.top_only_args.append(top_only)
+        return self._features
 
 
 class _Feature:
@@ -131,12 +146,87 @@ def test_extract_coordinate_systems_feature_transform_fallback_is_direct(
     assert data.released is True
 
 
+def test_feature_manager_enumerates_reference_geometry(monkeypatch):
+    monkeypatch.setattr(model, "as_iface", lambda obj, _name: obj)
+    coordinate = np.eye(4)
+    coordinate[:3, 3] = [0.1, 0.2, 0.3]
+    features = [
+        _Feature("frame", "CoordSys"),
+        _Feature("axis", "RefAxis", _ReferenceAxis([
+            0.1, 0.2, 0.3,
+            0.1, 0.2, 0.4,
+        ])),
+    ]
+    manager = _FeatureManager(features)
+    doc = _Document([], coordinate_transforms={
+        "frame": _Transform(_sw_transform(coordinate)),
+    })
+    doc.FeatureManager = manager
+
+    frames = extract_coordinate_systems(doc)
+    axes = extract_reference_axes(doc)
+
+    assert [frame.name for frame in frames] == ["frame"]
+    assert [axis.name for axis in axes] == ["axis"]
+    assert manager.top_only_args == [False, False]
+
+
 def test_graph_coordinate_system_fields_are_backward_compatible():
     graph = to_graph_state([], {}, [], "robot", "robot.SLDASM")
 
     assert graph.coordinate_systems == []
     assert graph.reference_axes == []
     assert graph.subassemblies == {}
+
+    legacy = GraphState.model_validate({
+        "robot_name": "legacy",
+        "source_assembly": "legacy.SLDASM",
+        "subassemblies": {
+            "legacy-sub.SLDASM": {
+                "components": [],
+                "edges": [],
+                "ground": [],
+            },
+        },
+    })
+    assert legacy.coordinate_systems == []
+    assert legacy.reference_axes == []
+    assert legacy.subassemblies[
+        "legacy-sub.SLDASM"].coordinate_systems == []
+
+
+def test_to_graph_state_preserves_reference_geometry(tmp_path):
+    top_frame = CoordinateSystemState(
+        name="base_frame",
+        document_from_frame=[float(x) for x in np.eye(4).flatten()],
+    )
+    local_frame = CoordinateSystemState(
+        name="joint_frame",
+        document_from_frame=[float(x) for x in np.eye(4).flatten()],
+    )
+    top_axis = ReferenceAxisState(
+        name="fl_hip",
+        document_point=[0.1, 0.2, 0.3],
+        document_direction=[0.0, -1.0, 0.0],
+    )
+    graph = to_graph_state(
+        [], {}, [], "robot", "robot.SLDASM",
+        subassemblies={"leg.SLDASM": ([], {}, [])},
+        coordinate_systems=[top_frame],
+        subassembly_coordinate_systems={"leg.SLDASM": [local_frame]},
+        reference_axes=[top_axis],
+    )
+    path = tmp_path / "graph.json"
+    graph.save(path)
+
+    loaded = GraphState.load(path)
+
+    assert [frame.name for frame in loaded.coordinate_systems] == [
+        "base_frame"]
+    assert [axis.name for axis in loaded.reference_axes] == ["fl_hip"]
+    assert [frame.name for frame in
+            loaded.subassemblies["leg.SLDASM"].coordinate_systems] == [
+                "joint_frame"]
 
 
 def test_extract_reference_axes_matches_official_exporter_direction(

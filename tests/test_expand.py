@@ -793,6 +793,59 @@ subassembly_frame_names:
         choice["selected_frame_transform"]
 
 
+def test_collapse_frame_choices_reuse_normal_root_transform():
+    from sw2robot.editor.webserver import _collapse_frame_choices
+
+    graph = make_coordinate_frame_graph()
+    instance = next(c for c in graph.components if c.name == "servo-1")
+    cad_from_subassembly = np.eye(4)
+    cad_from_subassembly[:3, :3] = np.array([
+        [0.0, -1.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0],
+    ])
+    cad_from_subassembly[:3, 3] = [0.8, -0.4, 0.2]
+    instance.world = [float(x) for x in cad_from_subassembly.flatten()]
+
+    normal_root_from_cad = np.eye(4)
+    normal_root_from_cad[:3, :3] = np.array([
+        [-1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, -1.0],
+    ])
+    normal_root_from_cad[:3, 3] = [0.3, 0.1, -0.2]
+    canonical = {
+        "root_from_cad": [
+            float(x) for x in normal_root_from_cad.flatten()],
+        "link_frames": {},
+    }
+    collapsed = [{
+        "name": "servo-1",
+        "link_name": "servo_1",
+        "member_links": ["servo_1__case_1"],
+    }]
+
+    local_choice = _collapse_frame_choices(
+        graph, collapsed, canonical,
+        {"servo-1": "subassembly_coordinate_system"},
+        {"servo-1": "servo_mount_frame"},
+    )[0]
+    local_frame = graph.subassemblies[
+        instance.part_path].coordinate_systems[0].document_from_frame_matrix()
+    assert np.asarray(local_choice["selected_frame_transform"]).reshape(
+        4, 4) == pytest.approx(
+            normal_root_from_cad @ cad_from_subassembly @ local_frame)
+
+    top_choice = _collapse_frame_choices(
+        graph, collapsed, canonical,
+        {"servo-1": "top_level_coordinate_system"},
+        {"servo-1": "top_servo_frame"},
+    )[0]
+    top_frame = graph.coordinate_systems[0].document_from_frame_matrix()
+    assert np.asarray(top_choice["selected_frame_transform"]).reshape(
+        4, 4) == pytest.approx(normal_root_from_cad @ top_frame)
+
+
 def test_resolved_cad_frame_unblocks_disconnected_member_groups():
     from sw2robot.editor.webserver import _collapse_preview_payload
 
@@ -891,66 +944,6 @@ def test_set_subassembly_frame_yaml_preserves_origin_link_choice():
     assert _subassembly_frame_sources(txt) == {}
     assert _subassembly_frame_names(txt) == {}
     assert _subassembly_origin_links(txt) == {}
-
-
-def test_set_subassembly_frame_endpoint_validates_and_saves_choice(tmp_path):
-    from sw2robot.editor import webserver
-
-    graph = make_coordinate_frame_graph()
-    pkg = tmp_path / "pkg"
-    pkg.mkdir()
-    (pkg / "urdf").mkdir()
-    graph.save(pkg / "graph.json")
-    yml = pkg / "t.joints.yaml"
-    yml.write_text(
-        "base: plate-1\nno_expand:\n- servo\n", encoding="utf-8")
-
-    old_state = (
-        webserver._Handler.pkg_dir,
-        webserver._Handler.urdf_rel,
-        webserver._Handler.robot_name,
-        webserver._Handler.root_dir,
-    )
-    webserver._Handler.pkg_dir = str(pkg)
-    webserver._Handler.urdf_rel = "urdf/t.urdf"
-    webserver._Handler.robot_name = "t"
-    webserver._Handler.root_dir = str(pkg)
-    httpd, port = webserver._bind_free_port(
-        webserver._Handler, _free_port())
-    httpd.daemon_threads = True
-    threading.Thread(target=httpd.serve_forever, daemon=True).start()
-    try:
-        base = f"http://127.0.0.1:{port}"
-        code, payload = _post_json(
-            base, "/api/set_subassembly_frame", {
-                "name": "servo-1",
-                "source": "top_level_coordinate_system",
-                "frame_name": "top_servo_frame",
-            })
-        assert code == 200
-        assert payload["ok"] is True
-        saved = yml.read_text(encoding="utf-8")
-        assert "servo-1: top_level_coordinate_system" in saved
-        assert "servo-1: top_servo_frame" in saved
-
-        code, payload = _post_json(
-            base, "/api/set_subassembly_frame", {
-                "name": "servo-1",
-                "source": "top_level_coordinate_system",
-                "frame_name": "not_in_cad",
-            })
-        assert code == 400
-        assert "not a top_level_coordinate_system candidate" in \
-            payload["error"]
-    finally:
-        httpd.shutdown()
-        httpd.server_close()
-        (
-            webserver._Handler.pkg_dir,
-            webserver._Handler.urdf_rel,
-            webserver._Handler.robot_name,
-            webserver._Handler.root_dir,
-        ) = old_state
 
 
 def test_collapse_preview_resolves_top_level_reference_joint_axis():
@@ -1080,77 +1073,7 @@ def test_set_collapsed_joint_axis_yaml_is_isolated_from_normal_joint():
     assert "parent: base" in txt
 
 
-def test_set_collapsed_joint_axis_endpoint_saves_reference_axis(tmp_path):
-    from sw2robot.editor import webserver
-
-    graph = make_coordinate_frame_graph()
-    pkg = tmp_path / "pkg"
-    pkg.mkdir()
-    (pkg / "urdf").mkdir()
-    graph.save(pkg / "graph.json")
-    yml = pkg / "t.joints.yaml"
-    yml.write_text(
-        "base: plate-1\nno_expand:\n- servo\n", encoding="utf-8")
-    (pkg / "urdf" / "t.urdf").write_text("""<robot name="t">
-  <link name="plate_1"/><link name="servo_1"/>
-  <joint name="plate_1__servo_1" type="revolute">
-    <origin xyz="0 0 0" rpy="0 0 0"/>
-    <parent link="plate_1"/><child link="servo_1"/>
-    <axis xyz="0 0 1"/>
-    <limit lower="-1" upper="1" effort="1" velocity="1"/>
-  </joint>
-</robot>
-""", encoding="utf-8")
-
-    old_state = (
-        webserver._Handler.pkg_dir,
-        webserver._Handler.urdf_rel,
-        webserver._Handler.robot_name,
-        webserver._Handler.root_dir,
-    )
-    webserver._Handler.pkg_dir = str(pkg)
-    webserver._Handler.urdf_rel = "urdf/t.urdf"
-    webserver._Handler.robot_name = "t"
-    webserver._Handler.root_dir = str(pkg)
-    httpd, port = webserver._bind_free_port(
-        webserver._Handler, _free_port())
-    httpd.daemon_threads = True
-    threading.Thread(target=httpd.serve_forever, daemon=True).start()
-    try:
-        base = f"http://127.0.0.1:{port}"
-        code, payload = _post_json(
-            base, "/api/set_collapsed_joint_axis", {
-                "edge": "plate_1__servo_1",
-                "source": "top_level_reference_axis",
-                "axis_name": "fl_hip",
-            })
-        assert code == 200
-        assert payload["ok"] is True
-        saved = yml.read_text(encoding="utf-8")
-        assert "plate_1__servo_1: top_level_reference_axis" in saved
-        assert "plate_1__servo_1: fl_hip" in saved
-
-        code, payload = _post_json(
-            base, "/api/set_collapsed_joint_axis", {
-                "edge": "plate_1__servo_1",
-                "source": "top_level_reference_axis",
-                "axis_name": "not_in_cad",
-            })
-        assert code == 400
-        assert "not a top-level reference axis candidate" in \
-            payload["error"]
-    finally:
-        httpd.shutdown()
-        httpd.server_close()
-        (
-            webserver._Handler.pkg_dir,
-            webserver._Handler.urdf_rel,
-            webserver._Handler.robot_name,
-            webserver._Handler.root_dir,
-        ) = old_state
-
-
-def test_set_collapsed_coordinate_choices_endpoint_applies_atomically(tmp_path):
+def test_set_collapsed_preview_choices_endpoint_applies_atomically(tmp_path):
     from sw2robot.editor import webserver
 
     graph = make_coordinate_frame_graph()
@@ -1222,7 +1145,26 @@ def test_set_collapsed_coordinate_choices_endpoint_applies_atomically(tmp_path):
         assert "plate_1__servo_1: top_level_reference_axis" in saved
         assert "plate_1__servo_1: fl_hip" in saved
 
-        before_invalid = saved
+        code, payload = _post_json(
+            base, "/api/set_collapsed_preview_choices", {
+                "drivers": [{
+                    "edge": "plate_1__servo_1",
+                    "source_joint": "",
+                }],
+            })
+        assert code == 200
+        assert payload["frames_applied"] == 0
+        assert payload["drivers_applied"] == 1
+        assert payload["axes_applied"] == 0
+        saved_after_driver = yml.read_text(encoding="utf-8")
+        assert "collapsed_driver_joints:" not in saved_after_driver
+        assert "servo-1: top_level_coordinate_system" in saved_after_driver
+        assert "servo-1: top_servo_frame" in saved_after_driver
+        assert "plate_1__servo_1: top_level_reference_axis" in \
+            saved_after_driver
+        assert "plate_1__servo_1: fl_hip" in saved_after_driver
+
+        before_invalid = saved_after_driver
         code, payload = _post_json(
             base, "/api/set_collapsed_preview_choices", {
                 "frames": [{
@@ -1767,7 +1709,10 @@ def test_collapsed_preview_urdf_uses_selected_coordinate_frame():
 def test_collapsed_preview_urdf_uses_top_reference_axis_direction():
     import xml.etree.ElementTree as ET
 
-    from sw2robot.editor.webserver import _collapsed_preview_urdf_text
+    from sw2robot.editor.webserver import (
+        _collapsed_preview_urdf_text,
+        _urdf_origin_matrix,
+    )
 
     expanded_urdf = """<robot name="demo">
   <link name="base"/><link name="member"/>
@@ -1829,6 +1774,10 @@ def test_collapsed_preview_urdf_uses_top_reference_axis_direction():
     joint = root.find("joint")
 
     assert joint.get("type") == "revolute"
+    # A Reference Axis supplies direction only. The collapsed child frame is
+    # still the joint origin, matching the official SolidWorks exporter.
+    assert _urdf_origin_matrix(joint.find("origin")) == pytest.approx(
+        selected_frame, abs=1e-7)
     assert joint.find("axis").get("xyz") == "1 0 0"
     assert joint.find("limit").get("lower") == "-1"
 

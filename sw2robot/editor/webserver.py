@@ -5766,61 +5766,6 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 print(f"[sw2robot.web] set_subassembly_parent: "
                       f"{name_in} -> {label} (preview only)")
                 return self._send_json(payload)
-            if parsed.path == "/api/set_subassembly_frame":
-                cls = type(self)
-                n = int(self.headers.get("Content-Length", 0))
-                body = json.loads(self.rfile.read(n) or b"{}")
-                name_in = (body.get("name") or "").strip()
-                source = (body.get("source") or "origin_link").strip()
-                frame_name = (body.get("frame_name") or "").strip()
-                if not cls.pkg_dir:
-                    return self._send_json({"error": "no package open"}, 400)
-                if not _cad_mode(cls.pkg_dir):
-                    return self._send_json(
-                        {"error": "sub-assembly coordinate frames need the "
-                                  "CAD graph.json"}, 400)
-                if not name_in:
-                    return self._send_json({"error": "name required"}, 400)
-                from sw2robot.exporter.state import GraphState
-                graph = GraphState.load(os.path.join(cls.pkg_dir, "graph.json"))
-                name = os.path.splitext(os.path.basename(cls.urdf_rel))[0]
-                yml = os.path.join(cls.pkg_dir, name + ".joints.yaml")
-                if not os.path.exists(yml):
-                    return self._send_json(
-                        {"error": "joints.yaml not found -- re-extract once"},
-                        400)
-                with open(yml, encoding="utf-8") as f:
-                    txt = f.read()
-                try:
-                    preview = _collapse_preview_payload_cached(
-                        cls.pkg_dir, graph, yml, txt, cls.urdf_rel)
-                    choice = next((
-                        row for row in preview.get("frame_choices", [])
-                        if row.get("subassembly") == name_in), None)
-                    _validate_subassembly_frame_selection(
-                        choice, name_in, source, frame_name)
-                    txt = _set_subassembly_frame_yaml(
-                        txt, graph, name_in, source, frame_name)
-                except ValueError as e:
-                    return self._send_json({"error": str(e)}, 400)
-                label = frame_name or "auto representative link"
-                _snapshot(cls.pkg_dir, yml,
-                          f"sub-assembly frame {name_in} -> {source}: {label}")
-                with open(yml, "w", encoding="utf-8") as f:
-                    f.write(txt)
-                payload = _collapse_preview_payload_cached(
-                    cls.pkg_dir, graph, yml, txt, cls.urdf_rel)
-                payload.update({
-                    "ok": True,
-                    "name": name_in,
-                    "source": source,
-                    "frame_name": frame_name,
-                    "preview_only": True,
-                    "rebuilt": False,
-                })
-                print(f"[sw2robot.web] set_subassembly_frame: {name_in} -> "
-                      f"{source}: {label} (preview only)")
-                return self._send_json(payload)
             if parsed.path == "/api/set_subassembly_origin_link":
                 cls = type(self)
                 n = int(self.headers.get("Content-Length", 0))
@@ -6001,67 +5946,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 print(f"[sw2robot.web] set_collapsed_driver_joint: "
                       f"{edge} -> {label} (preview only)")
                 return self._send_json(payload)
-            if parsed.path == "/api/set_collapsed_joint_axis":
-                cls = type(self)
-                n = int(self.headers.get("Content-Length", 0))
-                body = json.loads(self.rfile.read(n) or b"{}")
-                edge = (body.get("edge") or "").strip()
-                source = (body.get("source") or "normal_joint").strip()
-                axis_name = (body.get("axis_name") or "").strip()
-                if not cls.pkg_dir:
-                    return self._send_json({"error": "no package open"}, 400)
-                if not _cad_mode(cls.pkg_dir):
-                    return self._send_json(
-                        {"error": "collapsed joint axes need the CAD "
-                                  "graph.json"}, 400)
-                if not edge:
-                    return self._send_json({"error": "edge required"}, 400)
-                from sw2robot.exporter.state import GraphState
-                graph = GraphState.load(os.path.join(cls.pkg_dir, "graph.json"))
-                name = os.path.splitext(os.path.basename(cls.urdf_rel))[0]
-                yml = os.path.join(cls.pkg_dir, name + ".joints.yaml")
-                if not os.path.exists(yml):
-                    return self._send_json(
-                        {"error": "joints.yaml not found -- re-extract once"},
-                        400)
-                with open(yml, encoding="utf-8") as f:
-                    txt = f.read()
-                try:
-                    preview = _collapse_preview_payload_cached(
-                        cls.pkg_dir, graph, yml, txt, cls.urdf_rel)
-                    choices = {
-                        choice.get("edge"): choice
-                        for choice in preview.get("joint_axis_choices", [])
-                    }
-                    choice = choices.get(edge)
-                    _validate_collapsed_joint_axis_selection(
-                        choice, edge, source, axis_name)
-                    txt = _set_collapsed_joint_axis_yaml(
-                        txt, edge, source, axis_name)
-                except ValueError as e:
-                    return self._send_json({"error": str(e)}, 400)
-                label = axis_name if source != "normal_joint" else \
-                    "normal joint"
-                _snapshot(cls.pkg_dir, yml,
-                          f"collapsed joint axis {edge} -> {source}: {label}")
-                with open(yml, "w", encoding="utf-8") as f:
-                    f.write(txt)
-                payload = _collapse_preview_payload_cached(
-                    cls.pkg_dir, graph, yml, txt, cls.urdf_rel)
-                payload.update({
-                    "ok": True,
-                    "edge": edge,
-                    "source": source,
-                    "axis_name": axis_name,
-                    "preview_only": True,
-                    "rebuilt": False,
-                })
-                print(f"[sw2robot.web] set_collapsed_joint_axis: "
-                      f"{edge} -> {source}: {label} (preview only)")
-                return self._send_json(payload)
-            if parsed.path in (
-                    "/api/set_collapsed_coordinate_choices",
-                    "/api/set_collapsed_preview_choices"):
+            if parsed.path == "/api/set_collapsed_preview_choices":
                 cls = type(self)
                 n = int(self.headers.get("Content-Length", 0))
                 body = json.loads(self.rfile.read(n) or b"{}")
