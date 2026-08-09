@@ -1022,6 +1022,140 @@ def test_set_collapsed_joint_axis_endpoint_saves_reference_axis(tmp_path):
         ) = old_state
 
 
+def test_set_collapsed_coordinate_choices_endpoint_applies_atomically(tmp_path):
+    from sw2robot.editor import webserver
+
+    graph = make_coordinate_frame_graph()
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "urdf").mkdir()
+    graph.save(pkg / "graph.json")
+    yml = pkg / "t.joints.yaml"
+    yml.write_text(
+        "base: plate-1\nno_expand:\n- servo\n", encoding="utf-8")
+    (pkg / "urdf" / "t.urdf").write_text("""<robot name="t">
+  <link name="plate_1"/><link name="servo_1"/>
+  <joint name="plate_1__servo_1" type="revolute">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <parent link="plate_1"/><child link="servo_1"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-1" upper="1" effort="1" velocity="1"/>
+  </joint>
+</robot>
+""", encoding="utf-8")
+
+    old_state = (
+        webserver._Handler.pkg_dir,
+        webserver._Handler.urdf_rel,
+        webserver._Handler.robot_name,
+        webserver._Handler.root_dir,
+    )
+    webserver._Handler.pkg_dir = str(pkg)
+    webserver._Handler.urdf_rel = "urdf/t.urdf"
+    webserver._Handler.robot_name = "t"
+    webserver._Handler.root_dir = str(pkg)
+    httpd, port = webserver._bind_free_port(
+        webserver._Handler, _free_port())
+    httpd.daemon_threads = True
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        base = f"http://127.0.0.1:{port}"
+        code, payload = _post_json(
+            base, "/api/set_collapsed_coordinate_choices", {
+                "frames": [{
+                    "name": "servo-1",
+                    "source": "top_level_coordinate_system",
+                    "frame_name": "top_servo_frame",
+                }],
+                "axes": [{
+                    "edge": "plate_1__servo_1",
+                    "source": "top_level_reference_axis",
+                    "axis_name": "fl_hip",
+                }],
+            })
+        assert code == 200
+        assert payload["ok"] is True
+        assert payload["frames_applied"] == 1
+        assert payload["axes_applied"] == 1
+        assert payload["frame_choices"][0]["selected_frame_name"] == \
+            "top_servo_frame"
+        assert payload["joint_axis_choices"][0]["selected_axis_name"] == \
+            "fl_hip"
+        saved = yml.read_text(encoding="utf-8")
+        assert "servo-1: top_level_coordinate_system" in saved
+        assert "servo-1: top_servo_frame" in saved
+        assert "plate_1__servo_1: top_level_reference_axis" in saved
+        assert "plate_1__servo_1: fl_hip" in saved
+
+        before_invalid = saved
+        code, payload = _post_json(
+            base, "/api/set_collapsed_coordinate_choices", {
+                "frames": [{
+                    "name": "servo-1",
+                    "source": "origin_link",
+                    "frame_name": "",
+                }],
+                "axes": [{
+                    "edge": "plate_1__servo_1",
+                    "source": "top_level_reference_axis",
+                    "axis_name": "not_in_cad",
+                }],
+            })
+        assert code == 400
+        assert "not a top-level reference axis candidate" in \
+            payload["error"]
+        assert yml.read_text(encoding="utf-8") == before_invalid
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        (
+            webserver._Handler.pkg_dir,
+            webserver._Handler.urdf_rel,
+            webserver._Handler.robot_name,
+            webserver._Handler.root_dir,
+        ) = old_state
+
+
+def test_collapsed_coordinate_choices_do_not_change_normal_model():
+    base_config = {
+        "base": "plate-1",
+        "expand": [""],
+    }
+    with_preview_choices = {
+        **base_config,
+        "subassembly_frame_sources": {
+            "servo-1": "top_level_coordinate_system",
+        },
+        "subassembly_frame_names": {
+            "servo-1": "top_servo_frame",
+        },
+        "collapsed_joint_axis_sources": {
+            "plate_1__servo_1__case_1": "top_level_reference_axis",
+        },
+        "collapsed_joint_axis_names": {
+            "plate_1__servo_1__case_1": "fl_hip",
+        },
+    }
+
+    normal = build_model(make_coordinate_frame_graph(), config=base_config)
+    configured = build_model(
+        make_coordinate_frame_graph(), config=with_preview_choices)
+
+    assert normal.base_link == configured.base_link
+    assert [component.name for component in normal.components] == \
+        [component.name for component in configured.components]
+    assert len(normal.joints) == len(configured.joints)
+    for expected, actual in zip(normal.joints, configured.joints, strict=True):
+        assert (expected.name, expected.parent, expected.child,
+                expected.jtype) == \
+            (actual.name, actual.parent, actual.child, actual.jtype)
+        assert np.allclose(expected.xyz, actual.xyz)
+        assert np.allclose(expected.rpy, actual.rpy)
+        assert np.allclose(expected.axis, actual.axis)
+        assert (expected.lower, expected.upper) == \
+            (actual.lower, actual.upper)
+
+
 def test_set_subassembly_origin_link_rejects_non_candidate(tmp_path):
     from sw2robot.editor import webserver
 

@@ -1430,6 +1430,47 @@ def _set_collapsed_joint_axis_yaml(txt, edge, source, axis_name=""):
         txt, "collapsed_joint_axis_names", edge, _yaml_scalar(axis_name))
 
 
+def _validate_subassembly_frame_selection(choice, name, source, frame_name):
+    """Validate one frame selection against an existing preview choice."""
+    if choice is None:
+        raise ValueError(f"'{name}' is not currently collapsed")
+    candidates_key = {
+        "origin_link": "origin_links",
+        "subassembly_coordinate_system":
+            "subassembly_coordinate_systems",
+        "top_level_coordinate_system":
+            "top_level_coordinate_systems",
+    }.get(source)
+    if candidates_key is None:
+        raise ValueError("unknown sub-assembly frame source")
+    allowed = set(choice.get(candidates_key) or [])
+    if source != "origin_link" and not frame_name:
+        raise ValueError("coordinate system name required")
+    if frame_name and frame_name not in allowed:
+        raise ValueError(
+            f"'{frame_name}' is not a {source} candidate for {name}")
+
+
+def _validate_collapsed_joint_axis_selection(
+        choice, edge, source, axis_name):
+    """Validate one Reference Joint axis against an existing preview edge."""
+    if choice is None:
+        raise ValueError(f"'{edge}' is not a collapsed edge")
+    if source not in _COLLAPSED_JOINT_AXIS_SOURCES:
+        raise ValueError("unknown collapsed joint axis source")
+    if source != "top_level_reference_axis":
+        return
+    if not choice.get("applies"):
+        raise ValueError(f"'{edge}' is not a movable collapsed joint")
+    allowed = set(choice.get("top_level_reference_axes") or [])
+    if not axis_name:
+        raise ValueError("reference axis name required")
+    if axis_name not in allowed:
+        raise ValueError(
+            f"'{axis_name}' is not a top-level reference axis candidate "
+            f"for {edge}")
+
+
 def _set_subassembly_cycle_break_joint_yaml(
         txt, source_joint, drop, previous_source_joint=""):
     """Set/reset one preview-only source joint dropped for cycle breaking."""
@@ -5710,25 +5751,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                     choice = next((
                         row for row in preview.get("frame_choices", [])
                         if row.get("subassembly") == name_in), None)
-                    if choice is None:
-                        raise ValueError(
-                            f"'{name_in}' is not currently collapsed")
-                    candidates_key = {
-                        "origin_link": "origin_links",
-                        "subassembly_coordinate_system":
-                            "subassembly_coordinate_systems",
-                        "top_level_coordinate_system":
-                            "top_level_coordinate_systems",
-                    }.get(source)
-                    if candidates_key is None:
-                        raise ValueError("unknown sub-assembly frame source")
-                    allowed = set(choice.get(candidates_key) or [])
-                    if source != "origin_link" and not frame_name:
-                        raise ValueError("coordinate system name required")
-                    if frame_name and frame_name not in allowed:
-                        raise ValueError(
-                            f"'{frame_name}' is not a {source} candidate for "
-                            f"{name_in}")
+                    _validate_subassembly_frame_selection(
+                        choice, name_in, source, frame_name)
                     txt = _set_subassembly_frame_yaml(
                         txt, graph, name_in, source, frame_name)
                 except ValueError as e:
@@ -5976,20 +6000,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                         for choice in preview.get("joint_axis_choices", [])
                     }
                     choice = choices.get(edge)
-                    if choice is None:
-                        raise ValueError(f"'{edge}' is not a collapsed edge")
-                    if source == "top_level_reference_axis":
-                        if not choice.get("applies"):
-                            raise ValueError(
-                                f"'{edge}' is not a movable collapsed joint")
-                        allowed = set(
-                            choice.get("top_level_reference_axes") or [])
-                        if not axis_name:
-                            raise ValueError("reference axis name required")
-                        if axis_name not in allowed:
-                            raise ValueError(
-                                f"'{axis_name}' is not a top-level reference "
-                                f"axis candidate for {edge}")
+                    _validate_collapsed_joint_axis_selection(
+                        choice, edge, source, axis_name)
                     txt = _set_collapsed_joint_axis_yaml(
                         txt, edge, source, axis_name)
                 except ValueError as e:
@@ -6012,6 +6024,114 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 })
                 print(f"[sw2robot.web] set_collapsed_joint_axis: "
                       f"{edge} -> {source}: {label} (preview only)")
+                return self._send_json(payload)
+            if parsed.path == "/api/set_collapsed_coordinate_choices":
+                cls = type(self)
+                n = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(n) or b"{}")
+                frames = body.get("frames") or []
+                axes = body.get("axes") or []
+                if not isinstance(frames, list) or not isinstance(axes, list):
+                    return self._send_json(
+                        {"error": "frames and axes must be lists"}, 400)
+                if len(frames) + len(axes) > 10000:
+                    return self._send_json(
+                        {"error": "too many coordinate choices"}, 400)
+                if not cls.pkg_dir:
+                    return self._send_json({"error": "no package open"}, 400)
+                if not _cad_mode(cls.pkg_dir):
+                    return self._send_json(
+                        {"error": "collapsed coordinate choices need the CAD "
+                                  "graph.json"}, 400)
+                from sw2robot.exporter.state import GraphState
+                graph = GraphState.load(os.path.join(cls.pkg_dir, "graph.json"))
+                name = os.path.splitext(os.path.basename(cls.urdf_rel))[0]
+                yml = os.path.join(cls.pkg_dir, name + ".joints.yaml")
+                if not os.path.exists(yml):
+                    return self._send_json(
+                        {"error": "joints.yaml not found -- re-extract once"},
+                        400)
+                with open(yml, encoding="utf-8") as f:
+                    txt = f.read()
+                try:
+                    # The panel was built from this same payload, so this is
+                    # normally a cache hit.  Validate every staged selection
+                    # before changing the YAML, then rebuild the collapse
+                    # payload once after all choices have been applied.
+                    preview = _collapse_preview_payload_cached(
+                        cls.pkg_dir, graph, yml, txt, cls.urdf_rel)
+                    frame_choices = {
+                        choice.get("subassembly"): choice
+                        for choice in preview.get("frame_choices", [])
+                    }
+                    axis_choices = {
+                        choice.get("edge"): choice
+                        for choice in preview.get("joint_axis_choices", [])
+                    }
+                    next_txt = txt
+                    seen_frames = set()
+                    for row in frames:
+                        if not isinstance(row, dict):
+                            raise ValueError("each frame choice must be a map")
+                        name_in = str(row.get("name") or "").strip()
+                        source = str(
+                            row.get("source") or "origin_link").strip()
+                        frame_name = str(
+                            row.get("frame_name") or "").strip()
+                        if not name_in:
+                            raise ValueError("frame choice name required")
+                        if name_in in seen_frames:
+                            raise ValueError(
+                                f"duplicate frame choice for '{name_in}'")
+                        seen_frames.add(name_in)
+                        _validate_subassembly_frame_selection(
+                            frame_choices.get(name_in), name_in, source,
+                            frame_name)
+                        next_txt = _set_subassembly_frame_yaml(
+                            next_txt, graph, name_in, source, frame_name)
+                    seen_axes = set()
+                    for row in axes:
+                        if not isinstance(row, dict):
+                            raise ValueError("each axis choice must be a map")
+                        edge = str(row.get("edge") or "").strip()
+                        source = str(
+                            row.get("source") or "normal_joint").strip()
+                        axis_name = str(
+                            row.get("axis_name") or "").strip()
+                        if not edge:
+                            raise ValueError("axis choice edge required")
+                        if edge in seen_axes:
+                            raise ValueError(
+                                f"duplicate axis choice for '{edge}'")
+                        seen_axes.add(edge)
+                        _validate_collapsed_joint_axis_selection(
+                            axis_choices.get(edge), edge, source, axis_name)
+                        next_txt = _set_collapsed_joint_axis_yaml(
+                            next_txt, edge, source, axis_name)
+                except ValueError as e:
+                    return self._send_json({"error": str(e)}, 400)
+
+                changed = next_txt != txt
+                if changed:
+                    _snapshot(
+                        cls.pkg_dir, yml,
+                        f"collapsed coordinate choices: {len(frames)} "
+                        f"frame(s), {len(axes)} axis/axes")
+                    with open(yml, "w", encoding="utf-8") as f:
+                        f.write(next_txt)
+                payload = _collapse_preview_payload_cached(
+                    cls.pkg_dir, graph, yml, next_txt, cls.urdf_rel)
+                payload.update({
+                    "ok": True,
+                    "frames_applied": len(frames),
+                    "axes_applied": len(axes),
+                    "changed": changed,
+                    "preview_only": True,
+                    "rebuilt": False,
+                })
+                print("[sw2robot.web] set_collapsed_coordinate_choices: "
+                      f"{len(frames)} frame(s), {len(axes)} axis/axes "
+                      f"(changed={changed}, preview only)")
                 return self._send_json(payload)
             if parsed.path == "/api/set_subassembly_cycle_break":
                 cls = type(self)
