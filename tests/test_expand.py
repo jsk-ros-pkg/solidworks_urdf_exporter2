@@ -457,7 +457,10 @@ subassembly_driver_joints:
             webserver._Handler.root_dir,
         ) = old_state
 def test_collapse_driver_joint_choices_are_unique_per_edge():
-    from sw2robot.editor.webserver import _collapse_driver_joint_choices
+    from sw2robot.editor.webserver import (
+        _collapse_driver_joint_choices,
+        _collapse_plan_payload,
+    )
 
     joints = [
         {"name": "parent__sub", "parent": "parent", "child": "sub",
@@ -482,6 +485,52 @@ def test_collapse_driver_joint_choices_are_unique_per_edge():
     assert len(choices) == 1
     assert choices[0]["edge"] == "parent__sub"
     assert choices[0]["auto_driver_joint"] == "parent__sub"
+
+    plan = _collapse_plan_payload(
+        "parent",
+        [{"link_name": "parent"},
+         {"link_name": "sub", "collapsed": True,
+          "member_links": ["sub__a", "sub__b"]}],
+        joints, collapsed, {"sub__a": "sub", "sub__b": "sub"},
+        [], [], [], {"issues": []}, choices)
+    assert [(row["parent"], row["child"]) for row in plan["joints"]] == [
+        ("parent", "sub")]
+    duplicate = next(
+        row for row in plan["dropped_joints"]
+        if row["decision"] == "dropped_duplicate_boundary")
+    assert duplicate["source_joint"] == "parent__sub__b"
+
+
+def test_collapse_preview_drops_duplicate_boundary_edges():
+    from sw2robot.editor.webserver import _collapse_preview_payload
+
+    payload = _collapse_preview_payload(
+        make_coordinate_frame_graph(), """
+base: plate-1
+no_expand:
+- servo
+subassembly_frame_sources:
+  servo-1: top_level_coordinate_system
+subassembly_frame_names:
+  servo-1: top_servo_frame
+joints:
+  - parent: plate-1
+    child:  servo-1/case-1
+    type:   fixed
+  - parent: plate-1
+    child:  servo-1/horn-1
+    type:   fixed
+""")
+
+    plan = payload["collapse_plan"]
+    assert [(row["parent"], row["child"]) for row in plan["joints"]] == [
+        ("plate_1", "servo_1")]
+    assert payload["preview_counts"] == {"links": 2, "joints": 1}
+    duplicates = [
+        row for row in plan["dropped_joints"]
+        if row["decision"] == "dropped_duplicate_boundary"]
+    assert len(duplicates) == 1
+    assert plan["ready_for_urdf"] is True
 
 
 def test_collapse_driver_joint_fuzzy_matches_require_explicit_selection():

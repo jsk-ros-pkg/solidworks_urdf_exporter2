@@ -1828,8 +1828,8 @@ def _collapse_preview_payload(graph, yml_txt="", current_joints=None):
             "joints": len(canonical["joints"]),
         },
         "preview_counts": {
-            "links": len(links),
-            "joints": len(joints),
+            "links": len(collapse_plan["links"]),
+            "joints": len(collapse_plan["joints"]),
         },
     }
 
@@ -2765,6 +2765,18 @@ def _collapse_plan_payload(base_link, links, joints, collapsed, collapse_link,
     for row in dropped_cycle:
         dropped_joints.append(plan_joint(row, "dropped_cycle_break"))
 
+    planned_joints = []
+    seen_boundary_edges = set()
+    for row in joints:
+        edge = (row.get("parent"), row.get("child"))
+        if row.get("decision") == "kept_boundary":
+            if edge in seen_boundary_edges:
+                dropped_joints.append(plan_joint(
+                    row, "dropped_duplicate_boundary"))
+                continue
+            seen_boundary_edges.add(edge)
+        planned_joints.append(plan_joint(row))
+
     blocking_issue_count = sum(
         issue.get("severity") != "info"
         for issue in (validation.get("issues") or []))
@@ -2775,7 +2787,7 @@ def _collapse_plan_payload(base_link, links, joints, collapsed, collapse_link,
         "ready_for_urdf": blocking_issue_count == 0,
         "blocking_issue_count": blocking_issue_count,
         "links": [plan_link(row) for row in links],
-        "joints": [plan_joint(row) for row in joints],
+        "joints": planned_joints,
         "dropped_joints": dropped_joints,
         "collapsed_subassemblies": [{
             "name": s.get("name"),
