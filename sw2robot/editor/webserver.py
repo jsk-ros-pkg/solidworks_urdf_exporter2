@@ -2586,19 +2586,33 @@ def _validate_collapsed_tree(base_link, links, joints, collapsed,
                     f"{stale_origin_link}"),
             })
         selected_origin_link = sub.get("selected_origin_link")
+        explicit_frame_source = sub.get("selected_frame_source") in {
+            "subassembly_coordinate_system",
+            "top_level_coordinate_system",
+        }
+        resolved_explicit_frame = bool(
+            explicit_frame_source and sub.get("frame_resolved"))
         if len(comps) <= 1:
             continue
-        if selected_origin_link:
+        if selected_origin_link or resolved_explicit_frame:
+            frame_name = sub.get("selected_frame_name", "")
+            resolution = (
+                f"framed at {frame_name}"
+                if resolved_explicit_frame
+                else f"anchored at {selected_origin_link}"
+            )
             issues.append({
                 "severity": "info",
                 "code": "disconnected_members",
                 "subassembly": sub.get("name"),
                 "link": sub.get("link_name"),
                 "origin_link": selected_origin_link,
+                "frame_source": sub.get("selected_frame_source", ""),
+                "frame_name": frame_name,
                 "components": comps,
                 "message": (
                     f"{sub.get('name')} maps to {len(comps)} disconnected "
-                    f"member groups; anchored at {selected_origin_link}"),
+                    f"member groups; {resolution}"),
             })
         else:
             issues.append({

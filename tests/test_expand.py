@@ -744,6 +744,46 @@ subassembly_frame_names:
         choice["selected_frame_transform"]
 
 
+def test_resolved_cad_frame_unblocks_disconnected_member_groups():
+    from sw2robot.editor.webserver import _collapse_preview_payload
+
+    graph = make_coordinate_frame_graph()
+    graph.components.append(
+        _comp("bracket-1", "bracket_1", xyz=(0.0, 0.1, 0.0)))
+    payload = _collapse_preview_payload(graph, """
+base: plate-1
+no_expand:
+- servo
+subassembly_parent_overrides:
+  servo-1: bracket_1
+subassembly_frame_sources:
+  servo-1: top_level_coordinate_system
+subassembly_frame_names:
+  servo-1: top_servo_frame
+joints:
+  - parent: plate-1
+    child:  servo-1/case-1
+    type:   fixed
+  - parent: bracket-1
+    child:  servo-1/horn-1
+    type:   fixed
+  - parent: plate-1
+    child:  bracket-1
+    type:   fixed
+""")
+
+    issue = next(
+        row for row in payload["validation"]["issues"]
+        if row["code"] == "disconnected_members")
+    assert issue["severity"] == "info"
+    assert issue["origin_link"] == ""
+    assert issue["frame_source"] == "top_level_coordinate_system"
+    assert issue["frame_name"] == "top_servo_frame"
+    assert "framed at top_servo_frame" in issue["message"]
+    assert payload["collapse_plan"]["ready_for_urdf"] is True
+    assert payload["collapse_plan"]["blocking_issue_count"] == 0
+
+
 def test_missing_saved_coordinate_frame_blocks_preview_urdf():
     from sw2robot.editor.webserver import _collapse_preview_payload
 
