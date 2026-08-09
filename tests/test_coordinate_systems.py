@@ -36,6 +36,14 @@ class _ReferenceAxis:
         return self._params
 
 
+class _DocumentExtension:
+    def __init__(self, transforms):
+        self._transforms = transforms
+
+    def GetCoordinateSystemTransformByName(self, name):
+        return self._transforms.get(name)
+
+
 class _Feature:
     def __init__(self, name, kind, data=None):
         self.Name = name
@@ -57,8 +65,10 @@ class _Feature:
 
 
 class _Document:
-    def __init__(self, features):
+    def __init__(self, features, coordinate_transforms=None):
         self._features = features
+        self.Extension = _DocumentExtension(coordinate_transforms) \
+            if coordinate_transforms is not None else None
         for index in range(len(features) - 1):
             features[index]._next = features[index + 1]
 
@@ -77,7 +87,7 @@ def _sw_transform(M):
     ]
 
 
-def test_extract_coordinate_systems_keeps_name_and_inverts_transform(
+def test_extract_coordinate_systems_uses_official_transform_directly(
         monkeypatch):
     monkeypatch.setattr(model, "as_iface", lambda obj, _name: obj)
     document_from_frame = np.eye(4)
@@ -91,11 +101,30 @@ def test_extract_coordinate_systems_keeps_name_and_inverts_transform(
     doc = _Document([
         _Feature("Origin", "OriginProfileFeature"),
         _Feature("fl_hip", "CoordSys", data),
-    ])
+    ], coordinate_transforms={
+        "fl_hip": _Transform(_sw_transform(document_from_frame)),
+    })
 
     frames = extract_coordinate_systems(doc)
 
     assert [frame.name for frame in frames] == ["fl_hip"]
+    assert np.allclose(
+        frames[0].document_from_frame_matrix(), document_from_frame)
+    assert data.accessed is False
+    assert data.released is False
+
+
+def test_extract_coordinate_systems_feature_transform_fallback_is_direct(
+        monkeypatch):
+    monkeypatch.setattr(model, "as_iface", lambda obj, _name: obj)
+    document_from_frame = np.eye(4)
+    document_from_frame[:3, 3] = [-0.2, 0.08, 0.06]
+    data = _CoordinateData(_sw_transform(document_from_frame))
+    doc = _Document([_Feature("fr_hip", "CoordSys", data)])
+
+    frames = extract_coordinate_systems(doc)
+
+    assert [frame.name for frame in frames] == ["fr_hip"]
     assert np.allclose(
         frames[0].document_from_frame_matrix(), document_from_frame)
     assert data.accessed is True

@@ -2657,28 +2657,37 @@ def _document_features(doc):
 def extract_coordinate_systems(doc):
     """Return named ``CoordSys`` features in the owning document frame.
 
-    ``ICoordinateSystemFeatureData.Transform`` maps document coordinates into
-    the named coordinate system.  The cached graph uses the opposite direction
-    (named frame -> document), matching ``ComponentState.world``, so invert the
-    SolidWorks transform once during extraction.
+    Use the same ``GetCoordinateSystemTransformByName`` result as the official
+    SolidWorks URDF Exporter and store it in the same column-vector convention
+    as ``ComponentState.world``.  Keeping both sources in one CAD-frame
+    convention lets the existing root-relative transform path handle them.
+
+    ``ICoordinateSystemFeatureData.Transform`` is retained as a fallback for
+    COM wrappers that do not expose ``IModelDocExtension``.
     """
     out = []
+    extension = as_iface(
+        safe_prop(doc, "Extension"), "IModelDocExtension")
     for fi in _document_features(doc):
         if safe_call(fi, "GetTypeName2") == "CoordSys":
             name = safe_prop(fi, "Name") or ""
-            data = safe_call(fi, "GetDefinition")
-            data = as_iface(data, "ICoordinateSystemFeatureData")
+            data = None
             accessed = False
             try:
-                # SolidWorks' examples access the feature selections before
-                # reading Transform.  Some releases return the transform even
-                # without this call, but using the documented path is safer.
-                accessed = bool(safe_call(data, "AccessSelections", doc, None))
-                transform = safe_prop(data, "Transform")
+                transform = safe_call(
+                    extension, "GetCoordinateSystemTransformByName", name)
+                if transform is None:
+                    data = safe_call(fi, "GetDefinition")
+                    data = as_iface(data, "ICoordinateSystemFeatureData")
+                    # SolidWorks' examples access the feature selections before
+                    # reading Transform.  Some releases return the transform
+                    # without this call, but use the documented path here.
+                    accessed = bool(safe_call(
+                        data, "AccessSelections", doc, None))
+                    transform = safe_prop(data, "Transform")
                 if transform is None:
                     raise ValueError("coordinate system has no Transform")
-                document_to_frame = transform_to_matrix(transform.ArrayData)
-                document_from_frame = np.linalg.inv(document_to_frame)
+                document_from_frame = transform_to_matrix(transform.ArrayData)
                 out.append(CoordinateSystemState(
                     name=str(name),
                     document_from_frame=[
