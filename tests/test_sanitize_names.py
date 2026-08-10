@@ -3,8 +3,9 @@
 Covers both output paths:
   * the exporter (``urdf_writer.write_urdf``) -- a hand-set ``root_link_name``
     or port name is sanitized;
-  * the editor (``core._sanitize_urdf_names``) -- the final export pass cleans
-    any name and rewrites every cross reference (parent/child link, mimic).
+  * the editor (``core.build_urdf(sanitize=True)``) -- the final export pass
+    cleans any name and rewrites every cross reference (parent/child link,
+    mimic).
 """
 import re
 import xml.etree.ElementTree as ET
@@ -64,10 +65,25 @@ def test_exporter_sanitizes_root_and_port(tmp_path):
     assert parent in link_names
 
 
-def test_editor_sanitize_pass_rewrites_references():
-    from sw2robot.editor.core import _sanitize_urdf_names
+def _built(tmp_path, urdf):
+    """``build_urdf`` over a raw URDF string, parsed back to a root element."""
+    from sw2robot.editor._vendor.rc_config.urdf_parser import parse_urdf_content
+    from sw2robot.editor.core import build_urdf
+    from sw2robot.editor.state import RobotCompilerState
 
-    urdf = """<robot name="r">
+    path = tmp_path / "r.urdf"
+    path.write_text(urdf, encoding="utf-8")
+    parsed = parse_urdf_content(urdf)
+    state = RobotCompilerState(
+        robot_name="r", urdf_path=str(path), package_dir=str(tmp_path),
+        joints=parsed["joints"], links=parsed["links"],
+        root_link=parsed["root_link"],
+    )
+    return ET.fromstring(build_urdf(state))
+
+
+def test_editor_sanitize_pass_rewrites_references(tmp_path):
+    root = _built(tmp_path, """<robot name="r">
       <link name="base-link"/>
       <link name="arm.1"/>
       <joint name="base-link__arm.1" type="revolute">
@@ -75,9 +91,7 @@ def test_editor_sanitize_pass_rewrites_references():
         <child link="arm.1"/>
         <mimic joint="base-link__arm.1"/>
       </joint>
-    </robot>"""
-    root = ET.fromstring(urdf)
-    _sanitize_urdf_names(root)
+    </robot>""")
 
     for e in root.findall("link") + root.findall("joint"):
         assert _SAFE.match(e.get("name"))
@@ -89,14 +103,12 @@ def test_editor_sanitize_pass_rewrites_references():
     assert j.find("mimic").get("joint") == j.get("name")
 
 
-def test_editor_sanitize_is_noop_on_clean_names():
-    from sw2robot.editor.core import _sanitize_urdf_names
-
-    urdf = ('<robot name="r"><link name="base_link"/><link name="arm_link"/>'
-            '<joint name="base_link__arm_link" type="fixed">'
-            '<parent link="base_link"/><child link="arm_link"/></joint></robot>')
-    root = ET.fromstring(urdf)
-    _sanitize_urdf_names(root)
+def test_editor_sanitize_is_noop_on_clean_names(tmp_path):
+    root = _built(
+        tmp_path,
+        '<robot name="r"><link name="base_link"/><link name="arm_link"/>'
+        '<joint name="base_link__arm_link" type="fixed">'
+        '<parent link="base_link"/><child link="arm_link"/></joint></robot>')
     assert {e.get("name") for e in root.findall("link")} == {"base_link", "arm_link"}
     assert root.find("joint").get("name") == "base_link__arm_link"
 

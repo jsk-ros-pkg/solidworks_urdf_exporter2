@@ -668,48 +668,6 @@ def _safe_name(name: str) -> str:
     return safe_name(name)
 
 
-def _sanitize_urdf_names(root) -> None:
-    """Rewrite every ``<link>``/``<joint>`` name -- and all their cross
-    references (joint parent/child link, mimic joint) -- through
-    :func:`_safe_name`, so the emitted URDF never carries a hyphen, space, dot
-    or other character that downstream tools (xacro, ROS, MoveIt) choke on.
-
-    A no-op when the names are already clean (the usual case: the exporter and
-    ``rename_joint`` both validate), so it is a safety net that also covers
-    hand-edited root names, ports and externally imported URDFs."""
-    def _remap(elems, attr):
-        mapping, used = {}, set()
-        for el in elems:
-            orig = el.get(attr)
-            if orig is None or orig in mapping:
-                continue
-            cand, i = _safe_name(orig), 1
-            while cand in used:               # two dirty names -> same clean one
-                i += 1
-                cand = f"{_safe_name(orig)}_{i}"
-            mapping[orig] = cand
-            used.add(cand)
-        return mapping
-
-    links = root.findall("link")
-    joints = root.findall("joint")
-    lmap = _remap(links, "name")
-    jmap = _remap(joints, "name")
-    for le in links:
-        if le.get("name") in lmap:
-            le.set("name", lmap[le.get("name")])
-    for je in joints:
-        if je.get("name") in jmap:
-            je.set("name", jmap[je.get("name")])
-        for tag in ("parent", "child"):
-            el = je.find(tag)
-            if el is not None and el.get("link") in lmap:
-                el.set("link", lmap[el.get("link")])
-        mim = je.find("mimic")
-        if mim is not None and mim.get("joint") in jmap:
-            mim.set("joint", jmap[mim.get("joint")])
-
-
 # <element>: (urdf attribute, JointEdit field) pairs, in URDF attribute order.
 _PHYSICS_ELEMENTS = (
     ("dynamics", (("damping", "damping"), ("friction", "friction"))),
@@ -750,10 +708,11 @@ def build_urdf(state: RobotCompilerState, sanitize: bool = True,
     the exported package and configs stay consistent.
 
     With ``sanitize`` (default), link/joint names are passed through
-    :func:`_sanitize_urdf_names` last, so a CAD-derived URDF is guaranteed free
-    of hyphens and other unsafe characters.  Pass ``sanitize=False`` when editing
-    a URDF the user opened directly: its names are already its own contract (the
-    viewer shows them, edits reference them), so they must be preserved verbatim.
+    :func:`skrobot.urdf.sanitize_urdf_names` last, so a CAD-derived URDF is
+    guaranteed free of hyphens and other unsafe characters.  Pass
+    ``sanitize=False`` when editing a URDF the user opened directly: its names
+    are already its own contract (the viewer shows them, edits reference them),
+    so they must be preserved verbatim.
 
     ``fold_mass_only`` (default) lumps each mass-only link into its fixed parent
     -- the export representation.  Pass ``False`` for the editor's served URDF so
@@ -872,7 +831,8 @@ def build_urdf(state: RobotCompilerState, sanitize: bool = True,
 
     # final guarantee: no hyphens/spaces/etc. in any emitted link or joint name
     if sanitize:
-        _sanitize_urdf_names(root)
+        from skrobot.urdf.sanitize import sanitize_urdf_names
+        sanitize_urdf_names(root)
     return ET.tostring(root, encoding="unicode")
 
 

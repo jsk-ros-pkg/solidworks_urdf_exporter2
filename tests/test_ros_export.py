@@ -165,9 +165,9 @@ def test_merge_fixed_plus_coacd_compose(tmp_path, monkeypatch):
 
     from sw2robot.exporter import ros_export
 
-    monkeypatch.setattr(ros_export, "coacd_available", lambda: True)
-    monkeypatch.setattr(ros_export, "_run_coacd",
-                        lambda v, f, params: _two_unit_boxes())
+    monkeypatch.setattr(ros_export, "is_coacd_available", lambda: True)
+    monkeypatch.setattr(ros_export, "convex_decomposition",
+                        lambda mesh, quality: _two_unit_boxes())
 
     pkg_dir = _make_fixed_pkg_with_collision(tmp_path, robot="rc")
     files = dict(ros_export.build_ros_description(
@@ -263,7 +263,7 @@ def test_collision_hull_needs_no_coacd(tmp_path, monkeypatch):
 
     from sw2robot.exporter import ros_export
 
-    monkeypatch.setattr(ros_export, "coacd_available", lambda: False)
+    monkeypatch.setattr(ros_export, "is_coacd_available", lambda: False)
     pkg_dir = _make_pkg(tmp_path, robot="fing")
     files = dict(ros_export.build_ros_description(
         pkg_dir, "fing", collision="hull"))
@@ -674,14 +674,14 @@ def test_dae_visual_emits_no_material(tmp_path):
 
 
 def _two_unit_boxes():
-    """Two trivial convex parts (unit cubes), as CoACD returns ``(verts, faces)``
-    pairs -- a stand-in for a real decomposition so tests stay fast + CoACD-free."""
+    """Two trivial convex parts (unit cubes), as a decomposition returns them --
+    a stand-in for a real CoACD run so tests stay fast + CoACD-free."""
     import trimesh
 
     a = trimesh.creation.box(extents=(1, 1, 1))
     b = trimesh.creation.box(extents=(1, 1, 1))
     b.apply_translation((2, 0, 0))
-    return [(a.vertices, a.faces), (b.vertices, b.faces)]
+    return [a, b]
 
 
 def test_coacd_collision_expands_into_convex_parts(tmp_path, monkeypatch):
@@ -692,9 +692,9 @@ def test_coacd_collision_expands_into_convex_parts(tmp_path, monkeypatch):
     from sw2robot.exporter import ros_export
 
     # stub CoACD itself so the test is fast and needs no compiled wheel
-    monkeypatch.setattr(ros_export, "coacd_available", lambda: True)
-    monkeypatch.setattr(ros_export, "_run_coacd",
-                        lambda v, f, params: _two_unit_boxes())
+    monkeypatch.setattr(ros_export, "is_coacd_available", lambda: True)
+    monkeypatch.setattr(ros_export, "convex_decomposition",
+                        lambda mesh, quality: _two_unit_boxes())
 
     pkg_dir = _make_pkg(tmp_path, robot="c")
     files = dict(ros_export.build_ros_description(pkg_dir, "c",
@@ -725,12 +725,12 @@ def test_coacd_decomposition_is_cached(tmp_path, monkeypatch):
 
     calls = {"n": 0}
 
-    def _counting_coacd(v, f, params):
+    def _counting_coacd(mesh, quality):
         calls["n"] += 1
         return _two_unit_boxes()
 
-    monkeypatch.setattr(ros_export, "coacd_available", lambda: True)
-    monkeypatch.setattr(ros_export, "_run_coacd", _counting_coacd)
+    monkeypatch.setattr(ros_export, "is_coacd_available", lambda: True)
+    monkeypatch.setattr(ros_export, "convex_decomposition", _counting_coacd)
 
     pkg_dir = _make_pkg(tmp_path, robot="c")
     ros_export.build_ros_description(pkg_dir, "c", collision="coacd")
@@ -746,7 +746,7 @@ def test_coacd_missing_package_errors(tmp_path, monkeypatch):
 
     from sw2robot.exporter import ros_export
 
-    monkeypatch.setattr(ros_export, "coacd_available", lambda: False)
+    monkeypatch.setattr(ros_export, "is_coacd_available", lambda: False)
     pkg_dir = _make_pkg(tmp_path, robot="c")
     with pytest.raises(ValueError, match="pip install coacd"):
         ros_export.build_ros_description(pkg_dir, "c", collision="coacd")
@@ -757,7 +757,7 @@ def test_coacd_invalid_quality_rejected(tmp_path, monkeypatch):
 
     from sw2robot.exporter import ros_export
 
-    monkeypatch.setattr(ros_export, "coacd_available", lambda: True)
+    monkeypatch.setattr(ros_export, "is_coacd_available", lambda: True)
     pkg_dir = _make_pkg(tmp_path, robot="c")
     with pytest.raises(ValueError, match="coacd_quality"):
         ros_export.build_ros_description(pkg_dir, "c", collision="coacd",
@@ -774,12 +774,12 @@ def test_preview_warms_export_cache(tmp_path, monkeypatch):
 
     calls = {"n": 0}
 
-    def _counting(v, f, params):
+    def _counting(mesh, quality):
         calls["n"] += 1
         return _two_unit_boxes()
 
-    monkeypatch.setattr(ros_export, "coacd_available", lambda: True)
-    monkeypatch.setattr(ros_export, "_run_coacd", _counting)
+    monkeypatch.setattr(ros_export, "is_coacd_available", lambda: True)
+    monkeypatch.setattr(ros_export, "convex_decomposition", _counting)
 
     pkg_dir = _make_pkg(tmp_path, robot="c")
     # 1) generate the preview (decomposes the one mesh -> 1 CoACD run)
@@ -805,9 +805,9 @@ def test_collision_preview_glbs_per_link(tmp_path, monkeypatch):
 
     from sw2robot.exporter import ros_export
 
-    monkeypatch.setattr(ros_export, "coacd_available", lambda: True)
-    monkeypatch.setattr(ros_export, "_run_coacd",
-                        lambda v, f, params: _two_unit_boxes())
+    monkeypatch.setattr(ros_export, "is_coacd_available", lambda: True)
+    monkeypatch.setattr(ros_export, "convex_decomposition",
+                        lambda mesh, quality: _two_unit_boxes())
 
     pkg_dir = _make_pkg(tmp_path, robot="c")
     seen = []
@@ -1133,10 +1133,10 @@ def test_build_ros_description_cancels_during_collision_warm(tmp_path):
     from sw2robot.exporter.ros_export import (
         ExportCancelled,
         build_ros_description,
-        coacd_available,
+        is_coacd_available,
     )
 
-    if not coacd_available():
+    if not is_coacd_available():
         _pytest.skip("coacd not installed")
     pkg_dir = _make_pkg(tmp_path, robot="rw")
     with _pytest.raises(ExportCancelled):
