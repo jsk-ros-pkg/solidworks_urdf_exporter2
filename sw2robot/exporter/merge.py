@@ -23,8 +23,7 @@ from __future__ import annotations
 
 import xml.etree.ElementTree as ET
 
-import numpy as np
-from skrobot.coordinates.math import rpy2matrix
+from skrobot.utils.inertia import combine_inertials, transform_inertial
 
 from .geometry import matrix_to_xyz_rpy, urdf_origin_matrix
 
@@ -51,83 +50,66 @@ def _has_geometry(link_el):
             or link_el.find("collision") is not None)
 
 
-def _inertia_tensor(inertia_el):
-    def g(k):
-        return float(inertia_el.get(k, "0"))
-    ixx, ixy, ixz = g("ixx"), g("ixy"), g("ixz")
-    iyy, iyz, izz = g("iyy"), g("iyz"), g("izz")
-    return np.array([[ixx, ixy, ixz], [ixy, iyy, iyz], [ixz, iyz, izz]], float)
+def _vec3(el, attr):
+    """A 3-vector attribute of ``el`` (``"0 0 0"`` when absent/empty)."""
+    raw = (el.get(attr) if el is not None else None) or "0 0 0"
+    return [float(x) for x in raw.split()]
 
 
 def _parse_inertial(link_el):
-    """``(mass, com(3), I(3x3) about com)`` for a link, or None if no inertial.
-    Inertial ``rpy`` is honoured (rotates the tensor into link axes)."""
+    """A link's ``<inertial>`` as skrobot's ``{mass, com, inertia, method}``
+    dict, expressed in the LINK frame -- or None when the block is missing or
+    carries a non-positive / non-finite mass.
+
+    The inertial ``<origin>`` is applied by ``transform_inertial``: its ``rpy``
+    rotates the tensor into link axes and its ``xyz`` places the centre of
+    mass."""
     el = link_el.find("inertial")
     if el is None:
         return None
-    mass_el = el.find("mass")
-    mass = float(mass_el.get("value", "0")) if mass_el is not None else 0.0
-    o = el.find("origin")
-    com = np.array([float(x) for x in (o.get("xyz") if o is not None
-                                       and o.get("xyz") else "0 0 0").split()],
-                   float)
-    rpy = [float(x) for x in (o.get("rpy") if o is not None and o.get("rpy")
-                              else "0 0 0").split()]
     it = el.find("inertia")
     if it is None:
         return None
-    inertia = _inertia_tensor(it)
-    if any(rpy):                       # express the tensor in link axes
-        R = rpy2matrix(*rpy)
-        inertia = R @ inertia @ R.T
-    return mass, com, inertia
+    mass_el = el.find("mass")
+    mass = float(mass_el.get("value", "0")) if mass_el is not None else 0.0
+    components = tuple(float(it.get(k, "0")) for k in
+                       ("ixx", "ixy", "ixz", "iyy", "iyz", "izz"))
+    origin = el.find("origin")
+    return transform_inertial(mass, [0.0, 0.0, 0.0], components,
+                              _vec3(origin, "xyz"), _vec3(origin, "rpy"))
 
 
-def _write_inertial(link_el, mass, com, inertia):
-    """Replace ``link_el``'s ``<inertial>`` with the given mass/com/tensor
-    (axis-aligned: rpy=0)."""
+def _write_inertial(link_el, info):
+    """Replace ``link_el``'s ``<inertial>`` with ``info`` (a skrobot inertial
+    dict), written axis-aligned: ``rpy=0``, since the tensor is already in link
+    axes about ``com``."""
     old = link_el.find("inertial")
     if old is not None:
         link_el.remove(old)
     el = ET.SubElement(link_el, "inertial")
     o = ET.SubElement(el, "origin")
-    o.set("xyz", " ".join(_fmt(v) for v in com))
+    o.set("xyz", " ".join(_fmt(v) for v in info["com"]))
     o.set("rpy", "0 0 0")
-    ET.SubElement(el, "mass").set("value", _fmt(mass))
+    ET.SubElement(el, "mass").set("value", _fmt(info["mass"]))
     it = ET.SubElement(el, "inertia")
-    for k, v in (("ixx", inertia[0, 0]), ("ixy", inertia[0, 1]),
-                 ("ixz", inertia[0, 2]), ("iyy", inertia[1, 1]),
-                 ("iyz", inertia[1, 2]), ("izz", inertia[2, 2])):
+    for k, v in zip(("ixx", "ixy", "ixz", "iyy", "iyz", "izz"),
+                    info["inertia"]):
         it.set(k, _fmt(v))
 
 
-def _parallel_axis(mass, com, inertia, new_com):
-    """Shift an inertia tensor (about ``com``) to be about ``new_com``."""
-    d = np.asarray(com, float) - np.asarray(new_com, float)
-    return inertia + mass * (float(d @ d) * np.eye(3) - np.outer(d, d))
-
-
 def _combine_inertials(parent_el, child_el, T_pc):
-    """Lump the child link's <inertial> into the parent's, with the child first
-    moved into the parent frame by ``T_pc`` (parent<-child).  No-op if the child
-    has no inertial; seeds the parent if it had none."""
-    ci = _parse_inertial(child_el)
-    if ci is None:
+    """Lump the child link's ``<inertial>`` into the parent's, with the child
+    first moved into the parent frame by ``T_pc`` (parent<-child).  No-op if the
+    child has no usable inertial; seeds the parent if it had none."""
+    child = _parse_inertial(child_el)
+    if child is None:
         return
-    m2, c2, I2 = ci
-    R = T_pc[:3, :3]
-    c2 = (T_pc @ np.append(c2, 1.0))[:3]      # child COM in parent frame
-    I2 = R @ I2 @ R.T                          # child tensor in parent axes
-    pi = _parse_inertial(parent_el)
-    if pi is None or pi[0] <= 0:
-        _write_inertial(parent_el, m2, c2, I2)
-        return
-    m1, c1, I1 = pi
-    m = m1 + m2
-    com = (m1 * c1 + m2 * c2) / m
-    inertia = (_parallel_axis(m1, c1, I1, com)
-               + _parallel_axis(m2, c2, I2, com))
-    _write_inertial(parent_el, m, com, inertia)
+    xyz, rpy = matrix_to_xyz_rpy(T_pc)
+    child = transform_inertial(child["mass"], child["com"], child["inertia"],
+                               xyz, rpy)
+    combined = combine_inertials(_parse_inertial(parent_el), child)
+    if combined is not None:
+        _write_inertial(parent_el, combined)
 
 
 def merge_fixed_links(root, force_merge=None, only=None):
