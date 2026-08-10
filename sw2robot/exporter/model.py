@@ -276,7 +276,7 @@ class Component:
     # the same variant, so exports must key on (part_path, configuration)
     configuration: str | None = None
     # SolidWorks-native mass properties (part-local frame, SI), preferred over
-    # the mesh estimate when present -- see exporter.inertia.link_inertial_from_sw
+    # the mesh estimate when present -- see skrobot.utils.inertia.transform_inertial
     sw_mass: float | None = None              # kg
     sw_com: list | None = None                # centre of mass [x,y,z] (m)
     sw_inertia: list | None = None            # (ixx,ixy,ixz,iyy,iyz,izz) about COM
@@ -289,7 +289,7 @@ class Component:
     density_override: bool = False
     # per-link target mass (kg): the inertial is rescaled to this exact weight
     # (config `masses:` / the web editor), mutually exclusive with a density
-    # override -- see exporter.inertia.rescale_to_mass
+    # override -- see skrobot.utils.inertia.rescale_inertial_to_mass
     mass_target: float | None = None
     # standard hardware (screw/bolt/nut/washer/pin): weld it FIXED to whatever it
     # fastens and never let it be a tree parent -- see is_fastener_part
@@ -3441,7 +3441,7 @@ def build_model(graph, robot_name=None, base_hint=None, config=None,
         # Same name matching as densities.  Mutually exclusive with a density
         # override: a target mass rescales the inertial to an exact weight, so
         # clear any density override on the same link (mass wins).  Consumed in
-        # urdf_writer._inertial_xml via exporter.inertia.rescale_to_mass.
+        # urdf_writer._inertial_xml via skrobot.utils.inertia.rescale_inertial_to_mass.
         by_ln = {c.link_name: c for c in comps}
         by_nm = {c.name: c for c in comps}
         for k, v in config["masses"].items():

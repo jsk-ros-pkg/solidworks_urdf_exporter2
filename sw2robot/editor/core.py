@@ -544,7 +544,7 @@ def set_inertial(state: RobotCompilerState, link: str,
         # check the exporter applies to generated inertials, so a hand-entered
         # tensor can't export a simulator-breaking link.  The tensor checks are
         # mass-independent, so use a positive placeholder when mass is unset here.
-        from sw2robot.exporter.inertia import validate_inertia
+        from skrobot.utils.inertia import validate_inertia
         probs = validate_inertia(mass if mass is not None else 1.0, inertia)
         if probs:
             raise ValueError("invalid inertia: " + "; ".join(probs))

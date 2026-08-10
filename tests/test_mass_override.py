@@ -1,6 +1,6 @@
 """Per-link target-mass override (issue #29): a `masses:` block (mirroring
 `densities:`) rescales a link's inertial to an exact weight.  Covers the
-inertia.rescale_to_mass helper, the urdf_writer consumption, the build_model
+rescale_inertial_to_mass helper, the urdf_writer consumption, the build_model
 config parsing + mutual-exclusivity with a density override, and an end-to-end
 build() through joints.yaml."""
 import xml.etree.ElementTree as ET
@@ -15,11 +15,11 @@ def _eye():
 
 # ---------------------------------------------------------------- rescale helper
 
-def test_rescale_to_mass_scales_mass_and_tensor_keeps_com():
-    from sw2robot.exporter.inertia import rescale_to_mass
+def test_rescale_inertial_to_mass_scales_mass_and_tensor_keeps_com():
+    from skrobot.utils.inertia import rescale_inertial_to_mass
     info = {"mass": 2.0, "com": [0.1, -0.2, 0.3],
             "inertia": (3.0, 0.5, 0.0, 4.0, 0.0, 5.0), "method": "solidworks"}
-    out = rescale_to_mass(info, 6.0)          # factor 3
+    out = rescale_inertial_to_mass(info, 6.0)          # factor 3
     assert out["mass"] == 6.0
     assert np.allclose(out["com"], [0.1, -0.2, 0.3])          # com unchanged
     assert np.allclose(out["inertia"], (9.0, 1.5, 0.0, 12.0, 0.0, 15.0))
@@ -28,15 +28,15 @@ def test_rescale_to_mass_scales_mass_and_tensor_keeps_com():
     assert info["mass"] == 2.0 and info["method"] == "solidworks"
 
 
-def test_rescale_to_mass_noop_on_bad_input():
-    from sw2robot.exporter.inertia import rescale_to_mass
-    assert rescale_to_mass(None, 5.0) is None
+def test_rescale_inertial_to_mass_noop_on_bad_input():
+    from skrobot.utils.inertia import rescale_inertial_to_mass
+    assert rescale_inertial_to_mass(None, 5.0) is None
     bad = {"mass": 0.0, "com": [0, 0, 0], "inertia": (1, 0, 0, 1, 0, 1),
            "method": "x"}
-    assert rescale_to_mass(bad, 5.0) is bad          # zero base mass -> unchanged
+    assert rescale_inertial_to_mass(bad, 5.0) is bad          # zero base mass -> unchanged
     good = {"mass": 1.0, "com": [0, 0, 0], "inertia": (1, 0, 0, 1, 0, 1),
             "method": "x"}
-    assert rescale_to_mass(good, 0.0) is good        # non-positive target -> unchanged
+    assert rescale_inertial_to_mass(good, 0.0) is good        # non-positive target -> unchanged
 
 
 # ---------------------------------------------------------------- urdf writer

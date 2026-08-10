@@ -46,27 +46,31 @@ def test_sw_mass_props_rejects_degenerate():
 
 
 # ---------------------------------------------------------------- transform
-def test_link_inertial_from_sw_identity_origin():
+# The SW-native -> link-frame mapping is skrobot's transform_inertial; these
+# pin the contract urdf_writer._inertial_xml depends on (frame mapping + the
+# "solidworks" provenance tag it passes).
+def test_sw_inertial_transform_identity_origin():
     """With an identity visual origin the SW values pass through unchanged."""
-    from sw2robot.exporter.inertia import link_inertial_from_sw
+    from skrobot.utils.inertia import transform_inertial
 
-    info = link_inertial_from_sw(
+    info = transform_inertial(
         2.0, [0.1, 0.0, 0.0], (3.0, 0.0, 0.0, 4.0, 0.0, 5.0),
-        visual_xyz=[0, 0, 0], visual_rpy=[0, 0, 0])
+        visual_xyz=[0, 0, 0], visual_rpy=[0, 0, 0], method="solidworks")
     assert info["method"] == "solidworks"
     assert info["mass"] == 2.0
     assert np.allclose(info["com"], [0.1, 0.0, 0.0])
     assert np.allclose(info["inertia"], (3.0, 0.0, 0.0, 4.0, 0.0, 5.0))
 
 
-def test_link_inertial_from_sw_rotation_translation():
+def test_sw_inertial_transform_rotation_translation():
     """A 90 deg rotation about Z swaps the x/y diagonal terms; the COM is both
     rotated and translated."""
-    from sw2robot.exporter.inertia import link_inertial_from_sw
+    from skrobot.utils.inertia import transform_inertial
 
-    info = link_inertial_from_sw(
+    info = transform_inertial(
         1.0, [1.0, 0.0, 0.0], (2.0, 0.0, 0.0, 7.0, 0.0, 9.0),
-        visual_xyz=[0.0, 0.0, 0.5], visual_rpy=[0.0, 0.0, np.pi / 2])
+        visual_xyz=[0.0, 0.0, 0.5], visual_rpy=[0.0, 0.0, np.pi / 2],
+        method="solidworks")
     # com: Rz(90)@[1,0,0] = [0,1,0], then + [0,0,0.5]
     assert np.allclose(info["com"], [0.0, 1.0, 0.5], atol=1e-9)
     ixx, ixy, ixz, iyy, iyz, izz = info["inertia"]
@@ -76,9 +80,11 @@ def test_link_inertial_from_sw_rotation_translation():
     assert np.isclose(izz, 9.0, atol=1e-9)
 
 
-def test_link_inertial_from_sw_none_on_missing():
-    from sw2robot.exporter.inertia import link_inertial_from_sw
-    assert link_inertial_from_sw(None, None, None, [0, 0, 0], [0, 0, 0]) is None
+def test_sw_inertial_transform_none_on_missing():
+    """Missing SW values must yield None so the writer falls back to the mesh."""
+    from skrobot.utils.inertia import transform_inertial
+    assert transform_inertial(None, None, None, [0, 0, 0], [0, 0, 0],
+                              method="solidworks") is None
 
 
 # ---------------------------------------------------------------- writer priority
@@ -119,7 +125,7 @@ def test_explicit_density_overrides_solidworks(tmp_path):
 
 # ---------------------------------------------------------------- validate_inertia
 def test_validate_inertia_accepts_a_real_tensor():
-    from sw2robot.exporter.inertia import validate_inertia
+    from skrobot.utils.inertia import validate_inertia
     # a plausible solid block: diagonal, triangle inequality holds
     assert validate_inertia(2.0, (3.0, 0.0, 0.0, 4.0, 0.0, 5.0)) == []
     # off-diagonal but still SPD + valid
@@ -127,27 +133,28 @@ def test_validate_inertia_accepts_a_real_tensor():
 
 
 def test_validate_inertia_flags_bad_mass():
-    from sw2robot.exporter.inertia import validate_inertia
+    from skrobot.utils.inertia import validate_inertia
     probs = validate_inertia(0.0, (1.0, 0.0, 0.0, 1.0, 0.0, 1.0))
     assert any("mass" in p for p in probs)
     assert validate_inertia(-1.0, (1.0, 0.0, 0.0, 1.0, 0.0, 1.0))
 
 
 def test_validate_inertia_flags_non_positive_definite():
-    from sw2robot.exporter.inertia import validate_inertia
+    from skrobot.utils.inertia import validate_inertia
     # a negative principal moment (e.g. a sign/units bug) -> not SPD
     probs = validate_inertia(1.0, (-1.0, 0.0, 0.0, 2.0, 0.0, 3.0))
     assert any("positive definite" in p for p in probs)
 
 
 def test_validate_inertia_flags_triangle_violation():
-    from sw2robot.exporter.inertia import validate_inertia
+    from skrobot.utils.inertia import validate_inertia
     # all positive, but I1+I2 < I3 (1 + 1 < 10) -> physically impossible
     probs = validate_inertia(1.0, (1.0, 0.0, 0.0, 1.0, 0.0, 10.0))
     assert any("triangle inequality" in p for p in probs)
 
 
 def test_validate_inertia_placeholder_is_valid():
-    from sw2robot.exporter.inertia import validate_inertia
+    from skrobot.utils.inertia import validate_inertia
+
     from sw2robot.exporter.urdf_writer import _PLACEHOLDER_INERTIAL as P
     assert validate_inertia(P["mass"], P["inertia"]) == []

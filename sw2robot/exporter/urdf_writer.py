@@ -18,7 +18,14 @@ from __future__ import annotations
 
 import os
 
-from . import inertia as _inertia
+from skrobot.utils.inertia import (
+    DEFAULT_DENSITY,
+    rescale_inertial_to_mass,
+    transform_inertial,
+    validate_inertia,
+)
+
+from .inertia import link_inertial
 from .model import safe_name
 
 # Fallback inertial when no mesh is available / its volume is unusable.
@@ -87,10 +94,14 @@ def _inertial_xml(comp, mesh_dir, density):
     info = None
     # 1. SolidWorks-native values (only when no density override is in force)
     if density is None and not getattr(comp, "density_override", False):
-        info = _inertia.link_inertial_from_sw(
+        # SI already (kg, metres, kg.m^2) and expressed in the part's OWN
+        # frame -- the frame the mesh is exported in -- so the visual origin
+        # maps them into the link frame exactly as the mesh path does, with
+        # NO extra scaling.
+        info = transform_inertial(
             getattr(comp, "sw_mass", None), getattr(comp, "sw_com", None),
             getattr(comp, "sw_inertia", None),
-            comp.visual_xyz, comp.visual_rpy)
+            comp.visual_xyz, comp.visual_rpy, method="solidworks")
     # 2. Mesh estimate
     if info is None and comp.mesh_file and mesh_dir:
         # mesh_file may carry Windows backslashes (extracted on Windows); split
@@ -100,8 +111,8 @@ def _inertial_xml(comp, mesh_dir, density):
         # global default (config `density:` still overrides everything via
         # the caller)
         d = (getattr(comp, "density", None)
-             or (density if density is not None else _inertia.DEFAULT_DENSITY))
-        info = _inertia.link_inertial(
+             or (density if density is not None else DEFAULT_DENSITY))
+        info = link_inertial(
             os.path.join(mesh_dir, *rel.split("/")),
             comp.visual_xyz, comp.visual_rpy, density=d)
     if info is None:
@@ -109,10 +120,10 @@ def _inertial_xml(comp, mesh_dir, density):
     # 4. per-link target mass: rescale whatever inertial we derived (SW-native,
     # mesh, or placeholder) to the exact requested weight -- see the `masses:`
     # override applied in model.build.  Mass and the full tensor scale together;
-    # the com is unchanged (exporter.inertia.rescale_to_mass).
+    # the com is unchanged (skrobot.utils.inertia.rescale_inertial_to_mass).
     mass_target = getattr(comp, "mass_target", None)
     if mass_target:
-        info = _inertia.rescale_to_mass(info, mass_target)
+        info = rescale_inertial_to_mass(info, mass_target)
     ixx, ixy, ixz, iyy, iyz, izz = info["inertia"]
     lines = [
         "    <inertial>",
@@ -122,7 +133,7 @@ def _inertial_xml(comp, mesh_dir, density):
         f'iyy="{iyy:.6g}" iyz="{iyz:.6g}" izz="{izz:.6g}"/>',
         "    </inertial>",
     ]
-    problems = _inertia.validate_inertia(info["mass"], info["inertia"])
+    problems = validate_inertia(info["mass"], info["inertia"])
     return lines, info["method"], problems
 
 
