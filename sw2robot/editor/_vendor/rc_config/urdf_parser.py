@@ -16,12 +16,13 @@ as an empty robot instead of the ValueError callers already handle; and its
 ``base_link`` is None for every multi-root or disconnected document, which is
 precisely the case the tie-break below exists to decide (a None root sends the
 webserver's root-link rename down the ``link_names:`` branch instead of
-``root_link_name:``).  It also normalises the axis and drops absent limits to
-None, neither of which round-trips back to what this returns.
+``root_link_name:``).  It also normalises the axis and defaults it to
+``[1, 0, 0]`` rather than keeping the raw ``[0, 0, 1]`` this returns.
 
-``skrobot.urdf.structure`` holds a tolerant ElementTree equivalent of the graph
-walk below, with the same document-order base-link semantics, but it is
-private, and carries no effort limit and no per-link geometry flags.
+``skrobot.urdf.structure`` walks the graph off ElementTree with the same
+document-order base-link semantics and survives a missing type/parent/child,
+but it is private, still raises on an unnamed link or joint, and carries no
+effort limit and no per-link geometry flags.
 """
 
 import xml.etree.ElementTree as ET

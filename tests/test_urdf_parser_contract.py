@@ -72,6 +72,33 @@ def test_absent_optionals_get_defaults():
     assert (j["velocityLimit"], j["effortLimit"]) == (0.0, 0.0)
 
 
+def test_axis_element_without_xyz_still_defaults_to_z():
+    """``<axis/>`` present but empty defaults the same as no ``<axis>`` at all.
+    URDF's own default is +X, so anything reading this must not assume the
+    spec value."""
+    parsed = parse_urdf_content("""<robot name="ax">
+      <link name="a"/><link name="b"/>
+      <joint name="j" type="revolute">
+        <parent link="a"/><child link="b"/><axis/>
+      </joint>
+    </robot>""")
+
+    assert parsed["joints"][0]["axis"] == [0.0, 0.0, 1.0]
+
+
+def test_axis_is_kept_raw_not_normalised():
+    """The axis round-trips as written; normalising it here would silently
+    rewrite a URDF the editor only meant to read."""
+    parsed = parse_urdf_content("""<robot name="raw">
+      <link name="a"/><link name="b"/>
+      <joint name="j" type="revolute">
+        <parent link="a"/><child link="b"/><axis xyz="0 0 2"/>
+      </joint>
+    </robot>""")
+
+    assert parsed["joints"][0]["axis"] == [0.0, 0.0, 2.0]
+
+
 def test_document_order_is_preserved():
     parsed = parse_urdf_content("""<robot name="o">
       <link name="c"/><link name="a"/><link name="b"/>
