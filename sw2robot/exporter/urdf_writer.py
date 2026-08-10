@@ -25,6 +25,7 @@ from skrobot.utils.inertia import (
     validate_inertia,
 )
 
+from .geometry import fmt_urdf_vec
 from .inertia import link_inertial
 from .model import safe_name
 
@@ -33,10 +34,6 @@ _PLACEHOLDER_INERTIAL = {
     "mass": 0.1, "com": [0.0, 0.0, 0.0],
     "inertia": (1e-4, 0.0, 0.0, 1e-4, 0.0, 1e-4), "method": "placeholder",
 }
-
-
-def _fmt(v):
-    return " ".join(f"{x:.8g}" for x in v)
 
 
 def _comment_safe(text):
@@ -127,7 +124,7 @@ def _inertial_xml(comp, mesh_dir, density):
     ixx, ixy, ixz, iyy, iyz, izz = info["inertia"]
     lines = [
         "    <inertial>",
-        f'      <origin xyz="{_fmt(info["com"])}" rpy="0 0 0"/>',
+        f'      <origin xyz="{fmt_urdf_vec(info["com"])}" rpy="0 0 0"/>',
         f'      <mass value="{info["mass"]:.6g}"/>',
         f'      <inertia ixx="{ixx:.6g}" ixy="{ixy:.6g}" ixz="{ixz:.6g}" '
         f'iyy="{iyy:.6g}" iyz="{iyz:.6g}" izz="{izz:.6g}"/>',
@@ -177,8 +174,8 @@ def _link_xml(comp, ros_pkg=None, rn=lambda n: n, mesh_dir=None, density=None):
     if comp.mesh_file and not getattr(comp, "mass_only", False):
         mesh_ref = ("package://{}/{}".format(ros_pkg, comp.mesh_file.replace("\\", "/"))
                     if ros_pkg else "../" + comp.mesh_file.replace("\\", "/"))
-        vorigin = (f'      <origin xyz="{_fmt(comp.visual_xyz)}" '
-                   f'rpy="{_fmt(comp.visual_rpy)}"/>')
+        vorigin = (f'      <origin xyz="{fmt_urdf_vec(comp.visual_xyz)}" '
+                   f'rpy="{fmt_urdf_vec(comp.visual_rpy)}"/>')
         for tag in ("visual", "collision"):
             lines.append(f"    <{tag}>")
             lines.append(vorigin)
@@ -227,11 +224,12 @@ def _physics_lines(joint):
 
 def _joint_xml(joint, rn=lambda n: n, jn=lambda n: n):
     lines = [f'  <joint name="{jn(joint.name)}" type="{joint.jtype}">']
-    lines.append(f'    <origin xyz="{_fmt(joint.xyz)}" rpy="{_fmt(joint.rpy)}"/>')
+    lines.append(f'    <origin xyz="{fmt_urdf_vec(joint.xyz)}" '
+                 f'rpy="{fmt_urdf_vec(joint.rpy)}"/>')
     lines.append(f'    <parent link="{rn(joint.parent)}"/>')
     lines.append(f'    <child link="{rn(joint.child)}"/>')
     if joint.axis is not None:
-        lines.append(f'    <axis xyz="{_fmt(joint.axis)}"/>')
+        lines.append(f'    <axis xyz="{fmt_urdf_vec(joint.axis)}"/>')
     eff = getattr(joint, "effort", None)
     vel = getattr(joint, "velocity", None)
     eff = 10 if eff is None else eff
@@ -275,7 +273,7 @@ def _port_xml(port, rn=lambda n: n, link_name=None, joint_name=None):
     return "\n".join([
         f'  <link name="{link_name}"/>',
         f'  <joint name="{joint_name}" type="fixed">',
-        f'    <origin xyz="{_fmt(port.xyz)}" rpy="{_fmt(port.rpy)}"/>',
+        f'    <origin xyz="{fmt_urdf_vec(port.xyz)}" rpy="{fmt_urdf_vec(port.rpy)}"/>',
         f'    <parent link="{rn(port.parent_link)}"/>',
         f'    <child link="{link_name}"/>',
         "  </joint>",

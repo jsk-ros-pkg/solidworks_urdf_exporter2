@@ -3,13 +3,13 @@
   <link name="fingertip_back_1">
     <!-- sw2robot inertia="hull" -->
     <visual>
-      <origin xyz="-0.021039487 0.0155 0.031" rpy="3.1415927 0 3.1415927"/>
+      <origin xyz="-0.02103948669 0.0155 0.031" rpy="3.141592654 0 3.141592654"/>
       <geometry>
         <mesh filename="../meshes/fingertip_back_1.3dxml"/>
       </geometry>
     </visual>
     <collision>
-      <origin xyz="-0.021039487 0.0155 0.031" rpy="3.1415927 0 3.1415927"/>
+      <origin xyz="-0.02103948669 0.0155 0.031" rpy="3.141592654 0 3.141592654"/>
       <geometry>
         <mesh filename="../meshes/fingertip_back_1.3dxml"/>
       </geometry>
@@ -49,14 +49,14 @@
     <inertial/>
   </link>
   <joint name="fingertip_front_2__screwlock_male_hard_jointbase_v4_1" type="fixed">
-    <origin xyz="0 -0.0155 0.038" rpy="1.5707963 0 -3.1415927"/>
+    <origin xyz="0 -0.0155 0.038" rpy="1.570796327 0 -3.141592654"/>
     <parent link="base_link"/>
     <child link="screwlock_male_hard_jointbase_v4_1"/>
-    <axis xyz="-0 -0 1"/>
+    <axis xyz="0 0 1"/>
     <!-- mates: CONCENTRIC, COINCIDENT, PARALLEL, CONCENTRIC, COINCIDENT, PARALLEL -->
   </joint>
   <joint name="fingertip_front_2__fingertip_back_1" type="revolute">
-    <origin xyz="0.021039487 -0.0155 0.031" rpy="3.1415927 0 0"/>
+    <origin xyz="0.02103948669 -0.0155 0.031" rpy="3.141592654 0 0"/>
     <parent link="base_link"/>
     <child link="fingertip_back_1"/>
     <axis xyz="0 1 0"/>

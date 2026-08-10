@@ -592,7 +592,9 @@ def validate(state: RobotCompilerState) -> list:
 
 # --------------------------------------------------------------- #4 export
 def _set_xyz(elem, vec):
-    elem.set("xyz", " ".join(f"{v:.8g}" for v in vec))
+    from sw2robot.exporter.geometry import fmt_urdf_vec
+
+    elem.set("xyz", fmt_urdf_vec(vec))
 
 
 def _hex_to_rgba(hex_color: str) -> str:
