@@ -106,11 +106,11 @@ def fmt_urdf_num(v):
     to well below a nanometre while staying readable; the 8 digits some call
     sites used to print truncated the value on the first edit.
 
-    This is pure formatting -- no rounding.  Floating-point noise is snapped
-    where it is produced (``matrix_to_xyz_rpy``), not here, so a small number
-    that reached this function is a real one.  The single exception is IEEE
-    negative zero, which prints as ``0``: ``-0`` is legal XML but reads as a
-    bug in an exported file.
+    Rounding stops at that 10th digit and goes no further: floating-point
+    noise is snapped where it is produced (``matrix_to_xyz_rpy``), not here,
+    so a very small number that reaches this function is a real one and prints
+    as itself.  The single exception is IEEE negative zero, which prints as
+    ``0``: ``-0`` is legal XML but reads as a bug in an exported file.
     """
     v = float(v)
     return "0" if v == 0.0 else f"{v:.10g}"
