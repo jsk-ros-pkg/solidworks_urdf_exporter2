@@ -1,56 +1,34 @@
-"""Compute a link's inertial (mass, centre of mass, inertia tensor) from its
-mesh, so the generated URDF carries real dynamics instead of a placeholder.
+"""sw2robot's mesh-unit convention for link inertials.
 
-Units: the SolidWorks-exported meshes are in **millimetres** (a servo body is
-~32 mm), while the URDF skeleton is in **metres**.  We therefore scale the mesh
-by ``MM_TO_M`` before applying density, so mass comes out in kg and the inertia
-tensor in kg.m^2 -- directly usable by Gazebo / MoveIt.
+The inertial maths itself lives in :mod:`skrobot.utils.inertia`
+(``mesh_mass_properties``, ``transform_inertial``, ``link_inertial_from_mesh``,
+``rescale_inertial_to_mass``, ``validate_inertia``) -- call those directly.
+What is sw2robot-specific, and all that remains here, is the SCALE of the
+meshes we hand it:
 
-The mesh is moved into the *link* frame (via the visual origin) before the
-integral, so the returned centre of mass and tensor are expressed in link
-coordinates -- exactly what the URDF ``<inertial>`` element wants.
-
-Many CAD meshes are NOT watertight; trimesh's volume integral is then
-unreliable.  We fall back to the convex hull (always watertight, a mild
-over-estimate) and, failing that, the oriented bounding box, and we report which
-links used an approximation rather than silently emitting wrong numbers.
+* SolidWorks exports parts in **millimetres** (a servo body is ~32 mm) while
+  the URDF skeleton is in **metres**, so a per-part mesh needs ``MM_TO_M``
+  before density is applied -- otherwise mass comes out 1e9 times too large.
+* Composed sub-assembly ``.glb`` files are the exception: ``mesh.py`` already
+  applies the 0.001 and stamps ``units="meter"`` when it writes them, so they
+  must NOT be scaled again.
 """
 
 from __future__ import annotations
 
-import os
-
-import numpy as np
-
-# URDF convention: R = Rz(yaw) @ Ry(pitch) @ Rx(roll), extrinsic X-Y-Z
-from skrobot.coordinates.math import rpy2matrix
+from skrobot.utils.inertia import DEFAULT_DENSITY, link_inertial_from_mesh
 
 MM_TO_M = 0.001
-DEFAULT_DENSITY = 1000.0  # kg/m^3 -- generic light part; override per build
-
-
-def _solid_properties(mesh, density):
-    """(mass, com(3), I 3x3) for ``mesh`` treated as a solid of ``density``.
-
-    Returns ``None`` if the mesh has no usable volume."""
-    if mesh is None or not hasattr(mesh, "vertices") or len(mesh.vertices) == 0:
-        return None
-    vol = float(getattr(mesh, "volume", 0.0) or 0.0)
-    if not np.isfinite(vol) or vol <= 0:
-        return None
-    mesh.density = float(density)
-    mass = float(mesh.mass)
-    com = np.asarray(mesh.center_mass, dtype=float)
-    inertia = np.asarray(mesh.moment_inertia, dtype=float)  # about COM, link axes
-    if not (np.isfinite(mass) and mass > 0 and np.all(np.isfinite(com))
-            and np.all(np.isfinite(inertia))):
-        return None
-    return mass, com, inertia
 
 
 def link_inertial(mesh_path, visual_xyz, visual_rpy,
                   density=DEFAULT_DENSITY, scale=MM_TO_M):
-    """Inertial for one link, computed in the link frame.
+    """Inertial for one link, in the link frame, from a sw2robot-exported mesh.
+
+    A thin wrapper over :func:`skrobot.utils.inertia.link_inertial_from_mesh`
+    that applies sw2robot's mesh-unit convention: millimetre parts by default,
+    but ``.glb`` sub-assembly composites taken as metres (see the module
+    docstring).
 
     Parameters
     ----------
@@ -61,7 +39,7 @@ def link_inertial(mesh_path, visual_xyz, visual_rpy,
     density : float
         Material density in kg/m^3.
     scale : float
-        Mesh-unit -> metre factor (SolidWorks mm exports -> 0.001).
+        Mesh-unit -> metre factor, overridden to 1.0 for ``.glb`` inputs.
 
     Returns
     -------
@@ -73,184 +51,6 @@ def link_inertial(mesh_path, visual_xyz, visual_rpy,
     if not mesh_path:
         return None
     if mesh_path.lower().endswith(".glb"):
-        # composed sub-assembly GLBs are written in metres already
-        # (mesh.py applies the 0.001 and stamps units="meter")
         scale = 1.0
-    props = _mesh_props(mesh_path, density, scale)
-    if props is None:
-        return None
-    mass, com_m, I_m, method = props
-    # mesh-frame -> link-frame: rotation rotates the tensor (about the com,
-    # so the translation does not enter), translation moves the com
-    R = rpy2matrix(*visual_rpy)
-    com = R @ com_m + np.asarray(visual_xyz, dtype=float)
-    I = R @ I_m @ R.T
-    return {
-        "mass": mass,
-        "com": [float(c) for c in com],
-        "inertia": (float(I[0, 0]), float(I[0, 1]), float(I[0, 2]),
-                    float(I[1, 1]), float(I[1, 2]), float(I[2, 2])),
-        "method": method,
-    }
-
-
-def link_inertial_from_sw(mass, com_local, inertia6_local,
-                          visual_xyz, visual_rpy):
-    """Inertial in the LINK frame from SolidWorks-native mass properties.
-
-    ``mass``/``com_local``/``inertia6_local`` come straight from the part's
-    ``IMassProperty`` (see ``model._sw_mass_props``): SI units already (kg,
-    metres, kg.m^2) and expressed in the part's OWN coordinate frame -- the
-    very frame the mesh is exported in -- so the visual origin maps them into
-    the link frame exactly as the mesh path does, with NO extra scaling.
-
-    ``inertia6_local`` is ``(ixx, ixy, ixz, iyy, iyz, izz)`` of the tensor
-    about the centre of mass.  Returns the same dict shape as
-    :func:`link_inertial` (``method="solidworks"``), or ``None`` if the values
-    are missing / non-finite so the caller can fall back to the mesh."""
-    if mass is None or com_local is None or inertia6_local is None:
-        return None
-    try:
-        m = float(mass)
-        com_l = np.asarray(com_local, dtype=float)
-        ixx, ixy, ixz, iyy, iyz, izz = (float(x) for x in inertia6_local)
-    except (TypeError, ValueError):
-        return None
-    I_l = np.array([[ixx, ixy, ixz],
-                    [ixy, iyy, iyz],
-                    [ixz, iyz, izz]], dtype=float)
-    if not (np.isfinite(m) and m > 0 and com_l.shape == (3,)
-            and np.all(np.isfinite(com_l)) and np.all(np.isfinite(I_l))):
-        return None
-    # mesh-frame -> link-frame, identical transform to link_inertial: the
-    # rotation rotates the tensor about the (unchanged) com, the translation
-    # moves the com.
-    R = rpy2matrix(*visual_rpy)
-    com = R @ com_l + np.asarray(visual_xyz, dtype=float)
-    I = R @ I_l @ R.T
-    return {
-        "mass": m,
-        "com": [float(c) for c in com],
-        "inertia": (float(I[0, 0]), float(I[0, 1]), float(I[0, 2]),
-                    float(I[1, 1]), float(I[1, 2]), float(I[2, 2])),
-        "method": "solidworks",
-    }
-
-
-def rescale_to_mass(info, target_mass):
-    """Rescale a computed inertial dict to an exact target mass (kg).
-
-    ``info`` is a dict as returned by :func:`link_inertial` /
-    :func:`link_inertial_from_sw` (``{mass, com, inertia, method}``).  For a
-    rigid body of fixed geometry, changing the (uniform) density scales the
-    mass and the full inertia tensor by the SAME factor, while the centre of
-    mass is unchanged -- so we multiply ``mass`` and all six inertia components
-    by ``target_mass / mass`` and leave ``com`` alone.  ``method`` is annotated
-    with ``"->mass"`` so the provenance report shows the rescale happened.
-
-    Returns a new dict (does not mutate ``info``).  If ``info`` is falsy or its
-    mass is non-positive/non-finite, returns ``info`` unchanged (nothing sane to
-    scale from)."""
-    if not info:
-        return info
-    try:
-        m0 = float(info["mass"])
-        target = float(target_mass)
-    except (TypeError, ValueError, KeyError):
-        return info
-    if not (np.isfinite(m0) and m0 > 0 and np.isfinite(target) and target > 0):
-        return info
-    factor = target / m0
-    return {
-        "mass": target,
-        "com": list(info["com"]),
-        "inertia": tuple(float(x) * factor for x in info["inertia"]),
-        "method": f'{info.get("method", "?")}->mass',
-    }
-
-
-def validate_inertia(mass, inertia6, rel_tol=1e-6):
-    """Physics sanity-check one link's inertial; return a list of problem
-    strings (empty list == OK).
-
-    A real rigid body's inertia tensor (taken about the centre of mass) must be
-    symmetric **positive definite** -- all principal moments (eigenvalues
-    ``I1 <= I2 <= I3``) strictly positive -- and those moments must satisfy the
-    **triangle inequality** ``I1 + I2 >= I3`` (the geometric constraint every
-    physical mass distribution obeys; the other two combinations follow once all
-    are positive).  Violating either makes a simulator's integrator diverge, and
-    usually signals a units / frame / transform bug upstream.
-
-    ``rel_tol`` is applied relative to the largest principal moment so ordinary
-    floating-point / tessellation noise does not trip the checks."""
-    problems = []
-    if mass is None or not np.isfinite(mass) or mass <= 0:
-        problems.append(f"mass is not positive (= {mass})")
-    try:
-        ixx, ixy, ixz, iyy, iyz, izz = (float(x) for x in inertia6)
-    except (TypeError, ValueError):
-        problems.append("inertia is not a 6-tuple (ixx,ixy,ixz,iyy,iyz,izz)")
-        return problems
-    I = np.array([[ixx, ixy, ixz], [ixy, iyy, iyz], [ixz, iyz, izz]], float)
-    if not np.all(np.isfinite(I)):
-        problems.append("inertia tensor has non-finite entries")
-        return problems
-    e = np.linalg.eigvalsh(I)                 # ascending, real (symmetric)
-    atol = rel_tol * max(abs(float(e[-1])), 1e-12)
-    if e[0] <= atol:
-        problems.append(
-            "inertia tensor is not positive definite "
-            f"(smallest principal moment {e[0]:.4g} <= 0)")
-    elif e[0] + e[1] < e[2] - atol:           # triangle inequality (binding pair)
-        problems.append(
-            "principal moments violate the triangle inequality "
-            f"(I1+I2 < I3: {e[0]:.4g} + {e[1]:.4g} < {e[2]:.4g})")
-    return problems
-
-
-_PROPS_CACHE = {}
-
-
-def _mesh_props(mesh_path, density, scale):
-    """(mass, com, I_about_com, method) in SCALED MESH coordinates, cached by
-    (path, mtime, density, scale).  Loading + watertight checks dominate a
-    rebuild (~60 ms per mesh), and the result is pose-independent, so every
-    re-build / instance reuse after the first is effectively free."""
-    try:
-        key = (os.path.abspath(mesh_path), os.path.getmtime(mesh_path),
-               float(density), float(scale))
-    except OSError:
-        return None
-    if key in _PROPS_CACHE:
-        return _PROPS_CACHE[key]
-    result = None
-    try:
-        import trimesh
-        mesh = trimesh.load(mesh_path, force="mesh")
-        if mesh is not None and hasattr(mesh, "vertices") \
-                and len(mesh.vertices):
-            mesh = mesh.copy()
-            mesh.apply_scale(scale)
-            method = "mesh"
-            props = _solid_properties(mesh, density) \
-                if mesh.is_watertight else None
-            if props is None:
-                method = "hull"
-                try:
-                    props = _solid_properties(mesh.convex_hull, density)
-                except Exception:
-                    props = None
-            if props is None:
-                method = "bbox"
-                try:
-                    props = _solid_properties(mesh.bounding_box_oriented,
-                                              density)
-                except Exception:
-                    props = None
-            if props is not None:
-                mass, com, inertia = props
-                result = (mass, com, inertia, method)
-    except Exception:
-        result = None
-    _PROPS_CACHE[key] = result
-    return result
+    return link_inertial_from_mesh(mesh_path, visual_xyz, visual_rpy,
+                                   density=density, scale=scale)
