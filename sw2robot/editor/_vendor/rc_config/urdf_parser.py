@@ -2,6 +2,27 @@
 URDF Parser for configuration page.
 
 Extracts joint and link information from URDF content.
+
+Deliberately NOT ``skrobot.utils.urdf.URDF``, which the editor does use
+wherever it needs kinematics.  That loader validates as much as it parses, and
+the documents reaching this function are the ones that fail validation: the
+editor opens whatever URDF a user points it at, and its own in-progress URDFs
+are routinely partial (see ``webserver._urdf_link_world_poses``).  Concretely
+``URDF.load`` raises on an empty ``<inertial/>``, on a joint missing
+``type``/``<parent>``/``<child>``, on a link with no ``name`` and on any joint
+type outside its fixed list; on an XML syntax error it returns
+``URDF(name='INVALID_URDF', links=[])``, so a broken file would reach the UI
+as an empty robot instead of the ValueError callers already handle; and its
+``base_link`` is None for every multi-root or disconnected document, which is
+precisely the case the tie-break below exists to decide (a None root sends the
+webserver's root-link rename down the ``link_names:`` branch instead of
+``root_link_name:``).  It also normalises the axis and defaults it to
+``[1, 0, 0]`` rather than keeping the raw ``[0, 0, 1]`` this returns.
+
+``skrobot.urdf.structure`` walks the graph off ElementTree with the same
+document-order base-link semantics and survives a missing type/parent/child,
+but it is private, still raises on an unnamed link or joint, and carries no
+effort limit and no per-link geometry flags.
 """
 
 import xml.etree.ElementTree as ET
