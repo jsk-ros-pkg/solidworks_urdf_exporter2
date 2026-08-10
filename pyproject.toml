@@ -41,10 +41,11 @@ dependencies = [
     "lxml",
     "pydantic>=2",
     "pyyaml>=6",
-    # rotation/transform math (rpy<->matrix) and FK; >=0.3.17 also ships the
-    # per-mesh primitive API (skrobot.utils.primitive_fitting) used by the
-    # ROS-export --collision fitting.
-    "scikit-robot>=0.3.17",
+    # rotation/transform math (rpy<->matrix), FK, and the per-mesh primitive
+    # API (skrobot.utils.primitive_fitting) used by the ROS-export --collision
+    # fitting; >=0.3.27 for orthonormalize_rotation_matrix / matrix_relative /
+    # matrix2xyzrpy / rpy2homogeneous (geometry.py and friends).
+    "scikit-robot>=0.3.27",
     # only the EXTRACT step (driving SolidWorks COM) needs this, and only on Windows
     "pywin32>=306; sys_platform == 'win32'",
 ]

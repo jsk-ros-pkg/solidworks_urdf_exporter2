@@ -7,11 +7,12 @@ import yaml
 
 
 def test_zdir_to_rpy_points_local_z_along_zdir():
+    from skrobot.coordinates.math import rpy2homogeneous
+
     from sw2robot.editor import webserver as w
-    from sw2robot.exporter.geometry import matrix_from_rpy
     for zdir in ([0, 0, 1], [1, 0, 0], [0, 1, 0], [0, 0, -1], [1, 1, 1]):
         rpy = w._zdir_to_rpy(zdir)
-        got = matrix_from_rpy(rpy)[:3, :3] @ np.array([0.0, 0.0, 1.0])
+        got = rpy2homogeneous(*rpy)[:3, :3] @ np.array([0.0, 0.0, 1.0])
         want = np.asarray(zdir, float)
         want = want / np.linalg.norm(want)
         assert np.allclose(got, want, atol=1e-6), (zdir, rpy, got)
@@ -21,11 +22,12 @@ def test_zdir_to_rpy_points_local_z_along_zdir():
 
 def test_zdir_to_rpy_near_antiparallel_is_stable():
     """A normal pointing (almost) along -Z must not blow up 1/(1+c)."""
+    from skrobot.coordinates.math import rpy2homogeneous
+
     from sw2robot.editor import webserver as w
-    from sw2robot.exporter.geometry import matrix_from_rpy
     for zdir in ([0, 0, -1], [1e-9, 0, -1], [0, -1e-8, -1]):
         rpy = w._zdir_to_rpy(zdir)
-        got = matrix_from_rpy(rpy)[:3, :3] @ np.array([0.0, 0.0, 1.0])
+        got = rpy2homogeneous(*rpy)[:3, :3] @ np.array([0.0, 0.0, 1.0])
         assert np.all(np.isfinite(got))
         assert got[2] < -0.999, (zdir, rpy, got)     # local +Z points down
 

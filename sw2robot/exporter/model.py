@@ -22,14 +22,13 @@ import re
 from dataclasses import dataclass, field
 
 import numpy as np
-
-from .geometry import (
-    frame_at_point,
-    matrix_from_rpy,
-    matrix_to_xyz_rpy,
-    relative_matrix,
-    transform_to_matrix,
+from skrobot.coordinates.math import (
+    matrix_relative,
+    rotation_translation2matrix,
+    rpy2homogeneous,
 )
+
+from .geometry import matrix_to_xyz_rpy, transform_to_matrix
 from .state import (
     ComponentState,
     CoordinateSystemState,
@@ -2479,7 +2478,7 @@ def _finalize_tree(comps, adjacency, base, parent_of, edge_info, root_rpy=None,
     # axis on +Z per the convention).
     base_anchor = base.world.copy()
     if root_rpy:
-        base_anchor = base_anchor @ matrix_from_rpy(root_rpy)
+        base_anchor = base_anchor @ rpy2homogeneous(*root_rpy)
     if root_xyz:
         # full origin shift in the (already re-oriented) root frame --
         # the generalisation of root_z_offset, used by the web editor's
@@ -2503,18 +2502,19 @@ def _finalize_tree(comps, adjacency, base, parent_of, edge_info, root_rpy=None,
             # to match SW exactly).  No projection -- that moved the frame to
             # the part origin, which is misleading for parts whose origin is
             # off their geometry.
-            anchor[child] = frame_at_point(np.asarray(pt, float))
+            anchor[child] = rotation_translation2matrix(
+                np.eye(3), np.asarray(pt, float))
         else:
             anchor[child] = by_name[child].world.copy()
 
     for c in comps:
-        rel = relative_matrix(anchor[c.name], c.world)
+        rel = matrix_relative(anchor[c.name], c.world)
         c.visual_xyz, c.visual_rpy = matrix_to_xyz_rpy(rel)
 
     joints = []
     for child, parent in parent_of.items():
         ch = by_name[child]; pa = by_name[parent]
-        rel = relative_matrix(anchor[parent], anchor[child])
+        rel = matrix_relative(anchor[parent], anchor[child])
         xyz, rpy = matrix_to_xyz_rpy(rel)
         info = edge_info.get((child, parent), {"type": "fixed", "axis": None})
         rec = adjacency.get(frozenset((child, parent)), {})
@@ -2582,7 +2582,7 @@ def build_tree(comps, adjacency, base, directed=None, root_rpy=None,
     if closures_out is not None:
         base_anchor = base.world.copy()
         if root_rpy:
-            base_anchor = base_anchor @ matrix_from_rpy(root_rpy)
+            base_anchor = base_anchor @ rpy2homogeneous(*root_rpy)
         saved = base.world
         try:
             base.world = base_anchor

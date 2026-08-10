@@ -22,20 +22,11 @@ import os
 
 import numpy as np
 
+# URDF convention: R = Rz(yaw) @ Ry(pitch) @ Rx(roll), extrinsic X-Y-Z
+from skrobot.coordinates.math import rpy2matrix
+
 MM_TO_M = 0.001
 DEFAULT_DENSITY = 1000.0  # kg/m^3 -- generic light part; override per build
-
-
-def _rpy_matrix(rpy):
-    """4x4 homogeneous rotation for a URDF ``rpy`` (extrinsic X-Y-Z)."""
-    # rpy2matrix(roll, pitch, yaw) follows the URDF convention
-    # R = Rz @ Ry @ Rx.
-    from skrobot.coordinates.math import rpy2matrix
-
-    roll, pitch, yaw = rpy
-    T = np.eye(4)
-    T[:3, :3] = rpy2matrix(float(roll), float(pitch), float(yaw))
-    return T
 
 
 def _solid_properties(mesh, density):
@@ -91,7 +82,7 @@ def link_inertial(mesh_path, visual_xyz, visual_rpy,
     mass, com_m, I_m, method = props
     # mesh-frame -> link-frame: rotation rotates the tensor (about the com,
     # so the translation does not enter), translation moves the com
-    R = _rpy_matrix(visual_rpy)[:3, :3]
+    R = rpy2matrix(*visual_rpy)
     com = R @ com_m + np.asarray(visual_xyz, dtype=float)
     I = R @ I_m @ R.T
     return {
@@ -134,7 +125,7 @@ def link_inertial_from_sw(mass, com_local, inertia6_local,
     # mesh-frame -> link-frame, identical transform to link_inertial: the
     # rotation rotates the tensor about the (unchanged) com, the translation
     # moves the com.
-    R = _rpy_matrix(visual_rpy)[:3, :3]
+    R = rpy2matrix(*visual_rpy)
     com = R @ com_l + np.asarray(visual_xyz, dtype=float)
     I = R @ I_l @ R.T
     return {
