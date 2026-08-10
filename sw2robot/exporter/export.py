@@ -43,7 +43,14 @@ from .model import (
     to_graph_state,
 )
 from .state import GraphState
-from .swcom import SW_DOC_PART, SolidWorks, as_iface, doc_type_for, safe_call
+from .swcom import (
+    SW_DOC_PART,
+    SolidWorks,
+    as_iface,
+    doc_type_for,
+    safe_call,
+    safe_prop,
+)
 from .urdf_writer import write_ros_package, write_urdf
 
 GRAPH_FILE = "graph.json"
@@ -200,12 +207,16 @@ def _extract_into(sw, assembly_path, pkg_dir, meshes_dir, robot_name, _say,
 
 
 def extract(assembly_path, out_dir=None, robot_name=None, visible=False,
-            progress=None, sw=None, configuration=None):
+            progress=None, sw=None, configuration=None, attach=False):
     """SolidWorks -> graph.json (+ per-link 3DXML).  ``progress(msg)`` -- if
     given -- receives short human-readable status strings at each stage and once
     per exported mesh, so a UI can show how far along the (multi-minute) extract
     is.  Pass an existing ``SolidWorks`` session as ``sw`` to reuse it across
-    many assemblies (batch); otherwise a private one is started and shut down."""
+    many assemblies (batch); otherwise a private one is started and shut down.
+    ``attach=True`` connects to the USER'S already-running SolidWorks instead
+    (their documents are left untouched); if the assembly is already open
+    there, the multi-minute reopen is skipped entirely.  No fallback: with no
+    running SolidWorks to attach to this raises ``SolidWorksUnavailable``."""
     _tolerant_console()
     import time as _time
     t_state = {"last": _time.time()}
@@ -243,12 +254,129 @@ def extract(assembly_path, out_dir=None, robot_name=None, visible=False,
         _extract_into(sw, assembly_path, pkg_dir, meshes_dir, robot_name, _say,
                       _part, configuration=configuration)
     else:
-        with SolidWorks(visible=visible) as sw_own:
+        sw_ctx = (SolidWorks(attach=True) if attach
+                  else SolidWorks(visible=visible))
+        with sw_ctx as sw_own:
             _extract_into(sw_own, assembly_path, pkg_dir, meshes_dir,
                           robot_name, _say, _part,
                           configuration=configuration)
 
     print(f"  graph: {os.path.join(pkg_dir, GRAPH_FILE)}")
+    return pkg_dir
+
+
+# ---------------------------------------------------------------- refresh
+def _file_key(path):
+    """Lower-cased file name of ``path``, split on EITHER separator --
+    graph.json carries Windows paths even when it is read on POSIX (the
+    build/test path), where os.path.basename would keep the whole string."""
+    return str(path).replace("\\", "/").rsplit("/", 1)[-1].lower()
+
+
+def _live_subassembly_docs(doc):
+    """``basename(path).lower() -> open ModelDoc2`` for every loaded
+    sub-assembly occurrence in ``doc``, at any depth.  Matched by file name
+    because a copied session records temp-dir paths in graph.json while an
+    attached one records the originals -- the basename is the stable part."""
+    out = {}
+    for c in list(safe_call(doc, "GetComponents", False) or []):
+        ct = as_iface(c, "IComponent2")
+        path = safe_prop(ct, "GetPathName") or ""
+        if not str(path).lower().endswith(".sldasm"):
+            continue
+        key = _file_key(path)
+        if key in out:
+            continue
+        md = safe_call(ct, "GetModelDoc2")
+        if md is not None:
+            out[key] = md
+    return out
+
+
+def refresh_frames(target, out_dir=None, robot_name=None, visible=False,
+                   attach=False, sw=None, progress=None):
+    """Partial re-extract: re-read ONLY the named frames -- the top-level
+    coordinate systems + reference axes, and the coordinate systems of already
+    -extracted sub-assemblies -- into an existing ``graph.json``.
+
+    Components, mates, mass properties, deep worlds and meshes are left
+    untouched, so this is a handful of feature-tree reads instead of a full
+    assembly walk: seconds instead of minutes when iterating on frame
+    selection (e.g. the PR #178 coordinate-frame work).  Combine with
+    ``attach=True`` while the assembly is open in the user's SolidWorks and
+    even the document open is skipped.
+
+    ``target`` is either the extracted package dir (the one holding
+    ``graph.json``) or the source assembly path (the package dir is then
+    derived exactly like :func:`extract` does from ``out_dir``/``robot_name``).
+    The frames are read from whatever configuration the document opens with
+    (in attach mode: the one on the user's screen).  Requires a prior full
+    extract -- there is deliberately NO fallback to one."""
+    _tolerant_console()
+    import time as _time
+    t0 = _time.time()
+
+    def _say(msg):
+        print("[refresh] " + msg)
+        if progress:
+            progress(msg)
+
+    target = os.path.abspath(target)
+    if os.path.isdir(target):
+        pkg_dir = target
+        assembly_path = None
+    else:
+        assembly_path = target
+        _, pkg_dir = _pkg_paths(target, out_dir, robot_name)
+    graph_path = os.path.join(pkg_dir, GRAPH_FILE)
+    if not os.path.exists(graph_path):
+        raise FileNotFoundError(
+            f"{graph_path} not found -- '--refresh frames' only updates an "
+            f"existing extraction; run a full extract once first")
+    graph = GraphState.load(graph_path)
+    if assembly_path is None:
+        assembly_path = graph.source_assembly
+    if not os.path.exists(assembly_path):
+        raise FileNotFoundError(
+            f"source assembly not found: {assembly_path}")
+
+    def _refresh_into(sw_sess):
+        _say(f"opening {os.path.basename(assembly_path)} (instant when it is "
+             f"already open in an attached SolidWorks) ...")
+        doc = sw_sess.open_copy(assembly_path)
+        try:
+            _say("re-reading coordinate systems + reference axes ...")
+            graph.coordinate_systems = extract_coordinate_systems(doc)
+            graph.reference_axes = extract_reference_axes(doc)
+            if graph.subassemblies:
+                live = _live_subassembly_docs(doc)
+                for path, sub in graph.subassemblies.items():
+                    md = live.get(_file_key(path))
+                    if md is None:
+                        print(f"      WARN: {os.path.basename(path)} is not "
+                              f"loaded in this session; keeping its cached "
+                              f"coordinate systems")
+                        continue
+                    sub.coordinate_systems = extract_coordinate_systems(md)
+        finally:
+            sw_sess.close_doc(doc)
+
+    if sw is not None:
+        _refresh_into(sw)
+    else:
+        sw_ctx = (SolidWorks(attach=True) if attach
+                  else SolidWorks(visible=visible))
+        with sw_ctx as sw_own:
+            _refresh_into(sw_own)
+
+    graph.save(graph_path)
+    n_sub = sum(len(s.coordinate_systems)
+                for s in graph.subassemblies.values())
+    _say(f"graph.json frames updated in {_time.time() - t0:.1f}s: "
+         f"{len(graph.coordinate_systems)} coordinate system(s), "
+         f"{len(graph.reference_axes)} reference axis/axes"
+         + (f", {n_sub} sub-assembly frame(s)" if graph.subassemblies else ""))
+    print(f"  graph: {graph_path}")
     return pkg_dir
 
 
@@ -389,9 +517,9 @@ def export(assembly_path, out_dir=None, robot_name=None, visible=False,
            config_path=None, base_hint=None, exclude=None, ros_pkg=False,
            ros_version=1, ros_pkg_name=None, ros_urdf_name=None,
            collision="copy", coacd_quality="balanced", merge_fixed=False,
-           ros_mesh_dir=None, configuration=None):
+           ros_mesh_dir=None, configuration=None, attach=False):
     pkg_dir = extract(assembly_path, out_dir, robot_name, visible,
-                      configuration=configuration)
+                      configuration=configuration, attach=attach)
     return build(pkg_dir, config_path=config_path, base_hint=base_hint,
                  exclude=exclude, ros_pkg=ros_pkg, ros_version=ros_version,
                  ros_pkg_name=ros_pkg_name, ros_urdf_name=ros_urdf_name,
@@ -411,6 +539,12 @@ def main():
     ap.add_argument("-o", "--out", default=None)
     ap.add_argument("-n", "--name", default=None)
     ap.add_argument("--visible", action="store_true")
+    ap.add_argument("--attach", action="store_true",
+                    help="reuse the USER'S already-running SolidWorks instead "
+                         "of starting a hidden private instance; if the "
+                         "assembly is already open there, the multi-minute "
+                         "reopen is skipped entirely.  Errors out (no "
+                         "fallback) when no running SolidWorks is found")
     ap.add_argument("--configuration", default=None, metavar="NAME",
                     help="extract this ASSEMBLY configuration instead of the "
                          "file's saved-active one (configs can suppress whole "
@@ -459,7 +593,7 @@ def main():
                          "per moving body; mesh-less coordinate frames are kept")
     args = ap.parse_args()
     export(args.assembly, args.out, args.name, args.visible,
-           configuration=args.configuration,
+           configuration=args.configuration, attach=args.attach,
            config_path=args.config, base_hint=args.base,
            exclude=_exclude_list(args.exclude),
            ros_pkg=args.ros_pkg or args.ros2,
