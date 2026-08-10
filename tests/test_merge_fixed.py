@@ -327,3 +327,32 @@ def test_fold_rotates_child_inertia_into_the_parent_frame():
     assert abs(float(it.get("ixy"))) < 1e-9
     assert abs(float(it.get("ixz"))) < 1e-9
     assert abs(float(it.get("iyz"))) < 1e-9
+
+
+def test_massless_child_inertial_contributes_nothing():
+    """A child whose <inertial> declares mass 0 must not push a phantom tensor
+    into the parent: a body with no mass carries no inertia, and such a block is
+    malformed URDF (validate_inertia flags it).  The parent keeps its own
+    inertial untouched."""
+    urdf = """<?xml version="1.0"?>
+<robot name="z">
+  <link name="base"><inertial><origin xyz="0 0 0" rpy="0 0 0"/><mass value="2"/>
+    <inertia ixx="1" ixy="0" ixz="0" iyy="1" iyz="0" izz="1"/></inertial>
+    <visual><geometry><box size="1 1 1"/></geometry></visual></link>
+  <joint name="fix_z" type="fixed"><origin xyz="1 0 0" rpy="0 0 0"/>
+    <parent link="base"/><child link="ghost"/></joint>
+  <link name="ghost"><inertial><origin xyz="0 0 0" rpy="0 0 0"/><mass value="0"/>
+    <inertia ixx="9" ixy="0" ixz="0" iyy="9" iyz="0" izz="9"/></inertial>
+    <visual><geometry><box size="0.1 0.1 0.1"/></geometry></visual></link>
+</robot>"""
+    root = ET.fromstring(urdf)
+    n, _ = merge_fixed_links(root)
+    assert n == 1
+
+    base = next(ln for ln in root.findall("link") if ln.get("name") == "base")
+    inertial = base.find("inertial")
+    assert abs(float(inertial.find("mass").get("value")) - 2.0) < 1e-9
+    assert _f(inertial.find("origin").get("xyz")) == [0.0, 0.0, 0.0]
+    it = inertial.find("inertia")
+    for key in ("ixx", "iyy", "izz"):
+        assert abs(float(it.get(key)) - 1.0) < 1e-9, (key, it.get(key))
