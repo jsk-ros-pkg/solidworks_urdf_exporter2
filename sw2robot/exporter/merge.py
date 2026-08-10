@@ -25,22 +25,13 @@ import xml.etree.ElementTree as ET
 
 from skrobot.utils.inertia import combine_inertials, transform_inertial
 
-from .geometry import matrix_to_xyz_rpy, urdf_origin_matrix
-
-
-def _fmt(v):
-    # compact, round-trippable; mirror the writer's style (no sci-notation noise)
-    return f"{float(v):.10g}"
-
-
-def _set_origin(parent_el, M):
-    """Write/overwrite ``parent_el``'s ``<origin>`` from a 4x4 matrix."""
-    xyz, rpy = matrix_to_xyz_rpy(M)
-    o = parent_el.find("origin")
-    if o is None:
-        o = ET.SubElement(parent_el, "origin")
-    o.set("xyz", " ".join(_fmt(v) for v in xyz))
-    o.set("rpy", " ".join(_fmt(v) for v in rpy))
+from .geometry import (
+    fmt_urdf_num,
+    fmt_urdf_vec,
+    matrix_to_xyz_rpy,
+    set_urdf_origin,
+    urdf_origin_matrix,
+)
 
 
 def _has_geometry(link_el):
@@ -88,13 +79,13 @@ def _write_inertial(link_el, info):
         link_el.remove(old)
     el = ET.SubElement(link_el, "inertial")
     o = ET.SubElement(el, "origin")
-    o.set("xyz", " ".join(_fmt(v) for v in info["com"]))
+    o.set("xyz", fmt_urdf_vec(info["com"]))
     o.set("rpy", "0 0 0")
-    ET.SubElement(el, "mass").set("value", _fmt(info["mass"]))
+    ET.SubElement(el, "mass").set("value", fmt_urdf_num(info["mass"]))
     it = ET.SubElement(el, "inertia")
     for k, v in zip(("ixx", "ixy", "ixz", "iyy", "iyz", "izz"),
                     info["inertia"]):
-        it.set(k, _fmt(v))
+        it.set(k, fmt_urdf_num(v))
 
 
 def _combine_inertials(parent_el, child_el, T_pc):
@@ -182,7 +173,7 @@ def merge_fixed_links(root, force_merge=None, only=None):
         for vc in list(child_link):
             if vc.tag not in ("visual", "collision"):
                 continue
-            _set_origin(vc, T_pc @ urdf_origin_matrix(vc.find("origin")))
+            set_urdf_origin(vc, T_pc @ urdf_origin_matrix(vc.find("origin")))
             child_link.remove(vc)
             parent_link.append(vc)
         # 2) combine inertials
@@ -192,7 +183,7 @@ def merge_fixed_links(root, force_merge=None, only=None):
             kp = k.find("parent")
             if kp is not None and kp.get("link") == cname:
                 kp.set("link", pname)
-                _set_origin(k, T_pc @ urdf_origin_matrix(k.find("origin")))
+                set_urdf_origin(k, T_pc @ urdf_origin_matrix(k.find("origin")))
         # 4) drop the fixed joint and the (now empty) child link
         root.remove(j)
         root.remove(child_link)

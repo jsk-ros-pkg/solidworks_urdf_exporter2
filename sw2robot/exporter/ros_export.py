@@ -36,6 +36,12 @@ from skrobot.utils.convex_decomposition import (
     is_coacd_available,
 )
 
+from .geometry import (
+    fmt_urdf_num,
+    fmt_urdf_vec,
+    set_urdf_origin,
+    urdf_origin_matrix,
+)
 from .urdf_writer import (
     CMAKELISTS,
     CMAKELISTS_ROS2,
@@ -487,17 +493,16 @@ def _primitive_geometry_el(params):
     geo = ET.Element("geometry")
     t = params["type"]
     if t == "box":
-        ET.SubElement(geo, "box").set(
-            "size", " ".join(_fmt_num(v) for v in params["extents"]))
+        ET.SubElement(geo, "box").set("size", fmt_urdf_vec(params["extents"]))
     elif t == "sphere":
-        ET.SubElement(geo, "sphere").set("radius", _fmt_num(params["radius"]))
+        ET.SubElement(geo, "sphere").set("radius", fmt_urdf_num(params["radius"]))
     elif t in ("cylinder", "capsule"):
         cyl = ET.SubElement(geo, "cylinder")
-        cyl.set("radius", _fmt_num(params["radius"]))
+        cyl.set("radius", fmt_urdf_num(params["radius"]))
         length = float(params["height"])
         if t == "capsule":            # URDF has no capsule; fold the caps in
             length += 2 * float(params["radius"])
-        cyl.set("length", _fmt_num(length))
+        cyl.set("length", fmt_urdf_num(length))
     else:
         raise ValueError(f"unsupported primitive type: {t!r}")
     return geo
@@ -525,34 +530,6 @@ _COLLISION_PALETTE = (
     (210, 210, 40), (166, 86, 40), (247, 129, 191), (102, 194, 165),
     (141, 160, 203), (153, 153, 153),
 )
-
-
-def _origin_matrix(origin_el):
-    """4x4 transform for a URDF ``<origin>`` element (xyz + fixed-axis rpy), or
-    identity when absent -- to bake a ``<collision>``'s origin into its part
-    vertices so a preview mesh sits right when attached at the link frame."""
-    from .geometry import urdf_origin_matrix
-    return urdf_origin_matrix(origin_el)
-
-
-def _fmt_num(v):
-    """Format a float for a URDF attribute, snapping FP noise to exact 0."""
-    v = float(v)
-    if abs(v) < 1e-9:
-        return "0"
-    return repr(round(v, 9))
-
-
-def _set_origin_el(el, M):
-    import numpy as np
-
-    from .geometry import matrix_to_xyz_rpy
-    o = el.find("origin")
-    if o is None:
-        o = ET.SubElement(el, "origin")
-    xyz, rpy = matrix_to_xyz_rpy(np.asarray(M, float))
-    o.set("xyz", " ".join(_fmt_num(v) for v in xyz))
-    o.set("rpy", " ".join(_fmt_num(v) for v in rpy))
 
 
 def _tf_marker_scale(root, pkg_dir, own_pkgs, cache):
@@ -609,7 +586,7 @@ def _bake_origins(root, pkg_dir, own_pkgs, cache):
         pj = child_joint.get(name)
         fixed = pj is not None and pj.get("type") == "fixed"
         vis = link.find("visual")
-        v_mat = _origin_matrix(vis.find("origin")) if vis is not None \
+        v_mat = urdf_origin_matrix(vis.find("origin")) if vis is not None \
             else np.eye(4)
         d = np.zeros(3)
         if vis is not None:
@@ -631,15 +608,15 @@ def _bake_origins(root, pkg_dir, own_pkgs, cache):
             # F' = F . T(+d): parent joint . T(+d); child joints, inertial . T(-d)
             t_pos = np.eye(4)
             t_pos[:3, 3] = d
-            _set_origin_el(pj, _origin_matrix(pj.find("origin")) @ t_pos)
+            set_urdf_origin(pj, urdf_origin_matrix(pj.find("origin")) @ t_pos)
             for cj in child_lists.get(name, []):
-                _set_origin_el(cj, t_neg @ _origin_matrix(cj.find("origin")))
+                set_urdf_origin(cj, t_neg @ urdf_origin_matrix(cj.find("origin")))
             inel = link.find("inertial")
             if inel is not None:
-                _set_origin_el(inel, t_neg @ _origin_matrix(inel.find("origin")))
+                set_urdf_origin(inel, t_neg @ urdf_origin_matrix(inel.find("origin")))
         for ctx in ("visual", "collision"):
             for block in link.findall(ctx):
-                vb = _origin_matrix(block.find("origin"))
+                vb = urdf_origin_matrix(block.find("origin"))
                 mb = t_neg @ vb                # bake into the mesh
                 # only bake when it actually moves vertices; an identity (or pure
                 # FP-noise) origin just gets zeroed -- no lossy mesh round-trip,
@@ -736,7 +713,7 @@ def collision_preview_glbs(pkg_dir, robot_name, quality="balanced", progress=Non
             _b, src, _e = _resolve_mesh(pkg_dir, ms[0].get("filename"),
                                         own_pkgs=own_pkgs)
             if src:
-                blocks.append((src, _origin_matrix(block.find("origin"))))
+                blocks.append((src, urdf_origin_matrix(block.find("origin"))))
         (mesh_links if blocks else plain_links).append((name, blocks))
 
     out = {}
@@ -1267,7 +1244,7 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
             for k, name in enumerate(names):
                 nb = copy.deepcopy(block)
                 if m_bake is not None:         # parts are in the source frame:
-                    _set_origin_el(nb, m_bake)  # carry the bake transform here
+                    set_urdf_origin(nb, m_bake)  # carry the bake transform here
                 next(nb.iter("mesh")).set(
                     "filename", f"package://{pkg}/{mesh_rel}/{name}")
                 link.insert(idx + k, nb)
@@ -1312,7 +1289,7 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
             # are kept, via the block's own <origin>
             m_bake = bake.get(id(meshes[0]))
             base_M = m_bake if m_bake is not None \
-                else _origin_matrix(block.find("origin"))
+                else urdf_origin_matrix(block.find("origin"))
             geo = block.find("geometry")
             new_geo = _primitive_geometry_el(params)
             if geo is not None:                # stdlib ElementTree: no .replace()
@@ -1321,7 +1298,7 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
                 block.insert(gi, new_geo)
             else:
                 block.append(new_geo)
-            _set_origin_el(block, np.asarray(base_M, float) @ M)
+            set_urdf_origin(block, np.asarray(base_M, float) @ M)
 
     _warm_lock = threading.Lock()
     _warm_state = {"n": 0}

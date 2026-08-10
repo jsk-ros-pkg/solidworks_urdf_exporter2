@@ -2845,29 +2845,20 @@ def _urdf_vec(s, n=3):
 
 
 def _urdf_origin_matrix(elem):
-    import numpy as _np
-    from skrobot.coordinates.math import rpy2homogeneous
+    """The served URDF's ``<origin>`` parser -- non-strict, because the editor
+    also opens URDFs sw2robot did not write, and one hand-typed ``xyz="0 0"``
+    must not abort a load that the user could still fix in the editor."""
+    from sw2robot.exporter.geometry import urdf_origin_matrix
 
-    xyz = _urdf_vec(elem.get("xyz"), 3) if elem is not None else [0, 0, 0]
-    rpy = _urdf_vec(elem.get("rpy"), 3) if elem is not None else [0, 0, 0]
-    M = rpy2homogeneous(*rpy)
-    M[:3, 3] = _np.asarray(xyz, float)
-    return M
+    return urdf_origin_matrix(elem, strict=False)
 
 
 def _set_urdf_origin(elem, T):
-    import xml.etree.ElementTree as _ET
+    """Write ``elem``'s ``<origin>`` from a 4x4 -- the exporter's writer, so an
+    edited URDF is formatted exactly like a freshly exported one."""
+    from sw2robot.exporter.geometry import set_urdf_origin
 
-    from sw2robot.exporter.geometry import matrix_to_xyz_rpy
-    from sw2robot.exporter.urdf_writer import _fmt
-
-    origin = elem.find("origin")
-    if origin is None:
-        origin = _ET.Element("origin")
-        elem.insert(0, origin)
-    xyz, rpy = matrix_to_xyz_rpy(T)
-    origin.set("xyz", _fmt(xyz))
-    origin.set("rpy", _fmt(rpy))
+    set_urdf_origin(elem, T)
 
 
 def _set_urdf_axis(joint, axis):
@@ -2875,7 +2866,7 @@ def _set_urdf_axis(joint, axis):
 
     import numpy as _np
 
-    from sw2robot.exporter.urdf_writer import _fmt
+    from sw2robot.exporter.geometry import fmt_urdf_vec
 
     if axis is None:
         return
@@ -2889,7 +2880,7 @@ def _set_urdf_axis(joint, axis):
         elem = _ET.Element("axis")
         insert_at = 3
         joint.insert(min(insert_at, len(list(joint))), elem)
-    elem.set("xyz", _fmt(axis))
+    elem.set("xyz", fmt_urdf_vec(axis))
 
 
 def _urdf_link_world_poses(root):
@@ -3546,7 +3537,9 @@ def _rename_in_urdf(pkg_dir, urdf_rel, kind, old, new):
 
 def _fmt_num(v):
     """Compact URDF numeric attribute -- no ``-0.0``, trims trailing zeros."""
-    return "0" if v == 0 else f"{v:.8g}"
+    from sw2robot.exporter.geometry import fmt_urdf_num
+
+    return fmt_urdf_num(v)
 
 
 def _flip_axis_in_urdf(pkg_dir, urdf_rel, joint_name):
