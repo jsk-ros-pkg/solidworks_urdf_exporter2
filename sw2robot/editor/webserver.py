@@ -2893,36 +2893,45 @@ def _set_urdf_axis(joint, axis):
 
 
 def _urdf_link_world_poses(root):
-    """Zero-position link poses from URDF joint origins."""
-    import numpy as _np
+    """Zero-position link poses from URDF joint origins.
 
-    links = {ln.get("name") for ln in root.findall("link") if ln.get("name")}
-    child_links, by_parent = set(), {}
-    for j in root.findall("joint"):
+    Editor URDFs are routinely partial -- several roots, or links no joint
+    reaches -- and every disconnected piece sits at identity.
+
+    Only the kinematic skeleton goes to skrobot, because the rest of an editor
+    URDF does not survive a load: meshes are still .3dxml, and inertials are
+    empty placeholders until the mass pass runs.  Joints go over as `fixed` so
+    that a limit range excluding zero cannot displace the frames -- skrobot
+    starts a prismatic joint at its lower limit, not at zero.
+    """
+    import xml.etree.ElementTree as _ET
+
+    from skrobot.models.urdf import RobotModelFromURDF
+
+    skeleton = _ET.Element("robot", {"name": root.get("name") or "robot"})
+    names = dict.fromkeys(ln.get("name") for ln in root.findall("link")
+                          if ln.get("name"))
+    if not names:
+        return {}
+    for name in names:
+        _ET.SubElement(skeleton, "link", {"name": name})
+    for i, j in enumerate(root.findall("joint")):
         p = j.find("parent")
         c = j.find("child")
         parent = p.get("link") if p is not None else ""
         child = c.get("link") if c is not None else ""
         if not parent or not child:
             continue
-        by_parent.setdefault(parent, []).append((child, j))
-        child_links.add(child)
-    poses = {}
-
-    def walk(link, T):
-        if link in poses:
-            return
-        poses[link] = T
-        for child, joint in by_parent.get(link, []):
-            walk(child, T @ _urdf_origin_matrix(joint.find("origin")))
-
-    roots = sorted(links - child_links)
-    for root_link in roots:
-        walk(root_link, _np.eye(4))
-    for link in sorted(links):
-        if link not in poses:
-            walk(link, _np.eye(4))
-    return poses
+        elem = _ET.SubElement(skeleton, "joint",
+                              {"name": j.get("name") or f"joint{i}",
+                               "type": "fixed"})
+        _ET.SubElement(elem, "parent", {"link": parent})
+        _ET.SubElement(elem, "child", {"link": child})
+        origin = j.find("origin")
+        if origin is not None:
+            _ET.SubElement(elem, "origin", dict(origin.attrib))
+    rb = RobotModelFromURDF(urdf=_ET.tostring(skeleton, encoding="unicode"))
+    return {ln.name: ln.worldcoords().T() for ln in rb.link_list}
 
 
 def _collapse_plan_name_map(plan, link_elems):

@@ -73,15 +73,7 @@ def warn_dropped_geometry(pkg_dir, urdf_path, graph, tol_mm=3.0, min_frac=0.15):
         for tag in ("visual", "collision"):
             for e in link.findall(tag):
                 link.remove(e)
-    nm = urdf_path + ".novis.urdf"
-    ET.ElementTree(root).write(nm)
-    try:
-        rb = RobotModelFromURDF(urdf_file=nm)
-    finally:
-        try:
-            os.remove(nm)
-        except OSError:
-            pass
+    rb = RobotModelFromURDF(urdf=ET.tostring(root, encoding="unicode"))
     L = {l.name: l for l in rb.link_list}
     pts = []
     for ln, items in link_mesh.items():
