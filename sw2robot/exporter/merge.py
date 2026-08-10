@@ -24,24 +24,14 @@ from __future__ import annotations
 import xml.etree.ElementTree as ET
 
 import numpy as np
+from skrobot.coordinates.math import rpy2matrix
 
-from .geometry import matrix_from_rpy, matrix_to_xyz_rpy
+from .geometry import matrix_to_xyz_rpy, urdf_origin_matrix
 
 
 def _fmt(v):
     # compact, round-trippable; mirror the writer's style (no sci-notation noise)
     return f"{float(v):.10g}"
-
-
-def _origin_matrix(el):
-    """4x4 from an ``<origin>`` element (xyz + extrinsic-XYZ rpy), or identity."""
-    if el is None:
-        return np.eye(4)
-    xyz = [float(x) for x in (el.get("xyz") or "0 0 0").split()]
-    rpy = [float(x) for x in (el.get("rpy") or "0 0 0").split()]
-    m = matrix_from_rpy(rpy)
-    m[:3, 3] = xyz[:3]
-    return m
 
 
 def _set_origin(parent_el, M):
@@ -88,7 +78,7 @@ def _parse_inertial(link_el):
         return None
     inertia = _inertia_tensor(it)
     if any(rpy):                       # express the tensor in link axes
-        R = matrix_from_rpy(rpy)[:3, :3]
+        R = rpy2matrix(*rpy)
         inertia = R @ inertia @ R.T
     return mass, com, inertia
 
@@ -204,13 +194,13 @@ def merge_fixed_links(root, force_merge=None, only=None):
         if target is None:
             break
         j, parent_link, child_link, pname, cname = target
-        T_pc = _origin_matrix(j.find("origin"))
+        T_pc = urdf_origin_matrix(j.find("origin"))
 
         # 1) move the child's visual/collision into the parent (compose origin)
         for vc in list(child_link):
             if vc.tag not in ("visual", "collision"):
                 continue
-            _set_origin(vc, T_pc @ _origin_matrix(vc.find("origin")))
+            _set_origin(vc, T_pc @ urdf_origin_matrix(vc.find("origin")))
             child_link.remove(vc)
             parent_link.append(vc)
         # 2) combine inertials
@@ -220,7 +210,7 @@ def merge_fixed_links(root, force_merge=None, only=None):
             kp = k.find("parent")
             if kp is not None and kp.get("link") == cname:
                 kp.set("link", pname)
-                _set_origin(k, T_pc @ _origin_matrix(k.find("origin")))
+                _set_origin(k, T_pc @ urdf_origin_matrix(k.find("origin")))
         # 4) drop the fixed joint and the (now empty) child link
         root.remove(j)
         root.remove(child_link)

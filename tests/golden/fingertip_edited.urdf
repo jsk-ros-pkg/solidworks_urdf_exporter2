@@ -3,13 +3,13 @@
   <link name="tip">
     <!-- sw2robot inertia="hull" -->
     <visual>
-      <origin xyz="-0.021039487 0.0155 0.031" rpy="3.1415927 -5.5511151e-17 3.1415927"/>
+      <origin xyz="-0.021039487 0.0155 0.031" rpy="3.1415927 0 3.1415927"/>
       <geometry>
         <mesh filename="../meshes/fingertip_back_1.3dxml"/>
       </geometry>
     </visual>
     <collision>
-      <origin xyz="-0.021039487 0.0155 0.031" rpy="3.1415927 -5.5511151e-17 3.1415927"/>
+      <origin xyz="-0.021039487 0.0155 0.031" rpy="3.1415927 0 3.1415927"/>
       <geometry>
         <mesh filename="../meshes/fingertip_back_1.3dxml"/>
       </geometry>
@@ -19,13 +19,13 @@
   <link name="base_link">
     <!-- sw2robot inertia="hull" -->
     <visual>
-      <origin xyz="3.8518599e-34 0 0" rpy="0 0 -4.4572704e-33"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
         <mesh filename="../meshes/fingertip_front_2.3dxml"/>
       </geometry>
     </visual>
     <collision>
-      <origin xyz="3.8518599e-34 0 0" rpy="0 0 -4.4572704e-33"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
         <mesh filename="../meshes/fingertip_front_2.3dxml"/>
       </geometry>
@@ -35,13 +35,13 @@
   <link name="screwlock_male_hard_jointbase_v4_1">
     <!-- sw2robot material="ABS" density="1020" inertia="hull" -->
     <visual>
-      <origin xyz="1.1131366e-18 0.017 -0.003" rpy="-1.5707963 2.5061606e-16 -3.1415927"/>
+      <origin xyz="0 0.017 -0.003" rpy="-1.5707963 0 -3.1415927"/>
       <geometry>
         <mesh filename="../meshes/screwlock_male_hard_jointbase_v4_1.3dxml"/>
       </geometry>
     </visual>
     <collision>
-      <origin xyz="1.1131366e-18 0.017 -0.003" rpy="-1.5707963 2.5061606e-16 -3.1415927"/>
+      <origin xyz="0 0.017 -0.003" rpy="-1.5707963 0 -3.1415927"/>
       <geometry>
         <mesh filename="../meshes/screwlock_male_hard_jointbase_v4_1.3dxml"/>
       </geometry>
@@ -49,7 +49,7 @@
     <inertial/>
   </link>
   <joint name="fingertip_front_2__screwlock_male_hard_jointbase_v4_1" type="revolute">
-    <origin xyz="4.2862638e-18 0.0015 0.035" rpy="3.1415927 8.2450846e-17 8.2450846e-17"/>
+    <origin xyz="0 0.0015 0.035" rpy="3.1415927 0 0"/>
     <parent link="base_link"/>
     <child link="screwlock_male_hard_jointbase_v4_1"/>
     <axis xyz="0 -1 -0"/>
@@ -57,7 +57,7 @@
     <!-- mates: CONCENTRIC, COINCIDENT, PARALLEL, CONCENTRIC, COINCIDENT, PARALLEL -->
   </joint>
   <joint name="bend" type="revolute">
-    <origin xyz="0.021039487 -0.0155 0.031" rpy="3.1415927 8.2450846e-17 8.2450846e-17"/>
+    <origin xyz="0.021039487 -0.0155 0.031" rpy="3.1415927 0 0"/>
     <parent link="base_link"/>
     <child link="tip"/>
     <axis xyz="0 1 0"/>

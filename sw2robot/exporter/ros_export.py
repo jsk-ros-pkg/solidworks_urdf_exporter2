@@ -498,13 +498,13 @@ def _fit_collision_primitive(src, primitive_type):
     None`` lets scikit-robot pick the tighter of an axis-aligned / oriented fit
     (and, when ``primitive_type`` is None, the best of box/cylinder/sphere) by
     voxel IoU."""
-    import trimesh
+    from skrobot.coordinates.math import rpy2homogeneous
     from skrobot.utils import fit_primitive_to_mesh, primitive_params_to_origin
     mesh = _load_mesh_metres(src)
     params = fit_primitive_to_mesh(mesh, primitive_type=primitive_type,
                                    oriented=None)
     xyz, rpy = primitive_params_to_origin(params)
-    M = trimesh.transformations.euler_matrix(*rpy, axes="sxyz")
+    M = rpy2homogeneous(*rpy)
     M[:3, 3] = xyz
     return params, M
 
@@ -560,16 +560,8 @@ def _origin_matrix(origin_el):
     """4x4 transform for a URDF ``<origin>`` element (xyz + fixed-axis rpy), or
     identity when absent -- to bake a ``<collision>``'s origin into its part
     vertices so a preview mesh sits right when attached at the link frame."""
-    import numpy as np
-    import trimesh
-
-    if origin_el is None:
-        return np.eye(4)
-    xyz = [float(v) for v in (origin_el.get("xyz") or "0 0 0").split()]
-    rpy = [float(v) for v in (origin_el.get("rpy") or "0 0 0").split()]
-    m = trimesh.transformations.euler_matrix(*rpy, axes="sxyz")
-    m[:3, 3] = xyz[:3]
-    return m
+    from .geometry import urdf_origin_matrix
+    return urdf_origin_matrix(origin_el)
 
 
 def _fmt_num(v):

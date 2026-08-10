@@ -155,7 +155,7 @@ def _fk_chain(urdf_path):
     """Tiny URDF FK (the same maths the shipped relay embeds) for the test."""
     import xml.etree.ElementTree as ET
 
-    from sw2robot.exporter.geometry import matrix_from_rpy
+    from skrobot.coordinates.math import rpy2homogeneous
     root = ET.parse(urdf_path).getroot()
     js = {}
     for j in root.findall("joint"):
@@ -167,7 +167,7 @@ def _fk_chain(urdf_path):
         ax = j.find("axis")
         axis = (np.array([float(x) for x in ax.get("xyz").split()])
                 if ax is not None else np.array([0.0, 0.0, 1.0]))
-        t = matrix_from_rpy(rpy).copy()
+        t = rpy2homogeneous(*rpy).copy()
         t[:3, 3] = xyz
         js[j.get("name")] = (j.get("type"), j.find("child").get("link"),
                              j.find("parent").get("link"), t, axis)

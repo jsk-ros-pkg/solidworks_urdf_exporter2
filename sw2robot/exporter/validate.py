@@ -34,14 +34,8 @@ def _load_glb_verts(path):
 
 
 def _origin_mat(el):
-    if el is None:
-        return np.eye(4)
-    xyz = [float(x) for x in (el.get("xyz") or "0 0 0").split()]
-    rpy = [float(x) for x in (el.get("rpy") or "0 0 0").split()]
-    from .geometry import matrix_from_rpy
-    T = np.array(matrix_from_rpy(rpy), float).copy()
-    T[:3, 3] = xyz
-    return T
+    from .geometry import urdf_origin_matrix
+    return urdf_origin_matrix(el)
 
 
 def warn_dropped_geometry(pkg_dir, urdf_path, graph, tol_mm=3.0, min_frac=0.15):

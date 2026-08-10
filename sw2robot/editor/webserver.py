@@ -1527,9 +1527,9 @@ def _canonical_tree_payload(graph, yml_txt=""):
     import numpy as _np
 
     def anchor_world(component):
-        from sw2robot.exporter.geometry import matrix_from_rpy
+        from skrobot.coordinates.math import rpy2homogeneous
 
-        visual = matrix_from_rpy(component.visual_rpy)
+        visual = rpy2homogeneous(*component.visual_rpy)
         visual[:3, 3] = _np.asarray(component.visual_xyz, float)
         return component.world @ _np.linalg.inv(visual)
 
@@ -2846,12 +2846,11 @@ def _urdf_vec(s, n=3):
 
 def _urdf_origin_matrix(elem):
     import numpy as _np
-
-    from sw2robot.exporter.geometry import matrix_from_rpy
+    from skrobot.coordinates.math import rpy2homogeneous
 
     xyz = _urdf_vec(elem.get("xyz"), 3) if elem is not None else [0, 0, 0]
     rpy = _urdf_vec(elem.get("rpy"), 3) if elem is not None else [0, 0, 0]
-    M = matrix_from_rpy(rpy)
+    M = rpy2homogeneous(*rpy)
     M[:3, 3] = _np.asarray(xyz, float)
     return M
 
@@ -2958,8 +2957,7 @@ def _collapsed_preview_urdf_text(urdf_text, plan, robot_name=None,
     import xml.etree.ElementTree as _ET
 
     import numpy as _np
-
-    from sw2robot.exporter.geometry import relative_matrix
+    from skrobot.coordinates.math import matrix_relative
 
     if not plan.get("ready_for_urdf"):
         raise ValueError("collapse plan is not ready for URDF output")
@@ -3008,7 +3006,19 @@ def _collapsed_preview_urdf_text(urdf_text, plan, robot_name=None,
         selected_frame = list(
             plan_link.get("selected_frame_transform") or [])
         if len(selected_frame) == 16:
-            return _np.asarray(selected_frame, float).reshape(4, 4)
+            from skrobot.coordinates.math import orthonormalize_rotation_matrix
+            M = _np.asarray(selected_frame, float).reshape(4, 4)
+            # downstream origin math (matrix_relative) takes the rigid
+            # inverse (R^T), so a scaled/sheared plan matrix would silently
+            # produce wrong origins -- absorb float drift, reject real scale
+            R_fixed = orthonormalize_rotation_matrix(M[:3, :3])
+            if _np.abs(R_fixed - M[:3, :3]).max() > 1e-6:
+                raise ValueError(
+                    "selected_frame_transform must be a rigid transform; "
+                    f"its rotation block has scale/shear (link "
+                    f"{plan_link.get('link')!r})")
+            M[:3, :3] = R_fixed
+            return M
         selected = plan_link.get("selected_origin_link")
         candidates = ([selected] if selected else []) + \
             list(plan_link.get("member_links") or [])
@@ -3046,7 +3056,7 @@ def _collapsed_preview_urdf_text(urdf_text, plan, robot_name=None,
                     old_origin = moved.find("origin")
                     visual_T = _urdf_origin_matrix(old_origin)
                     _set_urdf_origin(
-                        moved, relative_matrix(target_T, member_T @ visual_T))
+                        moved, matrix_relative(target_T, member_T @ visual_T))
                     out_link.append(moved)
         else:
             out_poses[link_name] = link_poses.get(link_name, _np.eye(4))
@@ -3081,7 +3091,7 @@ def _collapsed_preview_urdf_text(urdf_text, plan, robot_name=None,
         ce.set("link", child)
         parent_T = out_poses.get(parent, link_poses.get(parent, _np.eye(4)))
         child_T = out_poses.get(child, link_poses.get(child, _np.eye(4)))
-        _set_urdf_origin(joint, relative_matrix(parent_T, child_T))
+        _set_urdf_origin(joint, matrix_relative(parent_T, child_T))
         axis_elem = joint.find("axis")
         src_child = ""
         if src is not None:
@@ -3424,27 +3434,21 @@ def _remove_yaml_list_item(txt, listkey, idx):
 
 
 def _rot_z_to(zdir):
-    """3x3 minimal rotation (Rodrigues) taking +Z onto ``unit(zdir)``: an
+    """3x3 minimal (shortest-arc) rotation taking +Z onto ``unit(zdir)``: an
     already +Z-aligned vector yields identity, an antiparallel one a 180° flip
     about X.  Shared by the root align (/api/set_root_pose) and ports."""
     import numpy as np
+    from skrobot.coordinates.math import rotation_matrix_from_vectors
     z = np.asarray(zdir, float)
     nz = np.linalg.norm(z)
     if nz < 1e-12:
         return np.eye(3)
     z = z / nz
-    ez = np.array([0.0, 0.0, 1.0])
-    c = float(ez @ z)
-    # guard 1/(1+c): near-antiparallel is a deterministic 180° flip about X
-    if c < -1.0 + 1e-9:
+    # keep the historical antiparallel choice (flip about X; skrobot would
+    # pick a flip about Y) so existing port/root frames reproduce exactly
+    if z[2] < -1.0 + 1e-9:
         return np.diag([1.0, -1.0, -1.0])
-    v = np.cross(ez, z)
-    if np.linalg.norm(v) < 1e-12:
-        return np.eye(3)                         # already +Z aligned
-    K = np.array([[0, -v[2], v[1]],
-                  [v[2], 0, -v[0]],
-                  [-v[1], v[0], 0]])
-    return np.eye(3) + K + K @ K * (1.0 / (1.0 + c))
+    return rotation_matrix_from_vectors([0.0, 0.0, 1.0], z)
 
 
 def _zdir_to_rpy(zdir):
@@ -6228,15 +6232,13 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                     return self._send_json(
                         {"error": "joints.yaml not found"}, 400)
                 import numpy as np
+                from skrobot.coordinates.math import rpy2homogeneous
 
-                from sw2robot.exporter.geometry import (
-                    matrix_from_rpy,
-                    matrix_to_xyz_rpy,
-                )
+                from sw2robot.exporter.geometry import matrix_to_xyz_rpy
                 with open(yml, encoding="utf-8") as f:
                     txt = f.read()
                 rpy0, xyz0, z0 = _read_root_pose(txt)
-                M_old = matrix_from_rpy(rpy0)
+                M_old = rpy2homogeneous(*rpy0)
                 M_old[:3, 3] = (M_old[:3, :3]
                                 @ (np.asarray(xyz0, float)
                                    + np.asarray([0, 0, z0], float)))
@@ -6248,15 +6250,15 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                     # semantics: rotate first, then translate in the
                     # rotated frame (matches _finalize_tree)
                     M_old = np.eye(4)
-                    D = matrix_from_rpy(body["absolute"].get("rpy")
-                                        or [0, 0, 0])
+                    D = rpy2homogeneous(*(body["absolute"].get("rpy")
+                                          or [0, 0, 0]))
                     D[:3, 3] = D[:3, :3] @ np.asarray(
                         body["absolute"].get("xyz") or [0, 0, 0], float)
                     p = D[:3, 3].copy()     # the late D[:3,3]=p must not
                     zdir = None             # clobber the absolute shift
                 elif body.get("rpy") is not None:
                     # +-90 deg style rotation delta about the CURRENT axes
-                    D = matrix_from_rpy(body["rpy"])
+                    D = rpy2homogeneous(*body["rpy"])
                 if zdir is not None:
                     # MINIMAL rotation taking +Z onto zdir (Rodrigues), so
                     # an already-aligned normal changes nothing -- a basis
