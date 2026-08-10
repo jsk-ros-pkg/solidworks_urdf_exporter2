@@ -8,9 +8,9 @@ Skipped where ``coacd`` is not installed, so it is a no-op for the default
 """
 import pytest
 
-from sw2robot.exporter.ros_export import _run_coacd, coacd_available
+from sw2robot.exporter.ros_export import convex_decomposition, is_coacd_available
 
-if not coacd_available():
+if not is_coacd_available():
     pytest.skip("coacd not installed", allow_module_level=True)
 
 
@@ -26,18 +26,14 @@ def _l_shape():
 
 
 def test_real_coacd_runs_and_decomposes():
-    import numpy as np
-
-    mesh = _l_shape()
     # coarse + cheap params: this is an "it runs on this OS" check, not a
     # quality check, so keep the MCTS search small
-    parts = _run_coacd(
-        np.asarray(mesh.vertices), np.asarray(mesh.faces),
-        {"threshold": 0.2, "max_convex_hull": 4,
-         "preprocess_resolution": 20, "mcts_iterations": 20})
+    parts = convex_decomposition(
+        _l_shape(), threshold=0.2, max_convex_hull=4,
+        preprocess_resolution=20, mcts_iterations=20)
 
     assert len(parts) >= 1                       # produced at least one hull
-    for verts, faces in parts:
-        v, f = np.asarray(verts), np.asarray(faces)
-        assert v.ndim == 2 and v.shape[1] == 3 and len(v) >= 4
-        assert f.ndim == 2 and f.shape[1] == 3 and len(f) >= 4
+    for part in parts:
+        assert part.vertices.shape[1] == 3 and len(part.vertices) >= 4
+        assert part.faces.shape[1] == 3 and len(part.faces) >= 4
+        assert part.is_watertight

@@ -30,6 +30,12 @@ import re
 import threading
 import xml.etree.ElementTree as ET
 
+from skrobot.utils.convex_decomposition import (
+    COACD_PRESETS,
+    convex_decomposition,
+    is_coacd_available,
+)
+
 from .urdf_writer import (
     CMAKELISTS,
     CMAKELISTS_ROS2,
@@ -333,20 +339,11 @@ class _MeshCache:
 # CoACD is an OPTIONAL dependency (the `coacd` extra) and decomposition is slow
 # (tens of seconds per link), so this is opt-in and the result is cached on disk
 # keyed by the source mesh content + parameters -- a re-export is then instant.
+#
+# The quality presets are skrobot's ``COACD_PRESETS``: measured on the
+# feetech_hand parts, 'balanced' costs ~8-60 s per part and 'fine' several times
+# that in exchange for a tighter fit.
 
-# CoACD parameters per quality preset.  CoACD's cost is dominated by the MCTS
-# search, which runs to ``max_convex_hull`` cuts whenever ``threshold`` is too
-# low to stop earlier -- so a low threshold + high part cap + many MCTS
-# iterations makes EVERY part (even a tiny one) pay the full ~2-minute search.
-# Measured on the feetech_hand parts: the old 'balanced' (0.1 / 8 / mcts 100)
-# took 100-150 s on small parts; 'balanced' below is ~8-60 s (2-5x faster) with
-# 'fine' kept for a tighter fit when the wait is worth it.
-_COACD_PRESETS = {
-    "balanced": {"threshold": 0.2, "max_convex_hull": 6,
-                 "preprocess_resolution": 30, "mcts_iterations": 30},
-    "fine": {"threshold": 0.1, "max_convex_hull": 8,
-             "preprocess_resolution": 40, "mcts_iterations": 60},
-}
 # bump when the decomposition output format changes so stale caches are ignored
 _COACD_CACHE_VERSION = 1
 
@@ -366,33 +363,13 @@ def _coacd_key_lock(key):
         return lk
 
 
-def coacd_available():
-    """True if the optional ``coacd`` package is importable."""
-    import importlib.util
-    return importlib.util.find_spec("coacd") is not None
-
-
-def _run_coacd(vertices, faces, params):
-    """Run CoACD and return ``[(verts, faces), ...]`` convex parts.  Thin
-    indirection over the ``coacd`` package so tests can monkeypatch it without
-    installing CoACD or paying its (tens-of-seconds) runtime."""
-    import coacd
-
-    coacd.set_log_level("error")
-    mesh = coacd.Mesh(vertices, faces)
-    return coacd.run_coacd(mesh, merge=True, **params)
-
-
 def _coacd_part_stls(src, quality, cache_dir):
     """``[stl_bytes, ...]`` -- the source mesh ``src`` decomposed into convex
     collision parts (each a watertight STL in metres) per the ``quality`` preset.
 
     Cached under ``cache_dir/<key>/`` keyed by the source file content + params,
     so repeated exports of an unchanged mesh skip the slow CoACD run."""
-    import numpy as np
-    import trimesh
-
-    params = _COACD_PRESETS[quality]
+    params = COACD_PRESETS[quality]
     with open(src, "rb") as f:
         src_bytes = f.read()
     h = hashlib.sha1(src_bytes)
@@ -420,16 +397,10 @@ def _coacd_part_stls(src, quality, cache_dir):
         cached = _read_cache()          # another thread may have built it first
         if cached is not None:
             return cached
-        mesh = _load_mesh_metres(src)
-        parts = _run_coacd(mesh.vertices, mesh.faces, params)
+        parts = convex_decomposition(_load_mesh_metres(src), quality)
         os.makedirs(part_dir, exist_ok=True)
         out, names = [], []
-        for i, (verts, faces) in enumerate(parts):
-            # CoACD parts are convex; take the convex hull to drop any sliver
-            # faces and guarantee a clean watertight collision mesh
-            part = trimesh.Trimesh(vertices=np.asarray(verts),
-                                   faces=np.asarray(faces),
-                                   process=False).convex_hull
+        for i, part in enumerate(parts):
             part.units = "meter"
             data = part.export(file_type="stl")
             name = f"part_{i}.stl"
@@ -725,10 +696,10 @@ def collision_preview_glbs(pkg_dir, robot_name, quality="balanced", progress=Non
     import trimesh
 
     if mode == "coacd":
-        if quality not in _COACD_PRESETS:
+        if quality not in COACD_PRESETS:
             raise ValueError(f"unsupported coacd_quality: {quality!r} "
-                             f"(use one of {sorted(_COACD_PRESETS)})")
-        if not coacd_available():
+                             f"(use one of {sorted(COACD_PRESETS)})")
+        if not is_coacd_available():
             raise ValueError(
                 "CoACD collision decomposition needs the optional 'coacd' "
                 "package -- install it with: pip install coacd")
@@ -1146,11 +1117,11 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
         raise ValueError(f"unsupported collision mode: {collision!r} "
                          f"(use one of {COLLISION_MODES})")
     if collision == "coacd":
-        if coacd_quality not in _COACD_PRESETS:
+        if coacd_quality not in COACD_PRESETS:
             raise ValueError(
                 f"unsupported coacd_quality: {coacd_quality!r} "
-                f"(use one of {sorted(_COACD_PRESETS)})")
-        if not coacd_available():
+                f"(use one of {sorted(COACD_PRESETS)})")
+        if not is_coacd_available():
             raise ValueError(
                 "CoACD collision decomposition needs the optional 'coacd' "
                 "package -- install it with: pip install coacd")
