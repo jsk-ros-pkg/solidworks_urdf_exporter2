@@ -420,6 +420,7 @@ class SolidWorks:
             self._open_docs = []
             self._tempdirs = []
             self._sibling_dirs = {}      # src dir -> temp dir holding its siblings
+            self._reused_titles = set()  # docs borrowed from the user's session
             if not self._responds():     # attached app is the USER's: don't quit
                 raise SolidWorksUnavailable(
                     "the running SolidWorks is not responding (license "
@@ -469,6 +470,7 @@ class SolidWorks:
         self._open_docs = []
         self._tempdirs = []
         self._sibling_dirs = {}          # src dir -> temp dir holding its siblings
+        self._reused_titles = set()      # docs borrowed from the user's session
         # A SolidWorks that launched but can't acquire a license comes back as
         # a COM object that fails every real call.  Catch a wholly unresponsive
         # instance here -- with a clear license warning -- and tear it down, so
@@ -512,6 +514,11 @@ class SolidWorks:
         path = os.path.abspath(path)
         if not os.path.exists(path):
             raise FileNotFoundError(path)
+        if os.path.isdir(path):
+            # e.g. a package dir passed where a CAD file belongs -- fail here
+            # with the real reason instead of a PermissionError from copy2
+            raise IsADirectoryError(
+                f"{path} is a directory, not a .SLDASM/.SLDPRT file")
         import time as _time
         t0 = _time.time()
         doc = None
@@ -527,6 +534,9 @@ class SolidWorks:
                 print("      reusing the already-open document from your "
                       "SolidWorks session (references already resolved)")
                 self._reused_open_doc = True
+                title = safe_prop(existing, "GetTitle")
+                if title:
+                    self._reused_titles.add(str(title))
                 doc = existing
         t1 = t0
         if doc is None:
@@ -798,11 +808,20 @@ class SolidWorks:
 
     def close_doc(self, doc):
         title = safe_prop(doc, "GetTitle")
-        if title:
-            try:
-                self.app.CloseDoc(title)
-            except Exception:
-                pass
+        if not title:
+            return
+        # A doc BORROWED from the user's attached session must stay open:
+        # closing it would modify their session AND throw away the resolved
+        # document that makes the next extraction instant (the whole point of
+        # keeping the assembly open while iterating).
+        if title in getattr(self, "_reused_titles", set()):
+            print(f"      leaving {title} open (borrowed from your "
+                  f"SolidWorks session)")
+            return
+        try:
+            self.app.CloseDoc(title)
+        except Exception:
+            pass
 
     # -- lifecycle --------------------------------------------------------
     def shutdown(self):

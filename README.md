@@ -335,6 +335,16 @@ resolve referenced parts.
 python -m sw2robot.editor            # see the CLI
 ```
 
+**Fast re-extract while debugging.** Keep the assembly open in SolidWorks, then:
+
+```bash
+# reuse the running SolidWorks (skips the multi-minute reopen)
+python -m sw2robot.exporter.extract path/to/assembly.sldasm --attach
+
+# refresh ONLY coordinate systems / reference axes in graph.json (seconds)
+python -m sw2robot.exporter.extract output/<robot> --refresh frames --attach
+```
+
 ## Layout
 
 ```
