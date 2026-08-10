@@ -2902,36 +2902,65 @@ def _urdf_link_world_poses(root):
     URDF does not survive a load: meshes are still .3dxml, and inertials are
     empty placeholders until the mass pass runs.  Joints go over as `fixed` so
     that a limit range excluding zero cannot displace the frames -- skrobot
-    starts a prismatic joint at its lower limit, not at zero.
+    starts a prismatic joint at its lower limit, not at zero.  Every root is
+    then hung off one synthetic link by an identity joint, which leaves the
+    poses untouched and hands skrobot the single connected tree it validates
+    for; a disconnected editor URDF is the normal case here, and letting it
+    log a graph error every time would bury the errors that matter.
     """
     import xml.etree.ElementTree as _ET
 
+    import numpy as _np
     from skrobot.models.urdf import RobotModelFromURDF
 
-    skeleton = _ET.Element("robot", {"name": root.get("name") or "robot"})
-    names = dict.fromkeys(ln.get("name") for ln in root.findall("link")
-                          if ln.get("name"))
+    names = list(dict.fromkeys(ln.get("name") for ln in root.findall("link")
+                               if ln.get("name")))
     if not names:
         return {}
-    for name in names:
-        _ET.SubElement(skeleton, "link", {"name": name})
-    for i, j in enumerate(root.findall("joint")):
+
+    edges, parented = [], set()
+    for j in root.findall("joint"):
         p = j.find("parent")
         c = j.find("child")
         parent = p.get("link") if p is not None else ""
         child = c.get("link") if c is not None else ""
-        if not parent or not child:
+        # a link has exactly one parent, and none via a self-loop; keeping the
+        # first joint per child mirrors the depth-first walk this replaced
+        if not parent or not child or parent == child or child in parented:
             continue
+        parented.add(child)
+        edges.append((parent, child, j.find("origin")))
+
+    # a joint may name a link the document never declares; carry it so the
+    # chain below it still resolves, then drop it from the result
+    linked = list(dict.fromkeys(
+        names + [p for p, _, _ in edges] + [c for _, c, _ in edges]))
+    anchor = "_fk_root"
+    while anchor in linked:
+        anchor += "_"
+
+    skeleton = _ET.Element("robot", {"name": "fk"})
+    _ET.SubElement(skeleton, "link", {"name": anchor})
+    for name in linked:
+        _ET.SubElement(skeleton, "link", {"name": name})
+    # joint names are generated, never copied, so a duplicated or missing name
+    # in the source cannot collide here
+    for i, (parent, child, origin) in enumerate(edges):
         elem = _ET.SubElement(skeleton, "joint",
-                              {"name": j.get("name") or f"joint{i}",
-                               "type": "fixed"})
+                              {"name": f"e{i}", "type": "fixed"})
         _ET.SubElement(elem, "parent", {"link": parent})
         _ET.SubElement(elem, "child", {"link": child})
-        origin = j.find("origin")
         if origin is not None:
             _ET.SubElement(elem, "origin", dict(origin.attrib))
+    for i, name in enumerate(n for n in linked if n not in parented):
+        elem = _ET.SubElement(skeleton, "joint",
+                              {"name": f"r{i}", "type": "fixed"})
+        _ET.SubElement(elem, "parent", {"link": anchor})
+        _ET.SubElement(elem, "child", {"link": name})
+
     rb = RobotModelFromURDF(urdf=_ET.tostring(skeleton, encoding="unicode"))
-    return {ln.name: ln.worldcoords().T() for ln in rb.link_list}
+    poses = {ln.name: ln.worldcoords().T() for ln in rb.link_list}
+    return {name: poses.get(name, _np.eye(4)) for name in names}
 
 
 def _collapse_plan_name_map(plan, link_elems):
