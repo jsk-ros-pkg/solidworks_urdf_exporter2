@@ -166,6 +166,24 @@ def _resolve_package(path):
     raise ValueError(f"not a package dir or .urdf file: {path}")
 
 
+def _dir_is_package(path):
+    """True when :func:`_resolve_package` would open ``path``: a ``*.urdf``
+    sits DIRECTLY in ``path/urdf/`` or in ``path`` itself.  A bare ``urdf/``
+    subdirectory is not enough -- CAD folders often carry an unrelated
+    ``urdf/`` tree (e.g. an old export one level deeper), and flagging them
+    as packages makes the file browser open them instead of navigating."""
+    for sub in ("urdf", "."):
+        d = os.path.normpath(os.path.join(path, sub))
+        try:
+            names = os.listdir(d)
+        except OSError:
+            continue
+        if any(n.lower().endswith(".urdf") and not n.startswith(".")
+               for n in names):
+            return True
+    return False
+
+
 # --- URDF-input editing mode -------------------------------------------------
 # A package WITHOUT a graph.json is a plain URDF the user opened directly: there
 # is no CAD graph to rebuild from, so edits cannot go through joints.yaml +
@@ -4935,9 +4953,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                         if e.startswith(("~$", ".")):
                             continue
                         if os.path.isdir(full):
-                            pkg = os.path.isdir(os.path.join(full, "urdf"))
                             dirs.append({"name": e, "path": full,
-                                         "package": pkg})
+                                         "package": _dir_is_package(full)})
                         elif e.lower().endswith((".sldasm", ".sldprt", ".urdf")):
                             files.append({"name": e, "path": full})
                 except OSError as e:

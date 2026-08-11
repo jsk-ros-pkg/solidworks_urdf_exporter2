@@ -1591,6 +1591,8 @@ the config and does NOT re-detect). Needs graph.json (CAD mode).">🔗 re-detect
     'hist.fail': { en: a => `${a.which} failed: ${a.e}`, ja: a => `${a.which} に失敗: ${a.e}` },
     // open / extract
     'open.fail': { en: a => `open failed: ${a.e}`, ja: a => `オープンに失敗: ${a.e}` },
+    'open.foundAsm': { en: a => `no package here, but found ${a.name} → SolidWorks extract`, ja: a => `パッケージは無いが ${a.name} を発見 → SolidWorks 抽出を開始` },
+    'open.manyAsm': { en: a => `no package here; ${a.n} assemblies inside — open the .SLDASM you want (🗄)`, ja: a => `パッケージが無く、アセンブリが ${a.n} 個あります — 開きたい .SLDASM を選んでください (🗄)` },
     'time.sec': { en: a => `${a.s}s`, ja: a => `${a.s}秒` },
     'time.minSec': { en: a => `${a.m}m${a.s}s`, ja: a => `${a.m}分${a.s}秒` },
     'extract.request': { en: a => `requesting SolidWorks extraction: ${a.p}`, ja: a => `SolidWorks 抽出を要求: ${a.p}` },
