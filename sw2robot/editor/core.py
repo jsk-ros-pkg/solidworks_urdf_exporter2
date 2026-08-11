@@ -828,7 +828,7 @@ def build_urdf(state: RobotCompilerState, sanitize: bool = True,
     # fold the mass-only links into their fixed parent so the weight reaches it
     # (export only; the editor keeps the stripped link so it stays selectable)
     if mass_only and fold_mass_only:
-        from sw2robot.exporter.merge import merge_fixed_links
+        from skrobot.urdf import merge_fixed_links
         merge_fixed_links(root, only=mass_only)
 
     # final guarantee: no hyphens/spaces/etc. in any emitted link or joint name

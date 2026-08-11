@@ -1,9 +1,13 @@
-"""Fixed-joint lumping (sw2robot.exporter.merge): geometry is moved with a
-composed origin, inertials combine (mass + parallel-axis), movable joints
-re-parent, and mesh-less coordinate frames are preserved."""
+"""Fixed-joint lumping, as sw2robot relies on it.
+
+The implementation is :func:`skrobot.urdf.merge_fixed_links`; these are the
+behaviours the exporter and the editor depend on -- geometry moved with a
+composed origin, inertials combined (mass + parallel-axis), movable joints
+re-parented, mesh-less coordinate frames preserved, and the ``force_merge`` /
+``only`` handling that the mass-only links need."""
 import xml.etree.ElementTree as ET
 
-from sw2robot.exporter.merge import merge_fixed_links, merge_fixed_links_text
+from skrobot.urdf import merge_fixed_links
 
 _URDF = """<?xml version="1.0"?>
 <robot name="t">
@@ -41,7 +45,7 @@ def _f(s):
 
 def test_merge_lumps_geometry_inertia_and_reparents():
     root = ET.fromstring(_URDF)
-    n, _ = merge_fixed_links(root)
+    n = merge_fixed_links(root)
     assert n == 1                                   # only 'c' merged
 
     links = {ln.get("name"): ln for ln in root.findall("link")}
@@ -89,7 +93,7 @@ def test_chain_of_fixed_joints_collapses():
   <link name="d"><visual><origin xyz="0 0 0" rpy="0 0 0"/><geometry><box size="1 1 1"/></geometry></visual></link>
 </robot>"""
     root = ET.fromstring(urdf)
-    n, _ = merge_fixed_links(root)
+    n = merge_fixed_links(root)
     assert n == 2
     links = {ln.get("name") for ln in root.findall("link")}
     assert links == {"a"}                            # everything collapsed onto a
@@ -156,7 +160,7 @@ def test_mass_only_link_folds_into_parent_keeping_mass():
     """A geometry-less link named in force_merge folds into its fixed parent so
     its weight is kept; the bare port frame (NOT in the set) is preserved."""
     root = ET.fromstring(_MASS_ONLY_URDF)
-    n, _ = merge_fixed_links(root, force_merge={"internal"})
+    n = merge_fixed_links(root, force_merge={"internal"})
     assert n == 1                                   # only 'internal' folded
 
     links = {ln.get("name") for ln in root.findall("link")}
@@ -184,7 +188,7 @@ def test_mass_only_not_in_force_merge_is_preserved_as_a_frame():
     """Without force_merge, a geometry-less link is treated as a coordinate
     frame and preserved -- the fold is strictly opt-in, never automatic."""
     root = ET.fromstring(_MASS_ONLY_URDF)
-    n, _ = merge_fixed_links(root)                  # no force_merge
+    n = merge_fixed_links(root)                  # no force_merge
     assert n == 0
     assert "internal" in {ln.get("name") for ln in root.findall("link")}
 
@@ -202,20 +206,10 @@ def test_mass_only_not_folded_when_joint_is_movable():
         '    <axis xyz="0 0 1"/><limit lower="-1" upper="1" effort="1" velocity="1"/>\n'
         '  </joint>')
     root = ET.fromstring(urdf)
-    n, _ = merge_fixed_links(root, force_merge={"internal"})
+    n = merge_fixed_links(root, force_merge={"internal"})
     assert n == 0
     assert "internal" in {ln.get("name") for ln in root.findall("link")}
 
-
-def test_mass_only_fold_via_text_entrypoint():
-    """merge_fixed_links_text forwards force_merge; result is valid URDF text
-    with the mass-only link folded away and its weight on the parent."""
-    out = merge_fixed_links_text(_MASS_ONLY_URDF, force_merge={"internal"})
-    assert "internal" not in out
-    assert out.lstrip().startswith("<?xml")
-    root = ET.fromstring(out)
-    base = next(ln for ln in root.findall("link") if ln.get("name") == "base")
-    assert abs(float(base.find("inertial").find("mass").get("value")) - 5.0) < 1e-9
 
 
 def test_only_folds_just_the_named_link_not_the_whole_fixed_tree():
@@ -237,7 +231,7 @@ def test_only_folds_just_the_named_link_not_the_whole_fixed_tree():
     <inertia ixx="1" ixy="0" ixz="0" iyy="1" iyz="0" izz="1"/></inertial></link>
 </robot>"""
     root = ET.fromstring(urdf)
-    n, _ = merge_fixed_links(root, only={"pcb"})
+    n = merge_fixed_links(root, only={"pcb"})
     assert n == 1
     links = {ln.get("name") for ln in root.findall("link")}
     assert "pcb" not in links            # the mass-only link folded
@@ -263,7 +257,7 @@ def test_mass_only_folds_into_a_coordinate_frame_parent():
     <inertia ixx="2" ixy="0" ixz="0" iyy="2" iyz="0" izz="2"/></inertial></link>
 </robot>"""
     root = ET.fromstring(urdf)
-    n, _ = merge_fixed_links(root, only={"pcb"})
+    n = merge_fixed_links(root, only={"pcb"})
     assert n == 1
     links = {ln.get("name") for ln in root.findall("link")}
     assert "pcb" not in links            # the mass-only link folded into the frame
@@ -310,7 +304,7 @@ def test_fold_rotates_child_inertia_into_the_parent_frame():
     <inertia ixx="2" ixy="0" ixz="0" iyy="5" iyz="0" izz="7"/></inertial></link>
 </robot>"""
     root = ET.fromstring(urdf)
-    n, _ = merge_fixed_links(root, force_merge={"pcb"})
+    n = merge_fixed_links(root, force_merge={"pcb"})
     assert n == 1
     assert "pcb" not in {ln.get("name") for ln in root.findall("link")}
 
@@ -346,7 +340,7 @@ def test_massless_child_inertial_contributes_nothing():
     <visual><geometry><box size="0.1 0.1 0.1"/></geometry></visual></link>
 </robot>"""
     root = ET.fromstring(urdf)
-    n, _ = merge_fixed_links(root)
+    n = merge_fixed_links(root)
     assert n == 1
 
     base = next(ln for ln in root.findall("link") if ln.get("name") == "base")
