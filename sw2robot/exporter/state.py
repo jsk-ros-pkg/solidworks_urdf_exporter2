@@ -160,6 +160,13 @@ class GraphState(BaseModel):
     # correspond to the official SolidWorks URDF Exporter's Reference Joint
     # choices and are intentionally separate from mate-derived joint axes.
     reference_axes: list[ReferenceAxisState] = []
+    # Definitive SW2URDF fingerprint: top-level feature name
+    # "URDF Export Configuration (vX.Y)". None on older extracts / assemblies
+    # not authored with the add-in.
+    sw2urdf_marker: str | None = None
+    # Raw SW2URDF DataContract XML payload from the marker attribute's
+    # "data" parameter. None when unreadable or absent.
+    sw2urdf_config_xml: str | None = None
     # part_path -> internals (newer extracts; empty on graphs from older ones)
     subassemblies: dict[str, SubGraph] = {}
     # full nested Name2 ("inst-1/child-2/...") -> row-major 4x4 in the ROOT

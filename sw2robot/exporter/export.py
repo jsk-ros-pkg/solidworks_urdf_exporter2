@@ -38,7 +38,9 @@ from .model import (
     extract_limit_joints,
     extract_part_graph,
     extract_reference_axes,
+    extract_reference_geometry,
     extract_subgraphs,
+    extract_sw2urdf_attribute,
     safe_name,
     to_graph_state,
 )
@@ -95,12 +97,16 @@ def _extract_part_into(sw, part_path, pkg_dir, meshes_dir, robot_name, _say):
     export_part_mesh(doc, comps[0], meshes_dir)
 
     _say("saving graph.json ...")
-    coordinate_systems = extract_coordinate_systems(doc)
-    reference_axes = extract_reference_axes(doc)
+    (coordinate_systems,
+     reference_axes,
+     sw2urdf_marker,
+     sw2urdf_config_xml) = extract_reference_geometry(doc)
     graph = to_graph_state(
         comps, adjacency, ground, robot_name, part_path,
         coordinate_systems=coordinate_systems,
-        reference_axes=reference_axes)
+        reference_axes=reference_axes,
+        sw2urdf_marker=sw2urdf_marker,
+        sw2urdf_config_xml=sw2urdf_config_xml)
     graph.save(os.path.join(pkg_dir, GRAPH_FILE))
     sw.close_doc(doc)
     return pkg_dir
@@ -140,8 +146,10 @@ def _extract_into(sw, assembly_path, pkg_dir, meshes_dir, robot_name, _say,
     _say("reading components + mates ...")
     comps, adjacency, ground = extract_graph(doc, robot_name, assembly_path,
                                              progress=_part)
-    coordinate_systems = extract_coordinate_systems(doc)
-    reference_axes = extract_reference_axes(doc)
+    (coordinate_systems,
+     reference_axes,
+     sw2urdf_marker,
+     sw2urdf_config_xml) = extract_reference_geometry(doc)
     _say(f"found {len(comps)} components, {len(adjacency)} mate pairs")
     if not comps:
         sw.close_doc(doc)
@@ -199,6 +207,8 @@ def _extract_into(sw, assembly_path, pkg_dir, meshes_dir, robot_name, _say,
                            hidden=hidden, limit_joints=limit_joints,
                            coordinate_systems=coordinate_systems,
                            reference_axes=reference_axes,
+                           sw2urdf_marker=sw2urdf_marker,
+                           sw2urdf_config_xml=sw2urdf_config_xml,
                            subassembly_coordinate_systems=
                            subassembly_coordinate_systems)
     graph.save(os.path.join(pkg_dir, GRAPH_FILE))
@@ -348,6 +358,8 @@ def refresh_frames(target, out_dir=None, robot_name=None, visible=False,
             _say("re-reading coordinate systems + reference axes ...")
             graph.coordinate_systems = extract_coordinate_systems(doc)
             graph.reference_axes = extract_reference_axes(doc)
+            (graph.sw2urdf_marker,
+             graph.sw2urdf_config_xml) = extract_sw2urdf_attribute(doc)
             if graph.subassemblies:
                 live = _live_subassembly_docs(doc)
                 for path, sub in graph.subassemblies.items():
@@ -430,6 +442,21 @@ def build(pkg_dir, config_path=None, base_hint=None, exclude=None,
     # The working URDF KEEPS each mass-only link (geometry stripped) so it stays
     # selectable in the editor tree; only the exported package folds it away.
     mass_only_links = write_urdf(model, urdf_path, **urdf_kwargs)
+    # An SW2URDF config may bundle several loose components into ONE link;
+    # they leave the tree as fixed children, so lump exactly those back into
+    # their parent to reproduce the authored link granularity.
+    if getattr(model, "lumped_links", None):
+        import xml.etree.ElementTree as _ET
+
+        from skrobot.urdf import merge_fixed_links
+        _tree = _ET.parse(urdf_path)
+        _root = _tree.getroot()          # skrobot merges IN PLACE
+        _res = merge_fixed_links(_root, only=list(model.lumped_links))
+        _n = _res[0] if isinstance(_res, tuple) else _res
+        if _n:
+            _tree.write(urdf_path, encoding="utf-8", xml_declaration=True)
+            print(f"      SW2URDF config: lumped {_n} member link(s) into "
+                  "their configured link")
     # Surface parts that resolved + got a mesh but whose geometry never makes it
     # into the URDF (classic case: a sub-assembly kept as one composed mesh whose
     # 3DXML export config suppresses some children).  Best-effort: warn_dropped_

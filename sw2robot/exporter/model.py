@@ -39,6 +39,13 @@ from .state import (
     ReferenceAxisState,
     SubGraph,
 )
+from .sw2urdf_import import (
+    detect_sw2urdf_reference_geometry,
+    parse_sw2urdf_payload,
+    reconstruct_sw2urdf_config,
+    reconstruct_sw2urdf_config_from_payload,
+    reconstruct_sw2urdf_config_geometric,
+)
 from .swcom import as_iface, safe_call, safe_prop
 
 MATE_TYPES = {0: "COINCIDENT", 1: "CONCENTRIC", 2: "PERPENDICULAR",
@@ -364,6 +371,10 @@ class RobotModel:
     # closed-loop (four-bar / parallel) data for the runtime-IK relay:
     # {closures:[{link_a,link_b,point,axis}], dependent:[...], independent:[...]}
     loop_closures: dict | None = None
+    # link names an SW2URDF config declares as members of their parent link
+    # (several loose components per link): the writer lumps them so the URDF
+    # has the link granularity the config author intended.
+    lumped_links: list = field(default_factory=list)
 
 
 def _match_component(comps, ref):
@@ -465,7 +476,8 @@ def resolve_directed(comps, joints_cfg):
         if not (np_ and nc):
             print(f"      WARN: joint config '{pa}->{ca}' did not match links")
             continue
-        out.append({"parent": np_, "child": nc,
+        out.append({"name": j.get("name"),
+                    "parent": np_, "child": nc,
                     "type": j.get("type", "fixed"),
                     "lower": j.get("lower"), "upper": j.get("upper"),
                     "axis_point": j.get("axis_point"),
@@ -2423,6 +2435,7 @@ def _config_parent_map(comps, adjacency, base, directed):
             lo = olo if lo is None else lo
             up = ohi if up is None else up
         edge_info[(child, parent)] = {
+            "name": d.get("name"),
             "type": jtype, "axis": ax,
             "lower": -3.141592 if lo is None else lo,
             "upper": 3.141592 if up is None else up,
@@ -2464,7 +2477,7 @@ def _config_parent_map(comps, adjacency, base, directed):
 
 
 def _finalize_tree(comps, adjacency, base, parent_of, edge_info, root_rpy=None,
-                   root_z_offset=0.0, root_xyz=None):
+                   root_z_offset=0.0, root_xyz=None, anchor_frames=None):
     """Compute anchors, visual origins and Joint objects from a parent map."""
     by_name = {c.name: c for c in comps}
 
@@ -2492,9 +2505,29 @@ def _finalize_tree(comps, adjacency, base, parent_of, edge_info, root_rpy=None,
         T = np.eye(4)
         T[2, 3] = root_z_offset
         base_anchor = base_anchor @ T
+    # A SW2URDF config states each link's frame explicitly (its CoordSys);
+    # honour that verbatim -- position AND orientation -- so the tree comes
+    # out in the frames the human authored, the way the classic add-in wrote
+    # them.  Links without one keep the world-aligned-on-axis convention.
+    anchor_frames = anchor_frames or {}
+    if base.name in anchor_frames:
+        base_anchor = np.asarray(anchor_frames[base.name], float).copy()
+        if root_rpy:
+            base_anchor = base_anchor @ rpy2homogeneous(*root_rpy)
+        if root_xyz:
+            T = np.eye(4)
+            T[:3, 3] = np.asarray(root_xyz, float)
+            base_anchor = base_anchor @ T
+        if root_z_offset:
+            T = np.eye(4)
+            T[2, 3] = root_z_offset
+            base_anchor = base_anchor @ T
     anchor = {base.name: base_anchor}
     for child, parent in parent_of.items():
         info = edge_info.get((child, parent), {"type": "fixed", "axis": None})
+        if child in anchor_frames:
+            anchor[child] = np.asarray(anchor_frames[child], float).copy()
+            continue
         if info["type"] in ("revolute", "continuous", "prismatic") \
                 and info.get("axis") is not None:
             pt, d = info["axis"]
@@ -2528,10 +2561,14 @@ def _finalize_tree(comps, adjacency, base, parent_of, edge_info, root_rpy=None,
             else:
                 pt, d = info["axis"]
                 d = np.asarray(d, float)
-                axis = [round(float(x), 8) for x in d]
+                sw_dir = [round(float(x), 8) for x in d]
+                # URDF expresses <axis> in the CHILD (joint) frame.  With the
+                # world-aligned anchors that is the document frame verbatim,
+                # but an authored CoordSys anchor is rotated -- map into it.
+                d_local = anchor[child][:3, :3].T @ d
+                axis = [round(float(x), 8) for x in d_local]
                 lower = info.get("lower"); upper = info.get("upper")
                 sw_pt = [round(float(x), 8) for x in np.asarray(pt, float)]
-                sw_dir = axis
         if jtype == "fixed":
             # write the WOULD-BE axis (best concentric/mate line) even for
             # fixed joints: URDF consumers ignore <axis> on fixed, but the
@@ -2553,8 +2590,9 @@ def _finalize_tree(comps, adjacency, base, parent_of, edge_info, root_rpy=None,
         # physics sub-elements are meaningful only on movable joints; a joint
         # the config pinned to fixed drops them (URDF ignores them there anyway)
         movable = jtype in ("revolute", "continuous", "prismatic")
+        joint_name = info.get("name") or f"{pa.link_name}__{ch.link_name}"
         joints.append(Joint(
-            name=f"{pa.link_name}__{ch.link_name}",
+            name=joint_name,
             parent=pa.link_name, child=ch.link_name, jtype=jtype,
             xyz=xyz, rpy=rpy, axis=axis, lower=lower, upper=upper,
             effort=info.get("effort") if movable else None,
@@ -2569,7 +2607,8 @@ def _finalize_tree(comps, adjacency, base, parent_of, edge_info, root_rpy=None,
 
 
 def build_tree(comps, adjacency, base, directed=None, root_rpy=None,
-               root_z_offset=0.0, root_xyz=None, closures_out=None):
+               root_z_offset=0.0, root_xyz=None, closures_out=None,
+               anchor_frames=None):
     if directed:
         parent_of, edge_info = _config_parent_map(comps, adjacency, base,
                                                   directed)
@@ -2594,7 +2633,7 @@ def build_tree(comps, adjacency, base, directed=None, root_rpy=None,
             closures_out.append(lc)
     return _finalize_tree(comps, adjacency, base, parent_of, edge_info,
                           root_rpy=root_rpy, root_z_offset=root_z_offset,
-                          root_xyz=root_xyz)
+                          root_xyz=root_xyz, anchor_frames=anchor_frames)
 
 
 # ====================================================================
@@ -2652,6 +2691,131 @@ def _document_features(doc):
         out.append(fi)
         feat = safe_call(fi, "GetNextFeature")
     return out
+
+
+def _sw2urdf_attribute_payload_xml(feature):
+    """Best-effort extraction of the SW2URDF attribute payload XML."""
+    specific = safe_call(feature, "GetSpecificFeature2")
+    attribute = as_iface(specific, "IAttribute")
+    parameter_obj = safe_call(attribute, "GetParameter", "data")
+    parameter = as_iface(parameter_obj, "IParameter")
+    value = safe_call(parameter, "GetStringValue")
+    if isinstance(value, (tuple, list)):
+        value = next((x for x in value if x), None)
+    if value is None:
+        return None
+    try:
+        return str(value)
+    except Exception:
+        return None
+
+
+def extract_sw2urdf_attribute(doc):
+    """Return ``(marker, payload_xml)`` for the SW2URDF attribute feature.
+
+    ``(None, None)`` when the document carries no ``URDF Export
+    Configuration`` feature.  Kept separate from the frame readers so the
+    frame-refresh path can update the marker without going through them.
+    """
+    for fi in _document_features(doc):
+        name = str(safe_prop(fi, "Name") or "")
+        if name.startswith("URDF Export Configuration"):
+            payload = _sw2urdf_attribute_payload_xml(fi)
+            if payload is None:
+                print("      WARN: SW2URDF marker found but attribute payload "
+                      "could not be read")
+            return name, payload
+    return None, None
+
+
+def extract_reference_geometry(doc):
+    """Return reference geometry and SW2URDF marker data in one feature walk.
+
+    Returns
+    -------
+    tuple
+        ``(coordinate_systems, reference_axes, sw2urdf_marker,
+        sw2urdf_config_xml)``.
+    """
+    coordinate_systems = []
+    reference_axes = []
+    sw2urdf_marker = None
+    sw2urdf_config_xml = None
+
+    extension = as_iface(
+        safe_prop(doc, "Extension"), "IModelDocExtension")
+    for fi in _document_features(doc):
+        name = str(safe_prop(fi, "Name") or "")
+        if (sw2urdf_marker is None and
+                name.startswith("URDF Export Configuration")):
+            sw2urdf_marker = name
+            sw2urdf_config_xml = _sw2urdf_attribute_payload_xml(fi)
+            if sw2urdf_config_xml is None:
+                print("      WARN: SW2URDF marker found but attribute payload "
+                      "could not be read")
+
+        kind = safe_call(fi, "GetTypeName2")
+        if kind == "CoordSys":
+            data = None
+            accessed = False
+            try:
+                transform = safe_call(
+                    extension, "GetCoordinateSystemTransformByName", name)
+                if transform is None:
+                    data = safe_call(fi, "GetDefinition")
+                    data = as_iface(data, "ICoordinateSystemFeatureData")
+                    # SolidWorks' examples access the feature selections before
+                    # reading Transform.  Some releases return the transform
+                    # without this call, but use the documented path here.
+                    accessed = bool(safe_call(
+                        data, "AccessSelections", doc, None))
+                    transform = safe_prop(data, "Transform")
+                if transform is None:
+                    raise ValueError("coordinate system has no Transform")
+                document_from_frame = transform_to_matrix(transform.ArrayData)
+                coordinate_systems.append(CoordinateSystemState(
+                    name=name,
+                    document_from_frame=[
+                        float(x) for x in document_from_frame.flatten()
+                    ]))
+            except Exception as e:
+                print(f"      WARN: coordinate system {name!r} could not be "
+                      f"read: {e!r}")
+            finally:
+                if accessed:
+                    safe_call(data, "ReleaseSelectionAccess")
+        elif kind == "RefAxis":
+            try:
+                axis = as_iface(safe_call(fi, "GetSpecificFeature2"), "IRefAxis")
+                params = np.asarray(
+                    list(safe_call(axis, "GetRefAxisParams") or []), float)
+                if params.size < 6:
+                    raise ValueError("reference axis has no start/end points")
+                start = params[:3]
+                end = params[3:6]
+                direction = start - end
+                norm = float(np.linalg.norm(direction))
+                if norm <= 1e-12:
+                    raise ValueError("reference axis direction is degenerate")
+                reference_axes.append(ReferenceAxisState(
+                    name=name,
+                    document_point=[float(x) for x in start],
+                    document_direction=[float(x) for x in direction / norm],
+                ))
+            except Exception as e:
+                print(f"      WARN: reference axis {name!r} could not be "
+                      f"read: {e!r}")
+
+    if coordinate_systems:
+        print("      coordinate systems: " +
+              ", ".join(repr(c.name) for c in coordinate_systems))
+    if reference_axes:
+        print("      reference axes: " +
+              ", ".join(repr(axis.name) for axis in reference_axes))
+    if sw2urdf_marker is not None:
+        print(f"      SW2URDF marker: {sw2urdf_marker!r}")
+    return (coordinate_systems, reference_axes,
+            sw2urdf_marker, sw2urdf_config_xml)
 
 
 def extract_coordinate_systems(doc):
@@ -2910,7 +3074,8 @@ def _mate_edges(adjacency):
 def to_graph_state(comps, adjacency, ground, robot_name, source_assembly,
                    assembly_mesh=None, subassemblies=None, deep_worlds=None,
                    hidden=None, limit_joints=None, coordinate_systems=None,
-                   subassembly_coordinate_systems=None, reference_axes=None):
+                   subassembly_coordinate_systems=None, reference_axes=None,
+                   sw2urdf_marker=None, sw2urdf_config_xml=None):
     subs = {}
     for path, (scomps, sadj, sground) in (subassemblies or {}).items():
         subs[path] = SubGraph(components=_component_states(scomps),
@@ -2925,6 +3090,8 @@ def to_graph_state(comps, adjacency, ground, robot_name, source_assembly,
                       assembly_mesh=assembly_mesh,
                       coordinate_systems=list(coordinate_systems or []),
                       reference_axes=list(reference_axes or []),
+                      sw2urdf_marker=sw2urdf_marker,
+                      sw2urdf_config_xml=sw2urdf_config_xml,
                       subassemblies=subs,
                       deep_worlds=deep_worlds or {}, hidden=hidden or [],
                       limit_joints=[LimitJoint(**j) for j in
@@ -3059,7 +3226,135 @@ def _excluded(name, link_name, exclude):
     return any(e in n or (ln and e in ln) for e in exclude)
 
 
-def from_graph(graph, exclude=None, expand=None, no_expand=None):
+def _sw2urdf_sanitized_link_names(swcfg, graph_components=None):
+    """Return component -> sanitised link name for a SW2URDF mapping.
+
+    Raises ValueError on any post-sanitisation collision: among the SW2URDF
+    links themselves, against a non-SW2URDF top-level component's link name,
+    or between two sanitised joint names.
+    """
+    used = {}
+    out = {}
+    for comp_name, rec in sorted(swcfg["links"].items()):
+        ln = safe_name(rec["link_name"])
+        prev = used.get(ln)
+        if prev is not None and prev != comp_name:
+            raise ValueError(
+                f"sanitised SW2URDF link name collision: {comp_name!r} and "
+                f"{prev!r} -> {ln!r}"
+            )
+        used[ln] = comp_name
+        out[comp_name] = ln
+    for c in graph_components or []:
+        if c.name in swcfg["links"]:
+            continue
+        other = safe_name(getattr(c, "link_name", None) or c.name)
+        if other in used:
+            raise ValueError(
+                f"SW2URDF link name {other!r} collides with non-SW2URDF "
+                f"component {c.name!r}")
+    jused = {}
+    for j in swcfg["joints"]:
+        jn = safe_name(str(j["name"]))
+        if jn in jused and jused[jn] != j["name"]:
+            raise ValueError(
+                f"sanitised SW2URDF joint name collision: {j['name']!r} and "
+                f"{jused[jn]!r} -> {jn!r}")
+        jused[jn] = j["name"]
+    return out
+
+
+def _sw2urdf_print_mapping(swcfg, route="name"):
+    """Print a compact SW2URDF mapping summary."""
+    links = swcfg["links"]
+    root = swcfg["root_link"]
+    if route == "name":
+        print("      SW2URDF config: applied")
+    else:
+        print(f"      SW2URDF config: applied ({route} route)")
+    print(f"        links: {len(links)}, joints: {len(swcfg['joints'])}, "
+          f"root: {links[root]['link_name']} ({root})")
+    for j in swcfg["joints"]:
+        p = np.asarray(j["axis_point"], float)
+        d = np.asarray(j["axis_direction"], float)
+        print("        - {}: {} -> {}  axis_point=[{:.6g}, {:.6g}, {:.6g}] "
+              "axis_dir=[{:.6g}, {:.6g}, {:.6g}]  origin_dist={:.3e}m  "
+              "flip={}".format(
+                  j["name"], j["parent"], j["child"],
+                  float(p[0]), float(p[1]), float(p[2]),
+                  float(d[0]), float(d[1]), float(d[2]),
+                  float(j["axis_origin_distance"]),
+                  "yes" if j.get("flipped") else "no"))
+
+
+def _sw2urdf_directed_joints(swcfg):
+    """SW2URDF mapping -> directed config entries for ``_config_parent_map``."""
+    out = []
+    for j in swcfg["joints"]:
+        child_origin = np.asarray(
+            swcfg["links"][j["child"]]["origin"][:3, 3], float)
+        axis_dir = np.asarray(j["axis_direction"], float)
+        out.append({
+            "name": safe_name(str(j["name"])),
+            "parent": j["parent"],
+            "child": j["child"],
+            # the payload route carries the full joint spec; the name and
+            # geometric routes only ever produce bare revolute entries
+            "type": j.get("type", "revolute"),
+            "lower": j.get("lower"),
+            "upper": j.get("upper"),
+            "axis_point": [float(x) for x in child_origin],
+            "axis_dir": [float(x) for x in axis_dir],
+            "mimic": j.get("mimic"),
+            "effort": j.get("effort"),
+            "velocity": j.get("velocity"),
+            "dynamics": j.get("dynamics"),
+            "safety": j.get("safety"),
+            "calibration": j.get("calibration"),
+        })
+    # SW2URDF links may bundle several loose components; the main one carries
+    # the joint tree and the rest ride along as rigid FIXED children.
+    for main_comp, rec in sorted(swcfg["links"].items()):
+        for member in rec.get("extra_components") or []:
+            out.append({
+                "name": None, "parent": main_comp, "child": member,
+                "type": "fixed", "lower": None, "upper": None,
+                "axis_point": None, "axis_dir": None,
+                "mimic": None, "effort": None, "velocity": None,
+                "dynamics": None, "safety": None, "calibration": None,
+            })
+    return out
+
+
+def _sw2urdf_merge_directed(sw2_directed, user_directed):
+    """Merge user ``joints:`` entries onto the SW2URDF directed tree.
+
+    The generated joints.yaml snapshots the applied tree, so a user entry
+    repeating a configured joint (same child, parent and type) contributes
+    only its explicit overrides; an entry that RE-WIRES a configured child
+    replaces that joint.  Returns ``(directed, replaced_names)``.
+    """
+    by_child = {d["child"]: dict(d) for d in sw2_directed}
+    extra, replaced = [], []
+    for u in user_directed:
+        s = by_child.get(u["child"])
+        if s is None:
+            extra.append(u)
+            continue
+        if u["parent"] == s["parent"] and u.get("type") == s.get("type"):
+            for k, v in u.items():
+                if k in ("parent", "child", "type") or v is None:
+                    continue
+                s[k] = v
+        else:
+            replaced.append(s["name"])
+            by_child[u["child"]] = u
+    ordered = [by_child[d["child"]] for d in sw2_directed]
+    return ordered + extra, replaced
+
+
+def from_graph(graph, exclude=None, expand=None, no_expand=None,
+               force_no_expand=None):
     """GraphState -> (comps, adjacency, ground), applying ``exclude`` and
     expanding sub-assemblies whose internals move (see
     :func:`_expand_subassemblies`)."""
@@ -3092,7 +3387,8 @@ def from_graph(graph, exclude=None, expand=None, no_expand=None):
     ground = {g for g in graph.ground if g in names}
     _snap_unsolved_mates(comps, adjacency)
     comps, adjacency, ground = _expand_subassemblies(
-        graph, comps, adjacency, ground, expand=expand, no_expand=no_expand)
+        graph, comps, adjacency, ground, expand=expand, no_expand=no_expand,
+        force_no_expand=force_no_expand)
     if exclude:
         # Apply `exclude` AGAIN after expansion: the filter at the top of this
         # function only sees top-level graph.components, so a part excluded from
@@ -3299,19 +3595,27 @@ def _expand_one(inst, sub, comps, adjacency, ground, deep=None, hidden=None):
 
 
 def _expand_subassemblies(graph, comps, adjacency, ground,
-                          expand=None, no_expand=None):
-    """Expand instances whose internals move; ``expand``/``no_expand`` are
-    case-insensitive substring overrides from the joint config."""
+                          expand=None, no_expand=None,
+                          force_no_expand=None):
+    """Expand instances whose internals move.
+
+    ``expand``/``no_expand`` are case-insensitive substring overrides from the
+    joint config. ``force_no_expand`` is an exact-name hold list used by
+    auto-applied SW2URDF link components; explicit ``expand`` still wins.
+    """
     subs = getattr(graph, "subassemblies", None) or {}
     if not subs:
         return comps, adjacency, ground
     expand = [s.lower() for s in (expand or [])]
     no_expand = [s.lower() for s in (no_expand or [])]
+    force_no_expand = {s.lower() for s in (force_no_expand or [])}
     movable = {}
 
     def want(inst):
         nm = inst.name.lower()
         if any(s in nm for s in no_expand):
+            return False
+        if nm in force_no_expand and not any(s in nm for s in expand):
             return False
         sub = subs.get(inst.part_path)
         if sub is None:
@@ -3343,10 +3647,122 @@ def build_model(graph, robot_name=None, base_hint=None, config=None,
     exclude = list(exclude or [])
     if config and config.get("exclude"):
         exclude += list(config["exclude"])
+
+    sw2_mode = "auto"
+    if config and config.get("sw2urdf_config") is not None:
+        sw2_mode = str(config.get("sw2urdf_config")).strip().lower() or "auto"
+    if sw2_mode not in ("auto", "off", "require"):
+        print(f"      WARN: sw2urdf_config={sw2_mode!r} is unknown; using 'auto'")
+        sw2_mode = "auto"
+
+    sw2_present = detect_sw2urdf_reference_geometry(
+        graph.components,
+        graph.coordinate_systems,
+        graph.reference_axes,
+    )
+    sw2_marker = str(getattr(graph, "sw2urdf_marker", "") or "").strip() or None
+    sw2_payload_xml = str(
+        getattr(graph, "sw2urdf_config_xml", "") or "").strip() or None
+    sw2cfg = None
+    sw2_link_names = None
+    sw2_force_no_expand = None
+    sw2_route = None
+    if sw2_mode != "off":
+        if sw2_payload_xml:
+            payload = parse_sw2urdf_payload(sw2_payload_xml)
+            if payload is not None:
+                sw2cfg = reconstruct_sw2urdf_config_from_payload(
+                    payload,
+                    graph.components,
+                    graph.coordinate_systems,
+                    graph.reference_axes,
+                    subassemblies=getattr(graph, "subassemblies", None),
+                )
+            if sw2cfg is not None:
+                sw2_route = "payload"
+            else:
+                print("      !!! SW2URDF payload route failed; "
+                      "trying other routes")
+    if sw2_mode != "off" and sw2cfg is None:
+        sw2cfg = reconstruct_sw2urdf_config(
+            graph.components,
+            graph.coordinate_systems,
+            graph.reference_axes,
+            graph.edges,
+            graph.ground,
+        )
+        if sw2cfg is not None:
+            sw2_route = "name"
+        if sw2cfg is None and sw2_marker is not None:
+            print("      !!! SW2URDF marker found; name route failed, "
+                  "trying geometric reconstruction")
+            sw2cfg = reconstruct_sw2urdf_config_geometric(
+                graph.components,
+                graph.coordinate_systems,
+                graph.reference_axes,
+                graph.edges,
+                graph.ground,
+            )
+            if sw2cfg is not None:
+                sw2_route = "geometric"
+    # post-processing runs for whichever route produced the mapping
+    if sw2_mode != "off":
+        if sw2cfg is None:
+            if sw2_mode == "require":
+                if sw2_marker is not None:
+                    raise RuntimeError(
+                        "sw2urdf_config=require but the embedded SW2URDF "
+                        "mapping could not be reconstructed by any route")
+                raise RuntimeError(
+                    "sw2urdf_config=require but embedded SW2URDF mapping "
+                    "could not be reconstructed")
+            if sw2_marker is not None:
+                print("      !!! SW2URDF marker found but reconstruction "
+                      "failed in every applicable route; falling back to "
+                      "normal mate inference")
+            elif sw2_present:
+                print("      !!! SW2URDF config detected but reconstruction "
+                      "failed; falling back to normal mate inference")
+        else:
+            try:
+                sw2_link_names = _sw2urdf_sanitized_link_names(
+                    sw2cfg, graph.components)
+            except ValueError as e:
+                if sw2_mode == "require":
+                    raise RuntimeError(
+                        "sw2urdf_config=require but " + str(e)) from e
+                print("      !!! SW2URDF config warning: "
+                      f"{e}; falling back to normal mate inference")
+                sw2cfg = None
+                sw2_link_names = None
+            if sw2cfg is not None:
+                _sw2urdf_print_mapping(sw2cfg, route=sw2_route or "name")
+                sw2_force_no_expand = set(sw2cfg["links"])
+                for rec in sw2cfg["links"].values():
+                    sw2_force_no_expand.update(
+                        rec.get("extra_components") or [])
+                exp = [s.lower() for s in
+                       ((config.get("expand") if config else None) or [])]
+                if exp:
+                    overridden = sorted(
+                        name for name in sw2_force_no_expand
+                        if any(s in name.lower() for s in exp))
+                    if overridden:
+                        print("      SW2URDF config: user `expand:` override "
+                              "keeps expansion for: "
+                              + ", ".join(repr(x) for x in overridden))
+
     comps, adjacency, ground = from_graph(
         graph, exclude=exclude,
         expand=config.get("expand") if config else None,
-        no_expand=config.get("no_expand") if config else None)
+        no_expand=config.get("no_expand") if config else None,
+        force_no_expand=sw2_force_no_expand)
+
+    if sw2cfg is not None and sw2_link_names is not None:
+        for c in comps:
+            ln = sw2_link_names.get(c.name)
+            if ln:
+                c.link_name = ln
 
     # SolidWorks LimitDistance/LimitAngle mates ARE the assembly's real DOFs --
     # promote those edges to prismatic/revolute with the CAD axis + travel
@@ -3485,15 +3901,53 @@ def build_model(graph, robot_name=None, base_hint=None, config=None,
         if "root_link_name" in config:
             # falsy -> keep the component's own link name (no rename)
             root_link_name = config.get("root_link_name") or ""
+
+    if sw2cfg is not None:
+        # component-less config links become ports (empty dummy links); their
+        # pose is the authored frame expressed in the parent link's anchor
+        for fl in sw2cfg.get("frame_links") or []:
+            parent_comp = fl["parent_component"]
+            parent_rec = sw2cfg["links"].get(parent_comp) or {}
+            parent_anchor = np.asarray(
+                parent_rec.get("origin", np.eye(4)), float).reshape(4, 4)
+            rel = matrix_relative(parent_anchor,
+                                  np.asarray(fl["origin"], float))
+            xyz, rpy = matrix_to_xyz_rpy(rel)
+            parent_link = next((c.link_name for c in comps
+                                if c.name == parent_comp), None)
+            if parent_link is None:
+                print(f"      WARN: frame link {fl['link_name']!r} parent "
+                      f"{parent_comp!r} is not in the model; skipping")
+                continue
+            ports.append(Port(name=safe_name(fl["link_name"]),
+                              parent_link=parent_link,
+                              xyz=list(xyz), rpy=list(rpy),
+                              joint_name=safe_name(fl["joint_name"] or "")))
+        base_hint = sw2cfg["root_link"]
+        directed, replaced = _sw2urdf_merge_directed(
+            _sw2urdf_directed_joints(sw2cfg), directed or [])
+        print("      SW2URDF config: using directed revolute tree "
+              f"({len(directed)} joints)")
     root_z_offset = (config.get("root_z_offset", 0.0) if config else 0.0)
     root_xyz = (config.get("root_xyz") if config else None)
 
     base = choose_base(comps, ground, base_hint, adjacency)
     print(f"      base link: {base.link_name}")
     closures_out = []
+    # authored link frames (CoordSys) -> anchors, so the URDF comes out in
+    # the frames the SW2URDF config declares
+    anchor_frames = None
+    if sw2cfg is not None:
+        anchor_frames = {comp: rec["origin"]
+                         for comp, rec in sw2cfg["links"].items()
+                         if rec.get("origin_name")}
+        if anchor_frames:
+            print(f"      SW2URDF config: {len(anchor_frames)} authored link "
+                  "frame(s) used as anchors")
     joints = build_tree(comps, adjacency, base, directed=directed,
                         root_rpy=root_rpy, root_z_offset=root_z_offset,
-                        root_xyz=root_xyz, closures_out=closures_out)
+                        root_xyz=root_xyz, closures_out=closures_out,
+                        anchor_frames=anchor_frames)
     nrev = sum(1 for j in joints if j.jtype == "revolute")
     npri = sum(1 for j in joints if j.jtype == "prismatic")
     print(f"      joint types: {nrev} revolute, {npri} prismatic, "
@@ -3530,8 +3984,17 @@ def build_model(graph, robot_name=None, base_hint=None, config=None,
     n_ports = ", ".join(p.name for p in ports)
     if ports:
         print(f"      output ports: {n_ports}")
+    lumped = []
+    if sw2cfg is not None:
+        by_comp = {c.name: c.link_name for c in comps}
+        for rec in sw2cfg["links"].values():
+            for member in rec.get("extra_components") or []:
+                ln = by_comp.get(member)
+                if ln:
+                    lumped.append(ln)
     return RobotModel(name=robot_name, components=comps, joints=joints,
                       detected_edges=detected, base_link=base.link_name,
                       ports=ports,
                       root_link_name=root_link_name or base.link_name,
-                      loop_closures=closures_out[0] if closures_out else None)
+                      loop_closures=closures_out[0] if closures_out else None,
+                      lumped_links=lumped)
