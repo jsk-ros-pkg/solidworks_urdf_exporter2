@@ -1142,7 +1142,7 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
     # parent on every export, independent of merge_fixed; build() persisted their
     # (final) names beside the package so this detached step knows them.
     mass_only = _read_mass_only(pkg_dir)
-    from .merge import merge_fixed_links
+    from skrobot.urdf import merge_fixed_links
     if merge_fixed:
         # lump ALL fixed-joint children with geometry into their parents (and the
         # mass-only ones too) BEFORE the mesh conversion / collision loop runs

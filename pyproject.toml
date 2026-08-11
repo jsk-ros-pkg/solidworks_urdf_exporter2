@@ -41,12 +41,11 @@ dependencies = [
     "lxml",
     "pydantic>=2",
     "pyyaml>=6",
-    # rotation/transform math (rpy<->matrix), FK, and the per-mesh primitive
-    # API (skrobot.utils.primitive_fitting) used by the ROS-export --collision
-    # fitting; >=0.3.28 for the rigid-body inertia helpers merge.py builds on
-    # (parallel_axis / combine_inertials) on top of 0.3.27's
-    # orthonormalize_rotation_matrix / matrix_relative / matrix2xyzrpy.
-    "scikit-robot>=0.3.28",
+    # rotation/transform math (rpy<->matrix), FK, inertials, the per-mesh
+    # primitive API behind the ROS-export --collision fitting, and the URDF
+    # surgery the exporter and the editor run on: >=0.3.29 for
+    # skrobot.urdf.merge_fixed_links.
+    "scikit-robot>=0.3.29",
     # only the EXTRACT step (driving SolidWorks COM) needs this, and only on Windows
     "pywin32>=306; sys_platform == 'win32'",
 ]
