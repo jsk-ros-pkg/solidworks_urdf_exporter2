@@ -46,6 +46,7 @@ from .sw2urdf_import import (
     reconstruct_sw2urdf_config_from_payload,
     reconstruct_sw2urdf_config_geometric,
 )
+from .sw2urdf_import._common import _axis_line
 from .swcom import as_iface, safe_call, safe_prop
 
 MATE_TYPES = {0: "COINCIDENT", 1: "CONCENTRIC", 2: "PERPENDICULAR",
@@ -1301,6 +1302,14 @@ def classify_edge_auto(rec):
     lj = rec.get("limit_joint")
     if lj:                                  # SolidWorks LimitDistance/LimitAngle
         return lj["type"], lj["axis"], "limit mate (SolidWorks slider/hinge)"
+    ra = rec.get("reference_axis")
+    if ra:
+        # a reference axis the DESIGNER drew across this pair: the mates are
+        # whatever they are, but the author has said where the joint is.  Wins
+        # over the fastener heuristic -- an axis drawn through a shoulder bolt
+        # means it turns.
+        return "revolute", ra["axis"], \
+            f"reference axis {ra['name']!r} drawn in CAD"
     if rec.get("fastener"):
         return "fixed", None, "fastener welded fixed"
     mates = rec.get("mates")
@@ -1394,8 +1403,10 @@ def _demote_globally_locked(comps, adjacency, edge):
             continue
         # a SolidWorks limit mate IS a slider/hinge -- its DISTANCE/ANGLE mate
         # rows would (over-)constrain the global system and falsely lock the
-        # mechanism, so keep them out (and never demote it, below)
-        if rec.get("limit_joint"):
+        # mechanism, so keep them out (and never demote it, below).  An edge
+        # the designer drew a reference axis across is the same kind of
+        # statement, made by hand: the mates there are known to be incomplete.
+        if rec.get("limit_joint") or rec.get("reference_axis"):
             continue
         # CLOCKING mates encode a display pose, not structure, yet they
         # really do freeze the mechanism in SolidWorks.  Two shapes:
@@ -1444,8 +1455,10 @@ def _demote_globally_locked(comps, adjacency, edge):
     rigid = set()
     for key in list(edge.keys()):
         a, b = tuple(key)
-        if adjacency.get(key, {}).get("limit_joint"):
-            continue                          # authoritative slider/hinge
+        arec = adjacency.get(key, {})
+        if arec.get("limit_joint") or arec.get("reference_axis"):
+            continue                # authoritative: a limit mate or an
+                                    # author-drawn reference axis
         rel = N[6 * idx[b]:6 * idx[b] + 6, :] - N[6 * idx[a]:6 * idx[a] + 6, :]
         if np.linalg.norm(rel) < 1e-6:
             rigid.add(key)
@@ -1630,6 +1643,88 @@ def _mirror_axis_fallback(comps, edge_info, inherit_type=False):
     return edge_info
 
 
+def apply_reference_axis_overrides(comps, adjacency, reference_axes,
+                                   assignments):
+    """Let a CAD reference axis define ONE joint.
+
+    Designers draw a reference axis exactly where the mates say least -- a
+    joint whose constraints were never modelled.  The SW2URDF import routes
+    already read these axes, but only as part of an all-or-nothing
+    reconstruction of the WHOLE tree, which needs the add-in's naming or its
+    payload; when any part of that fails, the axes are extracted and then
+    ignored.  This is the partial form: one axis overrides one pair's verdict
+    and every other edge keeps its inferred one.
+
+    Which pair an axis belongs to has to be SAID, via ``axis_joints`` in the
+    joint config::
+
+        axis_joints:
+          - {axis: knee_axis, parent: thigh-1, child: calf-1}
+
+    The pair may have no mate at all -- the case where the constraint was
+    forgotten outright, which is what a hand-drawn axis is usually for.
+    Deriving the pair from the axis geometry is deliberately not attempted:
+    an axis through a clevis passes through fork, pin and fork alike, so the
+    geometry does not identify the joint.  That is also why the official
+    add-in has the user assign each axis to a joint in a dialog.
+
+    Returns the number of edges overridden.
+    """
+    axes = list(reference_axes or [])
+    if not axes:
+        return 0
+    alias = {}
+    for c in comps:
+        alias[c.name] = c.name
+        alias[c.link_name] = c.name
+
+    applied, notes = 0, []
+    for entry in (assignments or []):
+        entry = entry or {}
+        name = str(entry.get("axis") or "").strip()
+        pa = alias.get(str(entry.get("parent") or "").strip())
+        ch = alias.get(str(entry.get("child") or "").strip())
+        if not name or pa is None or ch is None:
+            notes.append(f"axis_joints entry {entry!r} names an unknown "
+                         "axis/parent/child")
+            continue
+        if pa == ch:
+            # a 1-element frozenset is not an edge key: every consumer does
+            # `a, b = tuple(key)` and would raise
+            notes.append(f"axis_joints entry for {name!r} has the same parent "
+                         "and child")
+            continue
+        line = next((_axis_line(ax) for ax in axes
+                     if str(getattr(ax, "name", "")) == name), None)
+        if line is None:
+            notes.append(f"axis {name!r} is not a reference axis in this "
+                         "extract (or its direction is degenerate)")
+            continue
+        key = frozenset((pa, ch))
+        rec = adjacency.setdefault(key, {"types": [], "axis": None,
+                                         "mates": []})
+        rec["reference_axis"] = {"name": name, "axis": line}
+        applied += 1
+    if applied:
+        print(f"      reference axes: {applied} joint(s) taken from "
+              "author-drawn CAD reference axes")
+    for msg in notes:
+        print(f"      WARN: {msg}")
+    # an axis nobody claimed is a hint the author left in the CAD: say it is
+    # there rather than dropping it silently
+    used = {str((e or {}).get("axis") or "").strip()
+            for e in (assignments or [])}
+    idle = sorted(str(getattr(ax, "name", "?")) for ax in axes
+                  if str(getattr(ax, "name", "")) not in used)
+    if idle:
+        print(f"      note: {len(idle)} CAD reference axis/axes define no "
+              "joint; assign one with axis_joints "
+              "[{axis: <name>, parent: <part>, child: <part>}]: "
+              + ", ".join(repr(x) for x in idle[:6])
+              + (" ..." if len(idle) > 6 else ""))
+    return applied
+
+
 def _auto_parent_map(comps, adjacency, base):
     """Spanning forest rooted at base -> (parent_of, edge_info).
 
@@ -1700,7 +1795,16 @@ def _auto_parent_map(comps, adjacency, base):
     locked = {key for key, rec in adjacency.items()
               if key in edge and "LOCK" in (rec.get("types") or [])}
 
+    # An author-drawn reference axis is an explicit statement that these two
+    # bodies MOVE relative to each other.  Without this the BFS often reaches
+    # both ends first through a chain of rigid edges and the authored joint
+    # degenerates into a loop closure instead of becoming a tree edge.
+    authored = {key for key, rec in adjacency.items()
+                if rec.get("reference_axis") and key in edge}
+
     def tier(key):
+        if key in authored:
+            return 0
         if key in forced or key in locked:
             return 0
         if key in loop_closure:
@@ -2434,9 +2538,24 @@ def _config_parent_map(comps, adjacency, base, directed):
             _, olo, ohi = _oriented_limit(lj, by_name[child], by_name[parent])
             lo = olo if lo is None else lo
             up = ohi if up is None else up
+        # Carry the classifier's reason through even though the CONFIG decided
+        # the type: the editor uses it to flag the joints a human should still
+        # look at, and without it a configured build (which is every build once
+        # a package has a joints.yaml) reports nothing at all.  Say so when the
+        # config disagrees -- that is the user's own decision, not a guess.
+        note = None
+        if rec:
+            try:
+                inferred, _iax, inote = classify_edge_auto(rec)
+            except Exception:
+                inferred, inote = None, None
+            note = inote
+            if inferred and inferred != jtype:
+                note = ((note + "; ") if note else "") + \
+                    f"config sets {jtype} (inference said {inferred})"
         edge_info[(child, parent)] = {
             "name": d.get("name"),
-            "type": jtype, "axis": ax,
+            "type": jtype, "axis": ax, "note": note,
             "lower": -3.141592 if lo is None else lo,
             "upper": 3.141592 if up is None else up,
             "mimic": d.get("mimic"),
@@ -3834,6 +3953,21 @@ def build_model(graph, robot_name=None, base_hint=None, config=None,
                     rec["fastener"] = True
             print(f"      fasteners welded fixed: {len(fastener_names)} "
                   f"parts (screws/nuts/washers/pins)")
+
+    # CAD reference axes as a PER-JOINT override: `axis_joints:` says which
+    # pair each axis belongs to.  Skipped when an SW2URDF route already
+    # supplied the tree (its axes come from the same features, via the
+    # author's own mapping).
+    ra_mode = str((config or {}).get("reference_axes") or "auto").strip().lower()
+    # YAML reads a bare `off:` as the boolean False
+    ra_mode = {"false": "off", "true": "auto"}.get(ra_mode, ra_mode)
+    if ra_mode not in ("auto", "off"):
+        print(f"      WARN: reference_axes={ra_mode!r} is unknown; using 'auto'")
+        ra_mode = "auto"
+    if ra_mode != "off" and sw2cfg is None:
+        apply_reference_axis_overrides(
+            comps, adjacency, graph.reference_axes,
+            (config or {}).get("axis_joints"))
 
     if config and config.get("force_fixed"):
         # weld these edges and REBUILD the auto tree around them (editing a
