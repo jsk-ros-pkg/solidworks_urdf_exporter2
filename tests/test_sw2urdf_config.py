@@ -416,3 +416,27 @@ def test_sw2urdf_payload_limits_mirrored_on_axis_flip():
     np.testing.assert_allclose(by_name["hip_y"].axis, [1.0, 0.0, 0.0])
     assert by_name["hip_y"].lower == pytest.approx(-0.5)
     assert by_name["hip_y"].upper == pytest.approx(1.0)
+
+
+def test_sw2urdf_config_off_accepts_the_yaml_boolean():
+    """`sw2urdf_config: off` is the spelling the generated joints.yaml
+    documents, and YAML turns a bare `off` into the boolean False -- which
+    used to be rejected as an unknown mode, leaving the embedded config
+    APPLIED when the user had asked for the opposite."""
+    import yaml
+
+    graph = _graph_convention_free(marker="URDF Export Configuration (v1.4)")
+    cfg = yaml.safe_load("sw2urdf_config: off\n")
+    assert cfg == {"sw2urdf_config": False}
+
+    applied = build_model(graph, config={"sw2urdf_config": "auto"})
+    assert {j.name for j in applied.joints} == {"hip_y", "knee_p"}
+
+    off = build_model(graph, config=cfg)
+    assert [j.name for j in off.joints] == [
+        "base_link_1__hip_link_1",
+        "hip_link_1__shin_1",
+    ]
+    # and the boolean TRUE keeps the default
+    on = build_model(graph, config=yaml.safe_load("sw2urdf_config: yes\n"))
+    assert {j.name for j in on.joints} == {"hip_y", "knee_p"}
