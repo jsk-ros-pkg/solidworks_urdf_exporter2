@@ -94,6 +94,9 @@ def write_template(model, path):
         "# override with  expand: [name-substr]  /  no_expand: [name-substr]",
         "# Embedded SW2URDF CoordSys/RefAxis config auto-applies when present;",
         "# set sw2urdf_config: off | require  to disable or enforce it",
+        "# A CAD reference axis can define ONE joint the mates do not show:",
+        "#   axis_joints: [{axis: <RefAxis name>, parent: <part>, child: <part>}]",
+        "#   (the pair may have no mate at all -- a forgotten constraint)",
         "# Optional per-joint actuator/physics (movable joints only):",
         "#   effort: 5   velocity: 2   dynamics: {damping: 0.1, friction: 0.0}",
         "#   safety_controller: {soft_lower_limit: -1, soft_upper_limit: 1,"

@@ -254,6 +254,15 @@ def _joint_xml(joint, rn=lambda n: n, jn=lambda n: n):
                      f'offset="{off:g}"/>')
     if joint.mate_types:
         lines.append(f'    <!-- mates: {", ".join(joint.mate_types)} -->')
+    # WHY this joint came out as it did.  It also goes into the joints.yaml
+    # template, but that file is only written when the build has no --config,
+    # so once the user configures anything its notes freeze at the first build.
+    # The URDF is rewritten every time, so this copy is the one the editor
+    # reads to decide which joints still need a human look.
+    if getattr(joint, "geo_note", None):
+        # `--` cannot appear inside an XML comment
+        note = str(joint.geo_note).replace("--", "- -")
+        lines.append(f'    <!-- sw2robot-note: {note} -->')
     lines.append("  </joint>")
     return "\n".join(lines)
 

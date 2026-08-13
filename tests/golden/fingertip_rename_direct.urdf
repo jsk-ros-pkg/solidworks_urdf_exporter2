@@ -54,6 +54,7 @@
     <child link="screwlock_male_hard_jointbase_v4_1"/>
     <axis xyz="0 0 1"/>
     <!-- mates: CONCENTRIC, COINCIDENT, PARALLEL, CONCENTRIC, COINCIDENT, PARALLEL -->
+    <!-- sw2robot-note: geo: fully constrained -->
   </joint>
   <joint name="bend" type="revolute">
     <origin xyz="0.02103948669 -0.0155 0.031" rpy="3.141592654 0 0"/>
@@ -62,5 +63,6 @@
     <axis xyz="0 1 0"/>
     <limit lower="-3.14159" upper="3.14159" effort="10" velocity="3.14"/>
     <!-- mates: COINCIDENT, COINCIDENT, COINCIDENT, COINCIDENT -->
+    <!-- sw2robot-note: geo: 1 DOF rotation (derived axis) -->
   </joint>
 </robot>

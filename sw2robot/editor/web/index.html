@@ -251,6 +251,14 @@
                      background: #3d3556; color: #c5b3ff; }
   .joint .motag { font-size: 10px; padding: 0 4px; border-radius: 3px;
                   background: #4a3d22; color: #d6b36b; }
+  /* a joint the classifier GUESSED at: the note says why, and clicking it
+     marks the joint reviewed (persisted as joints.yaml `joint_reviewed:`) */
+  .joint .chktag { font-size: 10px; padding: 0 4px; border-radius: 3px;
+                   background: #5a2f2f; color: #ffb3b3; cursor: help;
+                   border: 1px solid #7a4141; }
+  .joint .chktag:hover { background: #6d3838; }
+  .joint .chktag.done { background: #2f4a35; color: #9fe0ad;
+                        border-color: #3f6046; }
   button { background: #3a3f48; color: #ddd; border: 1px solid #555;
            border-radius: 4px; padding: 4px 10px; cursor: pointer; }
   button:hover { background: #474d58; }
@@ -745,6 +753,12 @@
                style="flex:1;min-width:0;background:#15171a;color:#cfe3ff;
                       border:1px solid #444;border-radius:3px;padding:2px 6px;
                       font-size:11px">
+        <button id="jcheckonly"
+                title="Show only the joints the classifier guessed at"
+                style="display:none;background:#5a2f2f;color:#ffb3b3;
+                       border:1px solid #7a4141;border-radius:3px;
+                       padding:1px 6px;font-size:10px;white-space:nowrap;
+                       cursor:pointer">?</button>
         <span id="jfiltercount" style="color:#8a93a3;font-size:10px;
               white-space:nowrap"></span>
         <select id="treemode" data-i18n-title="t.treeMode"
@@ -1250,6 +1264,12 @@ the config and does NOT re-detect). Needs graph.json (CAD mode).">🔗 re-detect
     'row.jnameTitle': { en: a => `joint: ${a.name}\n${a.parent} → ${a.child}`,
                         ja: a => `関節: ${a.name}\n${a.parent} → ${a.child}` },
     'row.eyeTitle': { en: 'show/hide this link', ja: 'このリンクを表示/非表示' },
+    'row.chkHint': { en: 'Click to mark this joint reviewed.',
+                     ja: 'クリックで確認済みにします。' },
+    'row.chkDone': { en: 'reviewed - click to flag it again',
+                     ja: '確認済み — クリックで戻します' },
+    'jfilter.checkCount': { en: a => `${a.n} to check`,
+                            ja: a => `要確認 ${a.n} 件` },
     'row.eyeMassOnly': { en: 'mass-only link: no geometry to show/hide',
                          ja: '質量のみリンク: 表示/非表示できる形状がありません' },
     'row.mkrootTitle': { en: 'make this link the root (re-roots the tree + rebuilds)',
@@ -2170,6 +2190,10 @@ let dropMode = false;          // meshes come from dropped blobs, not /pkg/
 let currentInfo = null;        // {name, urdf} of the open server package
 let mergedView = false;        // viewer shows the fixed-joint-lumped URDF
 let compMeta = {};             // link -> {material, density, name, override}
+// HTML-attribute escape for text that goes into a title="" (classifier notes
+// carry quotes and angle brackets)
+const escAttr = v => String(v ?? '').replace(/[&<>"]/g,
+  c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 let linkColors = {};           // URDF/viewer link name -> '#rrggbb' override
 let excludedList = [];         // component names excluded from the URDF
 let massOnlyLinks = new Set(); // links flagged mass-only (weight kept, no mesh)
@@ -2748,6 +2772,9 @@ viewer.loadMeshFunc = (path, manager, done) => {
 // ---- joint rows: slider (movable) + type select + bulk checkbox ---------
 const fmt = v => (Math.abs(v) < 1e-10 ? 0 : v).toFixed(2);
 const rows = new Map();        // joint name -> row record
+// when on, the joint list shows ONLY the joints the classifier flagged as
+// guesses (compMeta[...].joint_attention) -- the review worklist
+let jointCheckOnly = false;
 let jointFilter = '';          // substring filter: when set, the tree collapses
                                // to a FLAT list of joints whose link/joint name
                                // matches -- so select-all / Set / Delete scope
@@ -4496,6 +4523,16 @@ function buildJointRows(robot) {
       `${child}</span>` +
       (isMimic ? `<span class="mimictag">mimic</span>` : '') +
       (massOnlyLinks.has(child) ? `<span class="motag">mass</span>` : '') +
+      // the classifier's own reason, and a badge when it is one of the
+      // guesses worth checking (the server decides -- _JOINT_ATTENTION)
+      (compMeta[child]?.joint_attention
+        ? `<span class="chktag" title="${escAttr(compMeta[child].joint_attention)}` +
+          `&#10;&#10;${escAttr(compMeta[child].joint_note)}` +
+          `&#10;&#10;${escAttr(t('row.chkHint'))}">?</span>`
+        : (compMeta[child]?.joint_reviewed
+            ? `<span class="chktag done" title="${escAttr(t('row.chkDone'))}` +
+              `&#10;&#10;${escAttr(compMeta[child].joint_note)}">✓</span>`
+            : '')) +
       // a mass-only link reads as 'mass_only' (its joint is fixed underneath);
       // picking any real type clears the flag, picking mass_only sets it
       `<select class="jtypesel t-${massOnlyLinks.has(child)
@@ -4547,6 +4584,20 @@ function buildJointRows(robot) {
                             child: rec.child, type: t }]);
       }
     });
+    const chk = row.querySelector('.chktag');
+    if (chk) {
+      chk.addEventListener('click', async ev => {
+        ev.stopPropagation();
+        const on = !compMeta[child]?.joint_reviewed;
+        // acknowledgement only -- it changes nothing about the model, so
+        // there is no rebuild (same contract as /api/set_mass_reviewed)
+        await fetch('/api/set_joint_reviewed', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ link: child, reviewed: on }) });
+        await refreshCompMeta();
+        if (viewer.robot) { buildJointRows(viewer.robot); }
+      });
+    }
     row.querySelector('.mkroot').addEventListener('click',
       () => reRoot(child));
     row.classList.toggle('hiddenlink', hiddenLinks.has(child));
@@ -4589,6 +4640,23 @@ function buildJointRows(robot) {
   // holds exactly the matches, so select-all / Set / Delete scope to them.
   const q = jointFilter.trim().toLowerCase();
   const countEl = document.getElementById('jfiltercount');
+  // "needs check": the joints the server flagged as guesses
+  const flagged = Object.values(robot?.joints ?? {}).filter(
+    j => compMeta[linkOf(j, 'child')]?.joint_attention);
+  const chkBtn = document.getElementById('jcheckonly');
+  if (chkBtn) {
+    chkBtn.style.display = flagged.length ? '' : 'none';
+    chkBtn.textContent = t('jfilter.checkCount', { n: flagged.length });
+    chkBtn.style.opacity = jointCheckOnly ? '1' : '.55';
+  }
+  if (jointCheckOnly && flagged.length) {
+    for (const j of flagged.sort(
+        (a, b) => linkOf(a, 'child').localeCompare(linkOf(b, 'child')))) {
+      jointRow(j, 0, true);
+    }
+    if (countEl) { countEl.textContent = ''; }
+    return movable;
+  }
   if (q) {
     const matches = Object.values(robot.joints)
       .filter(j => linkOf(j, 'child').toLowerCase().includes(q)
@@ -6492,7 +6560,13 @@ viewer.addEventListener('joint-mouseout',
 const _jfilterEl = document.getElementById('jfilter');
 _jfilterEl.addEventListener('input', () => {
   jointFilter = _jfilterEl.value;
+  jointCheckOnly = false;         // typing a name means "search", not "review"
   document.getElementById('selall').checked = false;
+  if (viewer.robot) { buildJointRows(viewer.robot); }
+});
+document.getElementById('jcheckonly').addEventListener('click', () => {
+  jointCheckOnly = !jointCheckOnly;
+  if (jointCheckOnly) { jointFilter = ''; _jfilterEl.value = ''; }
   if (viewer.robot) { buildJointRows(viewer.robot); }
 });
 // Esc clears the filter (without bubbling to the global Escape handler)

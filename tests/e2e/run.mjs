@@ -319,6 +319,46 @@ check('jfilter: matches at least one joint', filterRows.n >= 1,
 check('jfilter: clearing restores the tree', filterRows.restored >= filterRows.n);
 check('jfilter: no page errors', pageErrors.length === beforeFilter,
       pageErrors.slice(beforeFilter).join(' | '));
+// ---- 8c. the joint-review worklist ----------------------------------------
+// Every joint carries the classifier's reason; the ones it GUESSED at also get
+// a `?` badge, a "needs check" chip that filters the list down to them, and a
+// click that marks the joint reviewed.  The bundled fixture has no guessed
+// joint, so this checks the parts that must hold either way: the reason
+// reaches the browser, and the chip is hidden exactly when nothing is flagged.
+const reviewState = await page.evaluate(async () => {
+  const r = await (await fetch('/api/components')).json();
+  const links = Object.values(r.links ?? {});
+  const chip = document.getElementById('jcheckonly');
+  const flagged = links.filter(l => l.joint_attention).length;
+  return {
+    withNote: links.filter(l => l.joint_note).length,
+    flagged,
+    badges: document.querySelectorAll('.chktag').length,
+    chipHidden: !chip || chip.style.display === 'none',
+  };
+});
+check('review: joints carry the classifier reason',
+      reviewState.withNote >= 1, `${reviewState.withNote} with a note`);
+check('review: a badge per flagged joint',
+      reviewState.badges === reviewState.flagged,
+      `${reviewState.badges} badges vs ${reviewState.flagged} flagged`);
+check('review: the chip appears only when something is flagged',
+      reviewState.chipHidden === (reviewState.flagged === 0));
+
+// acknowledging is a pure round-trip through joints.yaml -- no rebuild
+const ack = await page.evaluate(async () => {
+  const r = await (await fetch('/api/components')).json();
+  const link = Object.keys(r.links ?? {}).find(k => r.links[k].joint_note);
+  if (!link) { return { skipped: true }; }
+  const post = reviewed => fetch('/api/set_joint_reviewed', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ link, reviewed }) }).then(x => x.json());
+  const on = await post(true);
+  const after = await (await fetch('/api/components')).json();
+  await post(false);
+  return { ok: on.reviewed === true && after.links[link].joint_reviewed === true };
+});
+check('review: acknowledging a joint round-trips', ack.skipped || ack.ok);
 
 // ---- 9. auto joint limits (self-collision sweep) ---------------------------
 // reuses the collision model from section 8 (already reloaded, non-drop).
