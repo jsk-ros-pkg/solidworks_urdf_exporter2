@@ -1004,6 +1004,82 @@ def _urdf_link_masses(pkg_dir, urdf_rel):
     return out
 
 
+# Why a joint came out the way it did, and whether the user should check it.
+# The classifier's reason is emitted as a `<!-- sw2robot-note: ... -->` comment
+# inside each <joint> (exporter/urdf_writer) and as a trailing comment on the
+# `type:` line of joints.yaml (exporter/jointcfg.write_template).  The URDF is
+# the live copy -- every build rewrites it -- while the yaml template is only
+# written when the build has no --config, so its notes freeze once a package is
+# configured.  Changing either format silently empties the parser below, so the
+# two must move together.  A YAML round-trip is not an option: every reader
+# here is yaml.safe_load, which drops comments, and ruamel is not a dependency.
+_JOINT_NOTE_RE = re.compile(
+    r"(?m)^\s*child:\s*(\S+)\s*$\n"
+    r"\s*type:\s*(\S+)[^\n#]*#\s*(.*)$")
+
+# Reasons worth a second pair of eyes, worst first: (substring, why).
+# Everything else the classifier can say -- a clean 1-DOF rotation, an
+# author-drawn reference axis, a type the config set deliberately -- is a
+# statement, not a guess, and is deliberately NOT flagged.
+_JOINT_ATTENTION = (
+    ("under-constrained",
+     "the mates leave motion the classifier could not name; welded shut"),
+    ("fastener welded fixed",
+     "welded because the part NAME looks like hardware"),
+    ("some mates unmodelled",
+     "a mate type the classifier cannot model was ignored"),
+    ("mirror", "copied from a mirrored twin"),
+)
+
+
+def _classify_note(note):
+    note = (note or "").strip()
+    if not note:
+        return None
+    why = next((msg for key, msg in _JOINT_ATTENTION if key in note), None)
+    return {"note": note, "attention": why}
+
+
+def _joint_notes_from_urdf(pkg_dir, urdf_rel):
+    """``{child link -> {"note", "attention"}}`` from the built URDF."""
+    if not pkg_dir or not urdf_rel:
+        return {}
+    path = os.path.join(pkg_dir, urdf_rel)
+    if not os.path.exists(path):
+        return {}
+    import xml.etree.ElementTree as ET
+    out = {}
+    try:
+        parser = ET.XMLParser(target=ET.TreeBuilder(insert_comments=True))
+        root = ET.parse(path, parser=parser).getroot()
+    except Exception:
+        return {}
+    for j in root.findall("joint"):
+        child = j.find("child")
+        if child is None or not child.get("link"):
+            continue
+        for node in j:
+            if not callable(node.tag):          # comments have a callable tag
+                continue
+            text = (node.text or "").strip()
+            if text.startswith("sw2robot-note:"):
+                rec = _classify_note(text.split(":", 1)[1])
+                if rec:
+                    out[child.get("link")] = rec
+    return out
+
+
+def _joint_notes(yml_txt):
+    """The joints.yaml copy -- the fallback for packages built before the
+    note was written into the URDF."""
+    out = {}
+    for child, _jtype, note in _JOINT_NOTE_RE.findall(yml_txt or ""):
+        rec = _classify_note(note)
+        if rec:
+            out[child] = rec
+    return out
+
+
 def _urdf_child_joint_types(pkg_dir, urdf_rel):
     """``{child link name -> parent joint type}`` from the built URDF, so the
     mass editor can offer mass-only only on a fixed child without needing the
@@ -4763,10 +4839,19 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                             except ValueError:
                                 pass
                 reviewed = set()
+                jreviewed = set()
                 if yml_txt:
                     _, reviewed_list = _set_yaml_list_block(
                         yml_txt, "mass_reviewed")
                     reviewed = set(reviewed_list)
+                    _, jr = _set_yaml_list_block(yml_txt, "joint_reviewed")
+                    jreviewed = set(jr)
+                # why each joint came out as it did + whether it is one of the
+                # guesses the user should check (see _JOINT_ATTENTION).  Prefer
+                # the URDF copy: the yaml one freezes once a package has a
+                # config, and the editor always rebuilds with one.
+                jnotes = dict(_joint_notes(yml_txt))
+                jnotes.update(_joint_notes_from_urdf(cls.pkg_dir, cls.urdf_rel))
                 colors = _read_colors(cls.pkg_dir, cls.urdf_rel)
                 # the actual per-link mass in the built URDF (after density /
                 # target-mass resolution) + which links still need review
@@ -4803,7 +4888,14 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                         "default_mass": (c.link_name in default_links) if c else False,
                         "reviewed": bool(c and (c.link_name in reviewed
                                                 or c.name in reviewed)),
-                        "parent_joint": joint_types.get(dl)}
+                        "parent_joint": joint_types.get(dl),
+                        # keyed by the COMPONENT name joints.yaml uses, so a
+                        # renamed link keeps its note and its acknowledgement
+                        "joint_note": (jnotes.get(key) or {}).get("note"),
+                        "joint_attention": (
+                            None if key in jreviewed
+                            else (jnotes.get(key) or {}).get("attention")),
+                        "joint_reviewed": key in jreviewed}
                 excluded = []
                 if yml_txt:
                     m = re.search(r"(?m)^exclude:\n((?:- .*\n)*)", yml_txt)
@@ -6513,6 +6605,40 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 print(f"[sw2robot.web] set_mass_reviewed: {link} on={on}")
                 return self._send_json({"link": link, "reviewed": on,
                                         "mass_reviewed": reviewed})
+            if parsed.path == "/api/set_joint_reviewed":
+                # acknowledge that one of the classifier's guesses has been
+                # looked at: clears its attention badge without changing the
+                # model, so no rebuild is needed.  Mirrors
+                # /api/set_mass_reviewed; stored as `joint_reviewed:`.
+                cls = type(self)
+                n = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(n) or b"{}")
+                link = body.get("link")
+                on = bool(body.get("reviewed", True))
+                if not cls.pkg_dir or not link:
+                    return self._send_json({"error": "no package/link"}, 400)
+                if not _cad_mode(cls.pkg_dir):
+                    return self._send_json(
+                        {"error": "joint review is a CAD-mode concept"}, 400)
+                name = os.path.splitext(os.path.basename(cls.urdf_rel))[0]
+                yml = os.path.join(cls.pkg_dir, name + ".joints.yaml")
+                if not os.path.exists(yml):
+                    return self._send_json(
+                        {"error": "joints.yaml not found"}, 400)
+                with open(yml, encoding="utf-8") as f:
+                    txt = f.read()
+                # joints.yaml keys off the COMPONENT name; the browser sends
+                # the display name, which differs after a rename
+                link = _link_names_inverse(txt).get(link, link)
+                _snapshot(cls.pkg_dir, yml, f"review joint of {link[:30]}")
+                txt, jrev = _set_yaml_list_block(
+                    txt, "joint_reviewed",
+                    add=[link] if on else (), remove=[link])
+                with open(yml, "w", encoding="utf-8") as f:
+                    f.write(txt)
+                print(f"[sw2robot.web] set_joint_reviewed: {link} on={on}")
+                return self._send_json({"link": link, "reviewed": on,
+                                        "joint_reviewed": jrev})
             if parsed.path == "/api/set_mass_only":
                 # toggle a link's mass-only flag (keep the weight, drop the
                 # geometry).  Stored in the `mass_only:` list; the build enforces
