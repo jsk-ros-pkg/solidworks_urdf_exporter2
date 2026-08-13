@@ -3660,6 +3660,11 @@ def build_model(graph, robot_name=None, base_hint=None, config=None,
     sw2_mode = "auto"
     if config and config.get("sw2urdf_config") is not None:
         sw2_mode = str(config.get("sw2urdf_config")).strip().lower() or "auto"
+    # YAML reads a bare `off:` as the boolean False (and `on:`/`yes:` as True),
+    # so `sw2urdf_config: off` -- the spelling the generated joints.yaml
+    # documents -- arrived here as 'false', was rejected as unknown, and the
+    # embedded config stayed applied.
+    sw2_mode = {"false": "off", "true": "auto"}.get(sw2_mode, sw2_mode)
     if sw2_mode not in ("auto", "off", "require"):
         print(f"      WARN: sw2urdf_config={sw2_mode!r} is unknown; using 'auto'")
         sw2_mode = "auto"
