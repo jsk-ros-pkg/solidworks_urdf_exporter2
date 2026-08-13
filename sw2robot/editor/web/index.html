@@ -4414,6 +4414,12 @@ function buildJointRows(robot) {
   jointsEl.innerHTML = '';
   rows.clear();
   syncTreeModeControls();
+  // the child/parent link of a joint, read off its URDF node.  buildPlayRows
+  // and the rename list each declare their own copy; this one was MISSING, so
+  // the name filter below threw ReferenceError -- silently, because that path
+  // only runs once the user types something into #jfilter.
+  const linkOf = (j, tag) => [...(j.urdfNode?.children ?? [])]
+    .find(el => el.tagName === tag)?.getAttribute('link') ?? '';
   const movable = Object.values(robot?.joints ?? {})
     .filter(j => j.jointType !== 'fixed').length;
   if (effectiveTreeViewMode() === 'subassembly') {

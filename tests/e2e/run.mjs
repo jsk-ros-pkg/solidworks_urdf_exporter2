@@ -294,6 +294,32 @@ if (colReady) {
   }
 }
 
+// ---- 8b. the joint-name filter --------------------------------------------
+// Typing in #jfilter takes a DIFFERENT branch of buildJointRows, and nothing
+// else in this suite ever enters it -- which is how it stayed broken (an
+// undefined `linkOf`) without the load-time "no page errors" check noticing.
+const beforeFilter = pageErrors.length;
+const filterRows = await page.evaluate(async () => {
+  const el = document.getElementById('jfilter');
+  const anyChild = Object.values(document.getElementById('viewer').robot?.joints ?? {})
+    .map(j => [...(j.urdfNode?.children ?? [])]
+      .find(c => c.tagName === 'child')?.getAttribute('link') ?? '')
+    .find(Boolean) ?? '';
+  el.value = anyChild.slice(0, 6);
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+  await new Promise(r => setTimeout(r, 300));
+  const n = document.querySelectorAll('.joint:not(.root)').length;
+  el.value = '';
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+  await new Promise(r => setTimeout(r, 300));
+  return { n, restored: document.querySelectorAll('.joint:not(.root)').length };
+});
+check('jfilter: matches at least one joint', filterRows.n >= 1,
+      `matched ${filterRows.n}`);
+check('jfilter: clearing restores the tree', filterRows.restored >= filterRows.n);
+check('jfilter: no page errors', pageErrors.length === beforeFilter,
+      pageErrors.slice(beforeFilter).join(' | '));
+
 // ---- 9. auto joint limits (self-collision sweep) ---------------------------
 // reuses the collision model from section 8 (already reloaded, non-drop).
 // The flow does an async rebuild+reload (~20s for 126 meshes), so POLL for
