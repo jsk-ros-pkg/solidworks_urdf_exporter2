@@ -114,6 +114,12 @@ class CoordinateSystemState(BaseModel):
     """
     name: str
     document_from_frame: list[float]
+    # For a frame authored in an ASSEMBLY document: the Name2 of the component
+    # whose geometry its origin selection belongs to (IEntity.GetComponent), so
+    # a frame drawn on a part's vertex hangs off THAT part's link instead of the
+    # root.  None when the frame references the assembly's own origin/planes,
+    # when the document is a part (the part IS the owner), or on older extracts.
+    owner_component: str | None = None
 
     def document_from_frame_matrix(self):
         return np.array(self.document_from_frame, float).reshape(4, 4)
@@ -156,6 +162,11 @@ class GraphState(BaseModel):
     # Named coordinate systems authored directly in the top-level assembly.
     # Their transforms are expressed in that assembly document's frame.
     coordinate_systems: list[CoordinateSystemState] = []
+    # Named coordinate systems authored inside PART documents, keyed by part
+    # path.  A frame drawn in a .SLDPRT belongs to that part unambiguously, so
+    # every instance of the part carries it (transform composed with the
+    # instance world).  Empty on graphs from older extracts.
+    part_coordinate_systems: dict[str, list[CoordinateSystemState]] = {}
     # Named reference axes authored directly in the top-level assembly.  These
     # correspond to the official SolidWorks URDF Exporter's Reference Joint
     # choices and are intentionally separate from mate-derived joint axes.
