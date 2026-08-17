@@ -185,6 +185,11 @@ def _report_inertia_problems(bad):
 
 def _link_xml(comp, ros_pkg=None, rn=lambda n: n, mesh_dir=None, density=None):
     lines = [f'  <link name="{rn(comp.link_name)}">']
+    # a frame-only link is a bare coordinate frame: a CAD-only part (dummy axis)
+    # has no real shape AND no real weight, so emit neither
+    if getattr(comp, "frame_only", False):
+        lines.append("  </link>")
+        return "\n".join(lines), None, []
     # a mass-only link keeps its <inertial> but drops all geometry (its weight is
     # lumped into the fixed parent on export); skip the visual/collision block
     if comp.mesh_file and not getattr(comp, "mass_only", False):
@@ -376,7 +381,8 @@ def write_urdf(model, urdf_path, ros_pkg=None, density=None,
         xml, method, problems = _link_xml(comp, ros_pkg, rn, mesh_dir=mesh_dir,
                                           density=density)
         parts.append(xml)
-        methods[method] = methods.get(method, 0) + 1
+        if method is not None:      # a frame-only link has no <inertial> to report
+            methods[method] = methods.get(method, 0) + 1
         if problems:
             bad_inertia[rn(comp.link_name)] = problems
         if getattr(comp, "mass_only", False):

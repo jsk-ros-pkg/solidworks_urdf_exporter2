@@ -469,7 +469,11 @@ def build(pkg_dir, config_path=None, base_hint=None, exclude=None,
         from .validate import warn_dropped_geometry
         with open(os.path.join(pkg_dir, GRAPH_FILE), encoding="utf-8") as _f:
             _graph = _json.load(_f)
-        _dropped = warn_dropped_geometry(pkg_dir, urdf_path, _graph)
+        _no_geo = {c.name for c in model.components
+                   if getattr(c, "frame_only", False)
+                   or getattr(c, "mass_only", False)}
+        _dropped = warn_dropped_geometry(pkg_dir, urdf_path, _graph,
+                                         skip_components=_no_geo)
         if _dropped:
             print("      -> add the parent sub-assembly to the joint config's "
                   "`expand:` list to bring these parts into the URDF.")
