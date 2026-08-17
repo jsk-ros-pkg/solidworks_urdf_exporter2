@@ -310,6 +310,13 @@ class Component:
     # mass-only: emit <inertial> but no <visual>/<collision>, and lump the
     # inertial into the fixed parent on export (config `mass_only:` / the editor)
     mass_only: bool = False
+    # frame-only: emit the link as a bare coordinate frame -- no <visual>, no
+    # <collision>, no <inertial>.  For a part that exists in CAD only to carry a
+    # frame or an axis (a 'dummy_axis'), whose shape AND weight are fictional.
+    # Unlike mass_only this is allowed on a movable link: the point is that the
+    # part is not real, so there is no honest mass to keep.
+    # (config `frame_only:` / the editor's per-link checkbox)
+    frame_only: bool = False
 
 
 @dataclass
@@ -4126,6 +4133,24 @@ def build_model(graph, robot_name=None, base_hint=None, config=None,
                 c.mass_only = True
             else:
                 print(f"      WARN: mass_only: '{k}' matched no link")
+
+    if config and config.get("frame_only"):
+        # frame-only links: a CAD-only part (dummy axis / locator) whose shape
+        # and weight are both fictional -- keep the frame, drop everything else.
+        # Same name matching as mass_only; no only-fixed check, a dummy part is
+        # just as fictional when it sits on a revolute joint.
+        by_ln = {c.link_name: c for c in comps}
+        by_nm = {c.name: c for c in comps}
+        for k in config["frame_only"]:
+            c = by_ln.get(str(k)) or by_nm.get(str(k))
+            if c is not None:
+                c.frame_only = True
+                # a frame carries no weight: drop any mass/density override that
+                # would otherwise fight the empty <inertial>
+                c.mass_target = None
+                c.mass_only = False
+            else:
+                print(f"      WARN: frame_only: '{k}' matched no link")
 
     directed = None
     root_rpy = None

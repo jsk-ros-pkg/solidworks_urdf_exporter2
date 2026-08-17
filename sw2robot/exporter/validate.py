@@ -38,10 +38,17 @@ def _origin_mat(el):
     return urdf_origin_matrix(el)
 
 
-def warn_dropped_geometry(pkg_dir, urdf_path, graph, tol_mm=3.0, min_frac=0.15):
+def warn_dropped_geometry(pkg_dir, urdf_path, graph, tol_mm=3.0, min_frac=0.15,
+                          skip_components=None):
     """Print a WARNING per component whose geometry is absent from the URDF.
 
+    ``skip_components`` -- component names whose geometry was left out ON
+    PURPOSE (the ``frame_only:`` / ``mass_only:`` links).  Without it they read
+    as accidentally dropped parts and the warning tells the user to expand a
+    sub-assembly that has nothing to do with it.
+
     Returns the list of dropped component names (empty if all present)."""
+    skip_components = {str(s) for s in (skip_components or ())}
     try:
         from scipy.spatial import cKDTree
     except Exception:
@@ -135,6 +142,8 @@ def warn_dropped_geometry(pkg_dir, urdf_path, graph, tol_mm=3.0, min_frac=0.15):
         mf = mesh_of.get(nm2)
         if not mf:
             continue
+        if nm2 in skip_components or key in skip_components:
+            continue        # geometry-free on purpose (frame-only / mass-only)
         verts = _load_glb_verts(os.path.join(pkg_dir, mf.replace("\\", "/")))
         if verts is None:
             continue

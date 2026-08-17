@@ -135,6 +135,39 @@ def test_set_mass_only_drops_geometry_in_working_urdf(server):
     assert _link(_served_urdf(base), SCREW_LINK).find("visual") is not None
 
 
+# -------------------------------------------------------------- set_frame_only
+def test_set_frame_only_exports_a_bare_frame_and_toggles_back(server):
+    """The per-link geometry checkbox: OFF exports the link as a bare frame --
+    no visual, no collision, no inertial -- while keeping it (and its joint) in
+    the tree.  ON restores all three."""
+    base, pkg = server
+    before = _link(_served_urdf(base), TIP_LINK)
+    assert before.find("visual") is not None
+    assert before.find("inertial") is not None
+
+    code, r = _post(base, "/api/set_frame_only", {"link": TIP_LINK, "on": True})
+    assert code == 200 and r["on"] is True
+    root = _served_urdf(base)
+    tip = _link(root, TIP_LINK)
+    assert tip.find("visual") is None and tip.find("collision") is None
+    assert tip.find("inertial") is None          # unlike mass-only
+    # the link and its joint stay in the tree (it still carries the axis)
+    assert _joint(root, REV_JOINT).find("child").get("link") == TIP_LINK
+    # parse, don't grep: the generated joints.yaml DOCUMENTS `frame_only:` in a
+    # comment, so a substring check would pass without any list being written
+    import yaml as _yaml
+    assert _yaml.safe_load(_joints_yaml(pkg))["frame_only"] == [TIP_LINK]
+    # /api/components reports it, which is what re-checks the box in the UI
+    assert _get_json(base, "/api/components")["links"][TIP_LINK]["frame_only"]
+
+    code, r = _post(base, "/api/set_frame_only", {"link": TIP_LINK, "on": False})
+    assert code == 200 and r["on"] is False
+    after = _link(_served_urdf(base), TIP_LINK)
+    assert after.find("visual") is not None and after.find("inertial") is not None
+    assert not (_yaml.safe_load(_joints_yaml(pkg)).get("frame_only") or [])
+    assert not _get_json(base, "/api/components")["links"][TIP_LINK]["frame_only"]
+
+
 # --------------------------------------------------------------- set_limits
 def test_set_limits_reflected_without_rebuild(server):
     base, pkg = server

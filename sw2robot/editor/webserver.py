@@ -952,6 +952,33 @@ def _set_mass_only_members(txt, add, remove):
     return _set_yaml_list_block(txt, "mass_only", add=add, remove=remove)[0]
 
 
+def _set_frame_only_members(txt, add, remove):
+    """Add/remove component names in the joints.yaml ``frame_only:`` list block
+    (the per-link "don't export this part's shape or weight" checkbox).
+    Returns the updated text (block dropped entirely when it ends up empty)."""
+    if not add and not remove:
+        return txt
+    return _set_yaml_list_block(txt, "frame_only", add=add, remove=remove)[0]
+
+
+def _read_frame_only(pkg_dir, urdf_rel):
+    """The component names listed under ``frame_only:`` in the package's
+    joints.yaml; empty set when there is no package/config/block."""
+    if not pkg_dir or not urdf_rel:
+        return set()
+    name = os.path.splitext(os.path.basename(urdf_rel))[0]
+    yml = os.path.join(pkg_dir, name + ".joints.yaml")
+    if not os.path.exists(yml):
+        return set()
+    try:
+        import yaml as _yaml
+        with open(yml, encoding="utf-8") as f:
+            cfg = _yaml.safe_load(f) or {}
+    except Exception:
+        return set()
+    return {str(x) for x in (cfg.get("frame_only") or [])}
+
+
 def _read_colors(pkg_dir, urdf_rel):
     """``{component link name -> '#RRGGBB'}`` from the package's joints.yaml
     ``colors:`` block; empty when there is no package/config/block."""
@@ -1025,6 +1052,25 @@ def _default_mass_links(pkg_dir, urdf_rel):
         if material_unset or density_default:
             flagged.add(c.link_name)
     return flagged
+
+
+def _urdf_link_names(pkg_dir, urdf_rel):
+    """Every ``<link name=...>`` in the built URDF, in document order.
+
+    ``_urdf_link_masses`` only reports links that HAVE an ``<inertial>``, so a
+    frame-only link would vanish from the editor's per-link metadata (and with
+    it the checkbox that turns it back on).  Empty on any parse failure."""
+    if not pkg_dir or not urdf_rel:
+        return []
+    path = os.path.join(pkg_dir, urdf_rel)
+    if not os.path.exists(path):
+        return []
+    import xml.etree.ElementTree as ET
+    try:
+        root = ET.parse(path).getroot()
+    except Exception:
+        return []
+    return [ln.get("name") for ln in root.findall("link") if ln.get("name")]
 
 
 def _urdf_link_masses(pkg_dir, urdf_rel):
@@ -4916,9 +4962,15 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 # just top-level graph components.  Resolve each display name back
                 # through the rename map to its graph component for material etc.
                 inv = _link_names_inverse(yml_txt)     # display name -> component key
+                # links exported as a bare frame (no shape, no weight)
+                frame_only = _read_frame_only(cls.pkg_dir, cls.urdf_rel)
                 by_ln = {c.link_name: c for c in gs.components}
                 by_nm = {c.name: c for c in gs.components}
-                names = list(urdf_masses) or [c.link_name for c in gs.components]
+                # every built link, not just the ones carrying an <inertial>:
+                # a frame-only link has none and would otherwise drop out of the
+                # metadata that drives its own checkbox
+                names = _urdf_link_names(cls.pkg_dir, cls.urdf_rel) \
+                    or list(urdf_masses) or [c.link_name for c in gs.components]
                 links = {}
                 for dl in names:
                     key = inv.get(dl, dl)
@@ -4941,6 +4993,12 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                         "reviewed": bool(c and (c.link_name in reviewed
                                                 or c.name in reviewed)),
                         "parent_joint": joint_types.get(dl),
+                        # the per-link "export this part's shape/weight" switch
+                        # (off = a bare coordinate frame in the URDF)
+                        "frame_only": bool(
+                            key in frame_only
+                            or (c and (c.link_name in frame_only
+                                       or c.name in frame_only))),
                         # keyed by the COMPONENT name joints.yaml uses, so a
                         # renamed link keeps its note and its acknowledgement
                         "joint_note": (jnotes.get(key) or {}).get("note"),
@@ -6782,6 +6840,44 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                       f"applied={applied}")
                 return self._send_json({"link": link, "on": on,
                                         "applied": applied})
+            if parsed.path == "/api/set_frame_only":
+                # toggle a link's frame-only flag: the link stays in the tree
+                # (it may carry a joint axis) but exports as a BARE FRAME -- no
+                # visual, no collision, no inertial.  For CAD-only parts whose
+                # shape and weight are both fictional, e.g. a 'dummy_axis'.
+                # Stored in the `frame_only:` list.  Rebuilds.
+                cls = type(self)
+                n = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(n) or b"{}")
+                link = body.get("link")
+                on = bool(body.get("on", True))
+                if not cls.pkg_dir or not link:
+                    return self._send_json({"error": "no package/link"}, 400)
+                if not _cad_mode(cls.pkg_dir):
+                    return self._send_json(
+                        {"error": "frame-only needs a CAD package (graph.json)"},
+                        400)
+                name = os.path.splitext(os.path.basename(cls.urdf_rel))[0]
+                yml = os.path.join(cls.pkg_dir, name + ".joints.yaml")
+                if not os.path.exists(yml):
+                    return self._send_json(
+                        {"error": "joints.yaml not found"}, 400)
+                with open(yml, encoding="utf-8") as f:
+                    txt = f.read()
+                link = _link_names_inverse(txt).get(link, link)
+                _snapshot(cls.pkg_dir, yml, f"frame-only {link[:30]}")
+                txt = _set_frame_only_members(
+                    txt, {link} if on else set(), set() if on else {link})
+                with open(yml, "w", encoding="utf-8") as f:
+                    f.write(txt)
+                from sw2robot.exporter.export import build
+                try:
+                    build(cls.pkg_dir, config_path=yml)
+                except Exception as e:
+                    return self._send_json(
+                        {"error": f"rebuild failed: {e}"}, 500)
+                print(f"[sw2robot.web] set_frame_only: {link} on={on}")
+                return self._send_json({"link": link, "on": on})
             if parsed.path == "/api/set_color":
                 # per-link visual colour override, stored as a `colors:` block in
                 # joints.yaml ({component name -> '#RRGGBB'}).  The viewer paints

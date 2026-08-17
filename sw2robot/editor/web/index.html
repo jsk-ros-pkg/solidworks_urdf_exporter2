@@ -71,6 +71,13 @@
          background: none; border: none; }
   .joint:hover .eye, .eye.off { opacity: 1; }
   .eye.off { filter: grayscale(1); }
+  /* per-link "export shape + weight" switch; dim until the row is hovered,
+     like the other row buttons, but always visible once it is OFF */
+  .geo { flex-shrink: 0; margin: 0 1px 0 2px; width: 11px; height: 11px;
+         opacity: .35; cursor: pointer; accent-color: #6a9; }
+  .joint:hover .geo, .geo:not(:checked) { opacity: 1; }
+  .joint .frameonlytag { font-size: 9px; color: #7fb0a0; border: 1px solid #3d5a50;
+                         border-radius: 3px; padding: 0 3px; flex-shrink: 0; }
   #seleye.off { filter: grayscale(1); opacity: .5; }
   .joint.hiddenlink .jname { opacity: .4; text-decoration: line-through; }
   #linkinfo { border: 1px solid #456; border-radius: 4px; padding: 6px 8px;
@@ -1283,6 +1290,20 @@ the config and does NOT re-detect). Needs graph.json (CAD mode).">🔗 re-detect
                             ja: a => `要確認 ${a.n} 件` },
     'row.eyeMassOnly': { en: 'mass-only link: no geometry to show/hide',
                          ja: '質量のみリンク: 表示/非表示できる形状がありません' },
+    'row.eyeFrameOnly': { en: 'frame-only link: it exports no geometry',
+                          ja: 'フレームのみリンク: 出力する形状がありません' },
+    'row.geoTitle': { en: 'export this link\'s shape and weight.\n'
+                        + 'Uncheck for a CAD-only part (a dummy axis): the link '
+                        + 'stays in the tree but exports as a bare frame -- no '
+                        + 'visual, no collision, no inertial.',
+                      ja: 'このリンクの形状と質量を出力する。\n'
+                        + 'CAD 上だけのダミー部品（dummy_axis など）はチェックを外す: '
+                        + 'リンクはツリーに残るが、visual・collision・inertial の無い'
+                        + '座標フレームだけになる。' },
+    'row.frameOnlyOn': { en: a => `${a.name}: exported as a bare frame (no shape, no weight)`,
+                         ja: a => `${a.name}: 形状・質量なしのフレームとして出力します` },
+    'row.frameOnlyOff': { en: a => `${a.name}: shape and weight exported again`,
+                          ja: a => `${a.name}: 形状と質量を再び出力します` },
     'row.mkrootTitle': { en: 'make this link the root (re-roots the tree + rebuilds)',
                          ja: 'このリンクをルートにする（ツリーを再ルート化して再ビルド）' },
     'row.rootLinkTitle': { en: 'root link', ja: 'ルートリンク' },
@@ -1409,6 +1430,12 @@ the config and does NOT re-detect). Needs graph.json (CAD mode).">🔗 re-detect
                       ja: a => `色の変更に失敗: ${a.e}` },
     'li.material': { en: 'material', ja: '材質' },
     'li.mesh': { en: 'mesh', ja: 'メッシュ' },
+    'li.exportShape': { en: 'export', ja: '出力' },
+    'li.exportShapeLabel': { en: 'shape + weight', ja: '形状・質量' },
+    'li.exportShapeOff': { en: 'exported as a bare frame: no visual, '
+                             + 'no collision, no inertial',
+                           ja: '座標フレームのみで出力（visual・collision・'
+                             + 'inertial なし）' },
     'li.override': { en: '(override)', ja: '(上書き)' },
     'li.swUnset': { en: '(unset in SW)', ja: '(SWで未設定)' },
     'li.reextract': { en: '(re-extract to get)', ja: '(再抽出で取得)' },
@@ -2215,6 +2242,9 @@ viewer.addEventListener('joint-mouseover', e => {
 });
 let dropMode = false;          // meshes come from dropped blobs, not /pkg/
 let currentInfo = null;        // {name, urdf} of the open server package
+// a directly-opened URDF has no graph.json behind it, so the CAD-only per-link
+// controls (frame-only, mass source, ...) do not apply
+const urdfInputMode = () => currentInfo?.mode === 'urdf';
 let mergedView = false;        // viewer shows the fixed-joint-lumped URDF
 let compMeta = {};             // link -> {material, density, name, override}
 // HTML-attribute escape for text that goes into a title="" (classifier notes
@@ -4097,6 +4127,33 @@ async function openMassList() {
   }
 }
 
+// one per-link edit -> POST -> (optionally) rebuild the robot -> refresh the
+// metadata and repaint both the mass popup and the joint tree.  Shared by the
+// mass panel and the joint rows' frame-only checkbox.
+const applyLinkEdit = async (fetchArgs, { rebuild, okMsg } = {}) => {
+  try {
+    const resp = await fetch(...fetchArgs);
+    const r = await resp.json();
+    if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
+    log(okMsg ?? t('mass.setOk'), 'ok');
+    if (rebuild) {
+      loadRobot(currentInfo, { keepPose: true });
+      refreshHistory();
+    }
+    await refreshCompMeta();      // repaints the mass popup (see refreshCompMeta)
+    // sync the main tree so a mass-only / frame-only toggle shows there too
+    if (viewer.robot) { buildJointRows(viewer.robot); }
+    return true;
+  } catch (e) {
+    log(t('mass.fail', { e: e.message ?? e }), 'err');
+    return false;
+  }
+};
+const postArgs = (path, body) => [path, {
+  method: 'POST', headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(body) }];
+
+
 function _renderMassList(data) {
   document.getElementById('renamelist')?.remove();  // the two panels are exclusive
   document.getElementById('masslist')?.remove();
@@ -4171,29 +4228,8 @@ function _renderMassList(data) {
     `<th>${t('mass.thReview')}</th>` +
     '</tr></thead><tbody>' + rows + '</tbody></table>';
 
-  // one edit -> POST -> (optionally) rebuild the robot -> refresh + reopen
-  const apply = async (fetchArgs, { rebuild, okMsg } = {}) => {
-    try {
-      const resp = await fetch(...fetchArgs);
-      const r = await resp.json();
-      if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
-      log(okMsg ?? t('mass.setOk'), 'ok');
-      if (rebuild) {
-        loadRobot(currentInfo, { keepPose: true });
-        refreshHistory();
-      }
-      await refreshCompMeta();      // repaints this popup (see refreshCompMeta)
-      // sync the main tree so a mass-only toggle shows there too, not just here
-      if (viewer.robot) { buildJointRows(viewer.robot); }
-      return true;
-    } catch (e) {
-      log(t('mass.fail', { e: e.message ?? e }), 'err');
-      return false;
-    }
-  };
-  const post = (path, body) => [path, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body) }];
+  const apply = applyLinkEdit;
+  const post = postArgs;
 
   card.querySelectorAll('tr[data-link]').forEach(tr => {
     const ln = tr.dataset.link;
@@ -4595,6 +4631,8 @@ function buildJointRows(robot) {
       `${child}</span>` +
       (isMimic ? `<span class="mimictag">mimic</span>` : '') +
       (massOnlyLinks.has(child) ? `<span class="motag">mass</span>` : '') +
+      (compMeta[child]?.frame_only
+        ? `<span class="frameonlytag">frame</span>` : '') +
       // the classifier's own reason, and a badge when it is one of the
       // guesses worth checking (the server decides -- _JOINT_ATTENTION)
       (compMeta[child]?.joint_attention
@@ -4612,11 +4650,21 @@ function buildJointRows(robot) {
       typeOptionsHtml(massOnlyLinks.has(child) ? 'mass_only' : j.jointType) +
       `</select>` +
       `<span class="jval">${isMov ? fmtDisp(Number(j.angle)) : ''}</span>` +
-      // a mass-only link has no geometry, so there is nothing to hide/show
+      // export this link's shape + weight?  Unchecked = a CAD-only part
+      // (dummy axis): the link stays, but exports as a bare frame.  CAD
+      // packages only -- a URDF-input link has no graph component behind it.
+      (urdfInputMode()
+        ? ''
+        : `<input type="checkbox" class="geo"` +
+          `${compMeta[child]?.frame_only ? '' : ' checked'} ` +
+          `title="${escAttr(t('row.geoTitle'))}">`) +
+      // a mass-only / frame-only link has no geometry to hide/show
       `<button class="eye${hiddenLinks.has(child) ? ' off' : ''}" ` +
       (massOnlyLinks.has(child)
         ? `disabled title="${t('row.eyeMassOnly')}"`
-        : `title="${t('row.eyeTitle')}"`) + `>👁</button>` +
+        : compMeta[child]?.frame_only
+          ? `disabled title="${t('row.eyeFrameOnly')}"`
+          : `title="${t('row.eyeTitle')}"`) + `>👁</button>` +
       `<button class="mkroot" title="${t('row.mkrootTitle')}">⌂</button>` +
       `</div>` +
       (isMov && !isMimic
@@ -4668,6 +4716,18 @@ function buildJointRows(robot) {
           body: JSON.stringify({ link: child, reviewed: on }) });
         await refreshCompMeta();
         if (viewer.robot) { buildJointRows(viewer.robot); }
+      });
+    }
+    const geo = row.querySelector('.geo');
+    if (geo) {
+      geo.addEventListener('click', ev => ev.stopPropagation());  // not a row click
+      geo.addEventListener('change', ev => {
+        const frameOnly = !ev.target.checked;
+        applyLinkEdit(
+          postArgs('/api/set_frame_only', { link: child, on: frameOnly }),
+          { rebuild: true,
+            okMsg: t(frameOnly ? 'row.frameOnlyOn' : 'row.frameOnlyOff',
+                     { name: child }) });
       });
     }
     row.querySelector('.mkroot').addEventListener('click',
@@ -4754,13 +4814,35 @@ function buildJointRows(robot) {
         ? '= ' + rootBaseName : ''}</span>` +
       `<span class="jtype" style="background:#2d4a35;color:#8fd99f">root` +
       `</span>` +
+      (compMeta[rootName]?.frame_only
+        ? `<span class="frameonlytag">frame</span>` : '') +
+      // same "export shape + weight" switch as the joint rows below
+      (urdfInputMode()
+        ? ''
+        : `<input type="checkbox" class="geo"` +
+          `${compMeta[rootName]?.frame_only ? '' : ' checked'} ` +
+          `title="${escAttr(t('row.geoTitle'))}">`) +
       `<button class="eye${hiddenLinks.has(rootName) ? ' off' : ''}" ` +
-      `title="${t('row.eyeTitle')}">👁</button></div>`;
+      (compMeta[rootName]?.frame_only
+        ? `disabled title="${t('row.eyeFrameOnly')}"`
+        : `title="${t('row.eyeTitle')}"`) + `>👁</button></div>`;
     head.classList.toggle('hiddenlink', hiddenLinks.has(rootName));
     head.querySelector('.eye').addEventListener('click', ev => {
       ev.stopPropagation();
       toggleLinkVisible(rootName, head);
     });
+    const rootGeo = head.querySelector('.geo');
+    if (rootGeo) {
+      rootGeo.addEventListener('click', ev => ev.stopPropagation());
+      rootGeo.addEventListener('change', ev => {
+        const frameOnly = !ev.target.checked;
+        applyLinkEdit(
+          postArgs('/api/set_frame_only', { link: rootName, on: frameOnly }),
+          { rebuild: true,
+            okMsg: t(frameOnly ? 'row.frameOnlyOn' : 'row.frameOnlyOff',
+                     { name: rootName }) });
+      });
+    }
     const rootNameEl = head.querySelector('.jname');
     rootNameEl.addEventListener('click', () => selectLink(rootName));
     attachInlineRename(rootNameEl, 'link', () => rootName);
@@ -6286,6 +6368,18 @@ function fillLinkInfo(name) {
   // the relevant control is shown (no disabled fields).  CAD mode only -- a
   // URDF-input link edits its inertial through the block above.
   const byMass = meta?.mass != null;
+  // the same per-link switch the joint rows carry: export this link's shape and
+  // weight, or emit it as a bare frame (CAD-only dummy parts)
+  const frameOnly = !!meta?.frame_only;
+  if (!urdfMode) {
+    rowsHtml.push(
+      `<tr><td>${t('li.exportShape')}</td><td>` +
+      `<input type="checkbox" id="li_geo" ${frameOnly ? '' : 'checked'} ` +
+      `title="${escAttr(t('row.geoTitle'))}"> ${t('li.exportShapeLabel')}` +
+      (frameOnly
+        ? `<div class="mass-note">${t('li.exportShapeOff')}</div>` : '') +
+      `</td></tr>`);
+  }
   if (!urdfMode) {
     rowsHtml.push(
       `<tr><td>${t('mass.thByMass')}</td><td>` +
@@ -6343,6 +6437,24 @@ function fillLinkInfo(name) {
       refreshHistory();
     } catch (err) { log(t('mass.fail', { e: err.message ?? err }), 'err'); }
   };
+  // export shape + weight, or emit a bare frame (same switch as the joint row).
+  // Follows setMass' order: refresh the metadata BEFORE the reload so the panel
+  // that reopens shows the new state, not the stale pre-edit one.
+  el.querySelector('#li_geo')?.addEventListener('change', async e => {
+    const off = !e.target.checked;
+    try {
+      const resp = await fetch('/api/set_frame_only', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ link: name, on: off }) });
+      const r = await resp.json();
+      if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
+      log(t(off ? 'row.frameOnlyOn' : 'row.frameOnlyOff', { name }), 'ok');
+      await refreshCompMeta();
+      reselectAfterLoad = name;   // reopen this popup when the reload completes
+      loadRobot(currentInfo, { keepPose: true });
+      refreshHistory();
+    } catch (err) { log(t('mass.fail', { e: err.message ?? err }), 'err'); }
+  });
   el.querySelector('#li_bm')?.addEventListener('change', e => {
     // `||` (not `??`): a 0 / missing current mass falls to 0.1 so the seed
     // POST is never rejected by the positive-mass check

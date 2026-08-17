@@ -253,6 +253,12 @@ Everything below edits the package server-side and rebuilds the URDF in place
   (`g` move / `r` rotate) and **Place**. Handy for end-effector, sensor, or
   mount frames. Click a magenta marker to remove one. Stored under `ports:` in
   `joints.yaml`.
+- **Export shape + weight?** — the checkbox on each link row in the joint tree.
+  Uncheck it for a CAD-only part (a `dummy_axis` drawn just to carry a joint
+  axis): the link and its joint stay in the tree, but the URDF gets a bare
+  frame — no `<visual>`, no `<collision>`, no `<inertial>`. Stored as
+  `frame_only:` in `joints.yaml`. (Different from **mass-only**, which keeps the
+  weight and only works on a fixed child.)
 
 **Authoring aids** — live self-collision highlight as you drag a joint, an
 **auto joint-limit** sweep, per-link materials/densities, a `tf` view (frame
