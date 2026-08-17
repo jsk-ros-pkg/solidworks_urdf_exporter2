@@ -73,6 +73,10 @@ def _inertial_xml(comp, mesh_dir, density):
 
     Source priority:
 
+    0. A complete authored inertial (``comp.inertial_override``), already in
+       the link frame -- currently the SW2URDF payload's own mass properties
+       under ``sw2urdf_config: sw2urdf_compat``.  It states the answer outright, so
+       nothing is recomputed and no density applies.
     1. SolidWorks-native mass properties (exact CAD geometry + material /
        manual override), unless the caller passed an explicit global
        ``density`` or the link carries a per-link density override -- both of
@@ -89,8 +93,16 @@ def _inertial_xml(comp, mesh_dir, density):
     source / approximation each link used and flag any physically invalid
     inertial (``problems`` is a list of sanity-check failures, empty if OK)."""
     info = None
+    # 0. an authored inertial: link-frame values to emit unchanged
+    override = getattr(comp, "inertial_override", None)
+    if override:
+        info = {"mass": float(override["mass"]),
+                "com": [float(v) for v in override["com"]],
+                "inertia": tuple(float(v) for v in override["inertia"]),
+                "method": "sw2urdf"}
     # 1. SolidWorks-native values (only when no density override is in force)
-    if density is None and not getattr(comp, "density_override", False):
+    if info is None and density is None and not getattr(
+            comp, "density_override", False):
         # SI already (kg, metres, kg.m^2) and expressed in the part's OWN
         # frame -- the frame the mesh is exported in -- so the visual origin
         # maps them into the link frame exactly as the mesh path does, with
@@ -122,12 +134,15 @@ def _inertial_xml(comp, mesh_dir, density):
     if mass_target:
         info = rescale_inertial_to_mass(info, mass_target)
     ixx, ixy, ixz, iyy, iyz, izz = info["inertia"]
+    # 6 significant digits is plenty for a value we computed; an AUTHORED one
+    # is copied, not derived, so print enough digits to round-trip it.
+    g = ".12g" if info["method"] == "sw2urdf" else ".6g"
     lines = [
         "    <inertial>",
         f'      <origin xyz="{fmt_urdf_vec(info["com"])}" rpy="0 0 0"/>',
-        f'      <mass value="{info["mass"]:.6g}"/>',
-        f'      <inertia ixx="{ixx:.6g}" ixy="{ixy:.6g}" ixz="{ixz:.6g}" '
-        f'iyy="{iyy:.6g}" iyz="{iyz:.6g}" izz="{izz:.6g}"/>',
+        f'      <mass value="{info["mass"]:{g}}"/>',
+        f'      <inertia ixx="{ixx:{g}}" ixy="{ixy:{g}}" ixz="{ixz:{g}}" '
+        f'iyy="{iyy:{g}}" iyz="{iyz:{g}}" izz="{izz:{g}}"/>',
         "    </inertial>",
     ]
     problems = validate_inertia(info["mass"], info["inertia"])
@@ -137,11 +152,12 @@ def _inertial_xml(comp, mesh_dir, density):
 def _report_inertia(methods):
     """Print a one-line summary of how each link's inertia was obtained, so any
     approximation (non-watertight mesh / placeholder) is visible rather than
-    silent.  ``solidworks`` (exact CAD value) and ``mesh`` (watertight volume
-    integral) are exact; ``hull``/``bbox``/``placeholder`` are approximations."""
+    silent.  ``solidworks`` (exact CAD value), ``sw2urdf`` (the add-in's own
+    payload value) and ``mesh`` (watertight volume integral) are exact;
+    ``hull``/``bbox``/``placeholder`` are approximations."""
     if not methods:
         return
-    _EXACT = ("solidworks", "mesh")
+    _EXACT = ("solidworks", "sw2urdf", "mesh")
     exact = {k: v for k, v in methods.items() if k in _EXACT}
     approx = {k: v for k, v in methods.items() if k not in _EXACT}
     msg = "      inertia: " + (", ".join(f"{v} from {k}"

@@ -299,6 +299,11 @@ class Component:
     # (config `masses:` / the web editor), mutually exclusive with a density
     # override -- see skrobot.utils.inertia.rescale_inertial_to_mass
     mass_target: float | None = None
+    # a complete <inertial> to emit as-is, already in the LINK frame:
+    # {'mass': kg, 'com': [x,y,z], 'inertia': (ixx,ixy,ixz,iyy,iyz,izz)}.
+    # Set by `sw2urdf_config: sw2urdf_compat` from the add-in's own payload so
+    # migrated URDF keeps SW2URDF's physics instead of a mesh estimate.
+    inertial_override: dict | None = None
     # standard hardware (screw/bolt/nut/washer/pin): weld it FIXED to whatever it
     # fastens and never let it be a tree parent -- see is_fastener_part
     is_fastener: bool = False
@@ -3383,6 +3388,73 @@ def _sw2urdf_sanitized_link_names(swcfg, graph_components=None):
     return out
 
 
+def _apply_sw2urdf_inertials(comps, swcfg):
+    """Give each configured link the ``<inertial>`` the add-in itself computed.
+
+    SW2URDF stores mass, centre of mass and inertia tensor -- taken from the
+    CAD geometry and materials, expressed in the link frame -- in the same
+    payload that holds the link tree, and writes exactly those numbers into
+    the URDF it exports.  Reusing them is the whole point of the
+    ``sw2urdf_compat`` migration: a link the add-in configured is usually a
+    whole sub-assembly, which sw2robot keeps unexpanded and therefore has no
+    SolidWorks-native mass properties for, so its own estimate falls back to a
+    convex hull at a default density and can be off by a factor of several.
+
+    Two cases are refused rather than approximated, each named on stdout:
+    a link with no inertial block in the payload, and a link that bundles
+    extra components -- sw2robot emits those as separate fixed child links
+    carrying their own inertials, so copying the add-in's whole-link value
+    onto the main component would double-count them.
+
+    Parameters
+    ----------
+    comps : list of Component
+        Components of the model being built; mutated in place.
+    swcfg : dict
+        Mapping from the payload route, whose link records carry ``inertial``.
+    """
+    by_name = {c.name: c for c in comps}
+    applied = 0
+    skipped = []
+    for comp_name, rec in sorted(swcfg["links"].items()):
+        comp = by_name.get(comp_name)
+        if comp is None:
+            continue
+        label = rec.get("link_name") or comp_name
+        inertial = rec.get("inertial")
+        if not inertial:
+            skipped.append(f"{label} (no inertial in the payload)")
+            continue
+        members = rec.get("extra_components") or []
+        if members:
+            skipped.append(
+                f"{label} (bundles {len(members)} extra component(s) that stay "
+                "separate links here -- copying would double-count them)")
+            continue
+        ixx, ixy, ixz, iyy, iyz, izz = (float(v) for v in inertial["inertia"])
+        tensor = np.array([[ixx, ixy, ixz],
+                           [ixy, iyy, iyz],
+                           [ixz, iyz, izz]], float)
+        rpy = np.asarray(inertial.get("rpy") or [0.0, 0.0, 0.0], float)
+        if np.any(np.abs(rpy) > 1e-12):
+            # A URDF tensor is expressed in the inertial ORIGIN's frame, and
+            # the writer always emits rpy="0 0 0", so rotate it into the link
+            # frame instead of silently dropping the orientation.
+            R = rpy2homogeneous(*rpy)[:3, :3]
+            tensor = R @ tensor @ R.T
+        comp.inertial_override = {
+            "mass": float(inertial["mass"]),
+            "com": [float(v) for v in inertial["com"]],
+            "inertia": (tensor[0, 0], tensor[0, 1], tensor[0, 2],
+                        tensor[1, 1], tensor[1, 2], tensor[2, 2]),
+        }
+        applied += 1
+    print(f"      SW2URDF config: {applied} link inertial(s) copied from "
+          "the payload")
+    for msg in skipped:
+        print(f"      !!! SW2URDF compat inertial skipped: {msg}")
+
+
 def _sw2urdf_print_mapping(swcfg, route="name"):
     """Print a compact SW2URDF mapping summary."""
     links = swcfg["links"]
@@ -3784,9 +3856,13 @@ def build_model(graph, robot_name=None, base_hint=None, config=None,
     # documents -- arrived here as 'false', was rejected as unknown, and the
     # embedded config stayed applied.
     sw2_mode = {"false": "off", "true": "auto"}.get(sw2_mode, sw2_mode)
-    if sw2_mode not in ("auto", "off", "require"):
+    if sw2_mode not in ("auto", "off", "require", "sw2urdf_compat"):
         print(f"      WARN: sw2urdf_config={sw2_mode!r} is unknown; using 'auto'")
         sw2_mode = "auto"
+    # 'sw2urdf_compat' migrates the add-in's OWN output: it only has meaning
+    # payload route (the other routes reconstruct from geometry and have no
+    # authored sign or inertial to copy), so it implies 'require'.
+    sw2_compat = sw2_mode == "sw2urdf_compat"
 
     sw2_present = detect_sw2urdf_reference_geometry(
         graph.components,
@@ -3800,6 +3876,11 @@ def build_model(graph, robot_name=None, base_hint=None, config=None,
     sw2_link_names = None
     sw2_force_no_expand = None
     sw2_route = None
+    if sw2_compat and not sw2_payload_xml:
+        raise RuntimeError(
+            "sw2urdf_config=sw2urdf_compat needs the add-in's embedded configuration "
+            "payload, and this graph.json carries none -- re-extract the "
+            "assembly, or use 'auto' to reconstruct from the reference geometry")
     if sw2_mode != "off":
         if sw2_payload_xml:
             payload = parse_sw2urdf_payload(sw2_payload_xml)
@@ -3810,9 +3891,15 @@ def build_model(graph, robot_name=None, base_hint=None, config=None,
                     graph.coordinate_systems,
                     graph.reference_axes,
                     subassemblies=getattr(graph, "subassemblies", None),
+                    compat=sw2_compat,
                 )
             if sw2cfg is not None:
                 sw2_route = "payload"
+            elif sw2_compat:
+                raise RuntimeError(
+                    "sw2urdf_config=sw2urdf_compat but the embedded SW2URDF "
+                    "could not be reconstructed (see the warnings above); the "
+                    "other routes cannot reproduce the add-in's own output")
             else:
                 print("      !!! SW2URDF payload route failed; "
                       "trying other routes")
@@ -3861,9 +3948,9 @@ def build_model(graph, robot_name=None, base_hint=None, config=None,
                 sw2_link_names = _sw2urdf_sanitized_link_names(
                     sw2cfg, graph.components)
             except ValueError as e:
-                if sw2_mode == "require":
+                if sw2_mode in ("require", "sw2urdf_compat"):
                     raise RuntimeError(
-                        "sw2urdf_config=require but " + str(e)) from e
+                        f"sw2urdf_config={sw2_mode} but " + str(e)) from e
                 print("      !!! SW2URDF config warning: "
                       f"{e}; falling back to normal mate inference")
                 sw2cfg = None
@@ -3896,6 +3983,9 @@ def build_model(graph, robot_name=None, base_hint=None, config=None,
             ln = sw2_link_names.get(c.name)
             if ln:
                 c.link_name = ln
+
+    if sw2_compat and sw2cfg is not None:
+        _apply_sw2urdf_inertials(comps, sw2cfg)
 
     # SolidWorks LimitDistance/LimitAngle mates ARE the assembly's real DOFs --
     # promote those edges to prismatic/revolute with the CAD axis + travel

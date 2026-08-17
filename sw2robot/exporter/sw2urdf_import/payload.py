@@ -284,6 +284,75 @@ def _parse_joint(link_elem, id_map):
     }
 
 
+_INERTIA_KEYS = ("ixx", "ixy", "ixz", "iyy", "iyz", "izz")
+
+
+def _parse_inertial(link_elem, id_map):
+    """The link's ``<inertial>`` exactly as the add-in stored it.
+
+    SW2URDF computes mass / centre of mass / inertia tensor from the CAD
+    geometry and material and keeps them in the payload, in the LINK frame --
+    the very numbers it writes into the URDF it exports.  Handing them back
+    untouched lets the ``sw2urdf_compat`` migration reuse the add-in's own physics
+    instead of re-deriving it from the exported meshes.
+
+    Parameters
+    ----------
+    link_elem : xml.etree.ElementTree.Element
+        A payload ``Link`` element.
+    id_map : dict
+        ``z:Id`` -> element map for reference resolution.
+
+    Returns
+    -------
+    dict | None
+        ``{'mass', 'com', 'rpy', 'inertia'}`` (SI, link frame) when the block
+        is complete and usable, else None.
+    """
+    elem = _joint_urdf_child(link_elem, id_map, "Inertial", "Inertial")
+    if elem is None:
+        return None
+
+    mass_attrs = _parse_attributes(
+        _joint_urdf_child(elem, id_map, "Mass", "Mass"), id_map)
+    inertia_attrs = _parse_attributes(
+        _joint_urdf_child(elem, id_map, "Inertia", "Inertia"), id_map)
+    origin_attrs = _parse_attributes(
+        _joint_urdf_child(elem, id_map, "Origin", "Origin"), id_map)
+
+    try:
+        mass = float(mass_attrs.get("value"))
+    except (TypeError, ValueError):
+        _warn("payload inertial has no usable mass value")
+        return None
+    if not (mass > 0.0):
+        _warn(f"payload inertial mass {mass!r} is not positive")
+        return None
+
+    inertia = []
+    for key in _INERTIA_KEYS:
+        try:
+            inertia.append(float(inertia_attrs.get(key)))
+        except (TypeError, ValueError):
+            _warn(f"payload inertial is missing inertia component {key!r}")
+            return None
+
+    com = origin_attrs.get("xyz")
+    if not isinstance(com, list) or len(com) != 3:
+        _warn("payload inertial origin xyz is missing or malformed")
+        return None
+    rpy = origin_attrs.get("rpy")
+    if not isinstance(rpy, list) or len(rpy) != 3:
+        rpy = [0.0, 0.0, 0.0]
+
+    return {
+        "mass": mass,
+        "com": [float(v) for v in com],
+        "rpy": [float(v) for v in rpy],
+        "inertia": inertia,
+    }
+
+
 def _parse_link_tree(link_elem, id_map, parent_link_name, out_rows):
     link_elem = _resolve_ref(link_elem, id_map, "Link")
     if link_elem is None or _local_name(link_elem.tag) != "Link":
@@ -309,6 +378,7 @@ def _parse_link_tree(link_elem, id_map, parent_link_name, out_rows):
         "components": components,
         "main_component": main_components[0] if main_components else None,
         "joint": joint,
+        "inertial": _parse_inertial(link_elem, id_map),
     }
 
     if parent_link_name is None:
@@ -389,6 +459,7 @@ def parse_sw2urdf_payload(xml_text):
             "components": list(root_rec.get("components") or []),
             "main_component": root_rec.get("main_component"),
             "coordsys_name": root_joint.get("coordsys_name"),
+            "inertial": root_rec.get("inertial"),
         },
         "links": [],
     }
@@ -407,6 +478,7 @@ def parse_sw2urdf_payload(xml_text):
             "components": list(row.get("components") or []),
             "main_component": row.get("main_component"),
             "joint": joint,
+            "inertial": row.get("inertial"),
         })
 
     return out
