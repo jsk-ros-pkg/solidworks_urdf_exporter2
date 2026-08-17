@@ -68,7 +68,7 @@ def _patch_readers(monkeypatch):
                                   document_point=[0.0, 0.0, 0.0],
                                   document_direction=[0.0, 0.0, 1.0])
     monkeypatch.setattr(export_mod, "extract_coordinate_systems",
-                        lambda doc: [fresh_cs.model_copy()])
+                        lambda doc, owners=False: [fresh_cs.model_copy()])
     monkeypatch.setattr(export_mod, "extract_reference_axes",
                         lambda doc: [fresh_ax.model_copy()])
     # sub.sldasm is loaded in the (fake) session, unloaded.sldasm is not
@@ -123,7 +123,7 @@ def test_refresh_requires_prior_extract(tmp_path):
 def test_refresh_closes_doc_on_reader_failure(tmp_path, monkeypatch):
     pkg, asm = _make_package(tmp_path)
 
-    def boom(doc):
+    def boom(doc, owners=False):
         raise RuntimeError("COM died")
 
     monkeypatch.setattr(export_mod, "extract_coordinate_systems", boom)

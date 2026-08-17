@@ -259,6 +259,13 @@ Everything below edits the package server-side and rebuilds the URDF in place
   frame — no `<visual>`, no `<collision>`, no `<inertial>`. Stored as
   `frame_only:` in `joints.yaml`. (Different from **mass-only**, which keeps the
   weight and only works on a fixed child.)
+- **CAD coordinate systems** — every named SolidWorks coordinate system (in the
+  assembly, a sub-assembly, or inside a part file) becomes one of these
+  coordinate-only links automatically, on the part it was drawn in — or, for a
+  frame drawn in the top-level assembly, on the component its origin was picked
+  from. Turn it off or pick a subset with `coordinate_system_links: off | all |
+  [<name>, ...]` in `joints.yaml`; the default skips frames an embedded SW2URDF
+  config already uses as link origins.
 
 **Authoring aids** — live self-collision highlight as you drag a joint, an
 **auto joint-limit** sweep, per-link materials/densities, a `tf` view (frame

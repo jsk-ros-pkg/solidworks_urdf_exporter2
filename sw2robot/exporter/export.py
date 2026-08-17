@@ -144,8 +144,12 @@ def _extract_into(sw, assembly_path, pkg_dir, meshes_dir, robot_name, _say,
             print(f"      WARN: could not switch configuration ({e!r})")
 
     _say("reading components + mates ...")
-    comps, adjacency, ground = extract_graph(doc, robot_name, assembly_path,
-                                             progress=_part)
+    # frames authored INSIDE part files, collected during the per-part
+    # mass-property read (no extra document loads)
+    part_coordinate_systems = {}
+    comps, adjacency, ground = extract_graph(
+        doc, robot_name, assembly_path, progress=_part,
+        part_coordinate_systems_out=part_coordinate_systems)
     (coordinate_systems,
      reference_axes,
      sw2urdf_marker,
@@ -172,7 +176,8 @@ def _extract_into(sw, assembly_path, pkg_dir, meshes_dir, robot_name, _say,
     subassembly_coordinate_systems = {}
     subgraphs = extract_subgraphs(
         doc, comps, sw=sw, progress=_part,
-        coordinate_systems_out=subassembly_coordinate_systems)
+        coordinate_systems_out=subassembly_coordinate_systems,
+        part_coordinate_systems_out=part_coordinate_systems)
     deep_worlds, hidden = capture_deep_worlds(doc)
 
     by_path = {}
@@ -210,7 +215,8 @@ def _extract_into(sw, assembly_path, pkg_dir, meshes_dir, robot_name, _say,
                            sw2urdf_marker=sw2urdf_marker,
                            sw2urdf_config_xml=sw2urdf_config_xml,
                            subassembly_coordinate_systems=
-                           subassembly_coordinate_systems)
+                           subassembly_coordinate_systems,
+                           part_coordinate_systems=part_coordinate_systems)
     graph.save(os.path.join(pkg_dir, GRAPH_FILE))
     sw.close_doc(doc)
     return pkg_dir
@@ -356,7 +362,8 @@ def refresh_frames(target, out_dir=None, robot_name=None, visible=False,
         doc = sw_sess.open_copy(assembly_path)
         try:
             _say("re-reading coordinate systems + reference axes ...")
-            graph.coordinate_systems = extract_coordinate_systems(doc)
+            graph.coordinate_systems = extract_coordinate_systems(
+                doc, owners=True)
             graph.reference_axes = extract_reference_axes(doc)
             (graph.sw2urdf_marker,
              graph.sw2urdf_config_xml) = extract_sw2urdf_attribute(doc)
@@ -369,7 +376,51 @@ def refresh_frames(target, out_dir=None, robot_name=None, visible=False,
                               f"loaded in this session; keeping its cached "
                               f"coordinate systems")
                         continue
-                    sub.coordinate_systems = extract_coordinate_systems(md)
+                    sub.coordinate_systems = extract_coordinate_systems(
+                        md, owners=True)
+            # frames drawn inside PART files: re-read from the loaded part
+            # documents.  This session's paths may be temp-dir copies while
+            # graph.json holds the originals, so key them back onto the paths
+            # the graph already uses (same basename rule as sub-assemblies).
+            known = {}
+            for cs in graph.components:
+                if cs.part_path:
+                    known.setdefault(_file_key(cs.part_path), cs.part_path)
+            for sub in graph.subassemblies.values():
+                for cs in sub.components:
+                    if cs.part_path:
+                        known.setdefault(_file_key(cs.part_path), cs.part_path)
+            # start from what the graph already knows: a part whose document is
+            # not loaded in this session keeps its cached frames instead of
+            # silently losing them (same rule as the sub-assemblies above)
+            part_frames = dict(graph.part_coordinate_systems)
+            seen_parts, unloaded = set(), 0
+            for c in list(safe_call(doc, "GetComponents", False) or []):
+                ct = as_iface(c, "IComponent2")
+                path = str(safe_prop(ct, "GetPathName") or "")
+                if not path or path.lower().endswith(".sldasm"):
+                    continue
+                key = _file_key(path)
+                if key in seen_parts:
+                    continue
+                seen_parts.add(key)
+                md = safe_call(ct, "GetModelDoc2")
+                if md is None:
+                    unloaded += 1
+                    continue
+                frames = extract_coordinate_systems(md)
+                target = known.get(key, path)
+                if frames:
+                    part_frames[target] = frames
+                else:
+                    # read successfully and it has none any more: a frame the
+                    # author DELETED must disappear from graph.json too
+                    part_frames.pop(target, None)
+            if unloaded:
+                print(f"      WARN: {unloaded} part document(s) are not loaded "
+                      f"in this session; keeping their cached coordinate "
+                      f"systems")
+            graph.part_coordinate_systems = part_frames
         finally:
             sw_sess.close_doc(doc)
 
@@ -384,10 +435,12 @@ def refresh_frames(target, out_dir=None, robot_name=None, visible=False,
     graph.save(graph_path)
     n_sub = sum(len(s.coordinate_systems)
                 for s in graph.subassemblies.values())
+    n_part = sum(len(v) for v in graph.part_coordinate_systems.values())
     _say(f"graph.json frames updated in {_time.time() - t0:.1f}s: "
          f"{len(graph.coordinate_systems)} coordinate system(s), "
          f"{len(graph.reference_axes)} reference axis/axes"
-         + (f", {n_sub} sub-assembly frame(s)" if graph.subassemblies else ""))
+         + (f", {n_sub} sub-assembly frame(s)" if graph.subassemblies else "")
+         + (f", {n_part} part frame(s)" if n_part else ""))
     print(f"  graph: {graph_path}")
     return pkg_dir
 

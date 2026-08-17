@@ -528,10 +528,213 @@ def _top_level(full_name):
     return full_name.split("/")[0] if full_name else full_name
 
 
-def extract_components(doc, exclude=None, progress=None):
+# ------------------------------------------------------------------ CAD frames
+# A named SolidWorks coordinate system is the designer's own statement of "this
+# spot, in this orientation, matters" -- a sensor mount, a tool point, a mating
+# face.  Emit each one as a frame-only link (no visual/collision/inertial): the
+# same empty ``dummy_link`` on a fixed joint the editor's end-coords tool and
+# the SW2URDF component-less links already produce.
+
+def _subassembly_instances(graph):
+    """``{sub-assembly path: [(instance name, world 4x4), ...]}`` at EVERY depth.
+
+    A frame authored in a sub-assembly document belongs to every instance of
+    that sub-assembly, so each instance gets its own copy of the frame.  Uses
+    the as-posed ``deep_worlds`` transform when the extract captured one (a
+    flexible instance poses its internals its own way), else composes the
+    instance chain."""
+    out = {}
+    deep = getattr(graph, "deep_worlds", None) or {}
+    subs = getattr(graph, "subassemblies", None) or {}
+
+    def walk(prefix, components, parent_world, branch):
+        for cs in components:
+            name = f"{prefix}/{cs.name}" if prefix else cs.name
+            if name in deep:
+                world = np.array(deep[name], float).reshape(4, 4)
+            else:
+                world = parent_world @ cs.world_matrix()
+            if not (cs.is_subassembly and cs.part_path):
+                continue
+            out.setdefault(cs.part_path, []).append((name, world))
+            sub = subs.get(cs.part_path)
+            # a sub-assembly cannot contain itself; guard anyway so a corrupt
+            # graph cannot spin here
+            if sub is not None and cs.part_path not in branch:
+                walk(name, sub.components, world,
+                     branch | {cs.part_path})
+
+    walk("", graph.components, np.eye(4), frozenset())
+    return out
+
+
+def _frame_link_name(cad_name):
+    """A URDF link name for a coordinate system named in CAD.
+
+    ``safe_name`` keeps only ASCII, which erases a name written in the CAD
+    UI's own language -- SolidWorks in Japanese names its coordinate systems
+    '座標系1', and that sanitizes to the meaningless 'c_1'.  Keep the trailing
+    number and say what the link IS instead."""
+    raw = str(cad_name or "")
+    if not re.search(r"[A-Za-z]", raw):
+        digits = re.sub(r"[^0-9]", "", raw)
+        return f"coord{digits}" if digits else "coord"
+    return safe_name(raw)
+
+
+def _link_depths(joints, base_link):
+    """``{link name: hops from the base}`` over the built joint tree."""
+    parent_of = {j.child: j.parent for j in joints}
+    depth = {base_link: 0}
+
+    def depth_of(link):
+        chain = []
+        cur = link
+        guard = 0
+        while cur not in depth and cur in parent_of and guard < 10000:
+            chain.append(cur)
+            cur = parent_of[cur]
+            guard += 1
+        d = depth.get(cur, 0)
+        for name in reversed(chain):
+            d += 1
+            depth[name] = d
+        return depth.get(link, d)
+
+    for j in joints:
+        depth_of(j.child)
+    return depth
+
+
+def coordinate_system_ports(graph, comps, joints, anchors, base,
+                            mode="auto", consumed=()):
+    """Named CAD coordinate systems -> ``Port`` (frame-only ``dummy_link``).
+
+    Three sources, each with an unambiguous owner:
+
+    * a frame in a PART document travels with that part -- every instance of
+      the part gets one, on that instance's link;
+    * a frame in a SUB-ASSEMBLY document travels with that sub-assembly -- one
+      per instance;
+    * a frame in the TOP-LEVEL assembly hangs off the component its origin
+      selection was built on (``owner_component``), falling back to the base
+      link when it was built on the assembly's own origin/planes.
+
+    When the owning component was expanded into its children (so its own link
+    no longer exists), the frame lands on the child link closest to the base.
+
+    ``mode``: ``'auto'`` (default, every frame except those an SW2URDF config
+    already consumed as a link anchor), ``'all'``, ``'off'``, or an explicit
+    list of coordinate-system names.  ``consumed`` is that SW2URDF anchor-name
+    set.  ``anchors`` maps component name -> the 4x4 frame its URDF origins are
+    expressed in (see :func:`_finalize_tree`)."""
+    wanted = None
+    if isinstance(mode, (list, tuple, set)):
+        wanted = {str(m) for m in mode}
+        mode = "select"
+    else:
+        mode = str(mode).strip().lower()
+        # YAML reads a bare `off:` as False and `on:`/`yes:` as True
+        mode = {"false": "off", "true": "auto", "": "auto"}.get(mode, mode)
+        if mode not in ("auto", "all", "off", "select"):
+            print(f"      WARN: coordinate_system_links={mode!r} is unknown; "
+                  f"using 'auto'")
+            mode = "auto"
+    if mode == "off":
+        return []
+    consumed = {str(c) for c in (consumed or ())}
+
+    def selected(name):
+        if mode == "select":
+            return name in wanted
+        if mode == "auto":
+            return name not in consumed
+        return True
+
+    by_name = {c.name: c for c in comps}
+    depth = _link_depths(joints, base.link_name)
+
+    def owner_link(owner):
+        """The surviving link an owning component maps to (name, or None)."""
+        if owner in by_name:
+            return owner
+        pre = owner + "/"
+        kids = [c.name for c in comps if c.name.startswith(pre)]
+        if kids:
+            return min(kids, key=lambda n: (depth.get(by_name[n].link_name,
+                                                      10 ** 6), n))
+        return None
+
+    # (owner component name, frame, world 4x4 of the owning DOCUMENT)
+    todo = []
+    for cs in getattr(graph, "coordinate_systems", None) or []:
+        todo.append((cs.owner_component or base.name, cs, np.eye(4)))
+    for path, frames in sorted(
+            (getattr(graph, "part_coordinate_systems", None) or {}).items()):
+        for c in comps:
+            if c.part_path == path:
+                for cs in frames:
+                    todo.append((c.name, cs, c.world))
+    instances = _subassembly_instances(graph)
+    for path, sub in sorted(
+            (getattr(graph, "subassemblies", None) or {}).items()):
+        frames = getattr(sub, "coordinate_systems", None) or []
+        for inst_name, inst_world in instances.get(path, []):
+            for cs in frames:
+                owner = (f"{inst_name}/{cs.owner_component}"
+                         if cs.owner_component else inst_name)
+                todo.append((owner, cs, inst_world))
+
+    out = []
+    skipped = []
+    for owner, cs, doc_world in todo:
+        if not selected(cs.name):
+            continue
+        link_owner = owner_link(owner)
+        if link_owner is None:
+            link_owner = owner_link(_top_level(owner))
+        if link_owner is None or link_owner not in anchors:
+            skipped.append(cs.name)
+            continue
+        world = np.asarray(doc_world, float) @ cs.document_from_frame_matrix()
+        xyz, rpy = matrix_to_xyz_rpy(matrix_relative(anchors[link_owner],
+                                                     world))
+        out.append((by_name[link_owner].link_name, _frame_link_name(cs.name),
+                    list(xyz), list(rpy)))
+    if skipped:
+        print(f"      WARN: {len(skipped)} coordinate system(s) hang off a "
+              f"component that is not in the model; skipped: "
+              + ", ".join(sorted(set(skipped))))
+
+    # a frame name repeated across instances (or documents) is disambiguated by
+    # its link, so every dummy_link keeps a name that says where it sits
+    out.sort(key=lambda r: (r[0], r[1]))
+    counts = {}
+    for _link, name, _xyz, _rpy in out:
+        counts[name] = counts.get(name, 0) + 1
+    ports, used = [], set()
+    for link, name, xyz, rpy in out:
+        final = name if counts[name] == 1 else safe_name(f"{link}_{name}")
+        stem, i = final, 1
+        while final in used:
+            i += 1
+            final = f"{stem}_{i}"
+        used.add(final)
+        ports.append(Port(name=final, parent_link=link, xyz=xyz, rpy=rpy))
+    return ports
+
+
+def extract_components(doc, exclude=None, progress=None,
+                       part_coordinate_systems_out=None):
     """``progress(link_name)`` -- if given -- is called as each component is
     about to be read (its material/mass-property lookup is the per-part cost),
-    so a UI can show WHICH part the (multi-minute) load is on, not just a stage."""
+    so a UI can show WHICH part the (multi-minute) load is on, not just a stage.
+
+    ``part_coordinate_systems_out`` -- if given -- is filled with
+    ``{part_path: [CoordinateSystemState, ...]}`` for the parts that define a
+    coordinate system.  It rides along with the mass-property read, which
+    already opens each unique part document once, so it costs one extra feature
+    walk per part file and no extra document loads."""
     exclude = [e.lower() for e in (exclude or [])]
     raw = list(safe_call(doc, "GetComponents", True) or [])
     comps = []
@@ -545,12 +748,23 @@ def extract_components(doc, exclude=None, progress=None):
         if key in matcache:
             return matcache[key]
         props = (None, None, None)
+        md = None
         try:
             md = safe_call(ct, "GetModelDoc2")
             if md is not None:
                 props = _read_part_props(md)
         except Exception:
             pass
+        if md is not None and part_coordinate_systems_out is not None \
+                and path not in part_coordinate_systems_out:
+            try:
+                frames = extract_coordinate_systems(md)
+            except Exception as e:
+                print(f"      WARN: coordinate systems of "
+                      f"{os.path.basename(path)} could not be read: {e!r}")
+                frames = []
+            if frames:
+                part_coordinate_systems_out[path] = frames
         matcache[key] = props
         return props
     for c in raw:
@@ -2608,8 +2822,13 @@ def _config_parent_map(comps, adjacency, base, directed):
 
 
 def _finalize_tree(comps, adjacency, base, parent_of, edge_info, root_rpy=None,
-                   root_z_offset=0.0, root_xyz=None, anchor_frames=None):
-    """Compute anchors, visual origins and Joint objects from a parent map."""
+                   root_z_offset=0.0, root_xyz=None, anchor_frames=None,
+                   anchors_out=None):
+    """Compute anchors, visual origins and Joint objects from a parent map.
+
+    ``anchors_out`` -- if given -- is updated with the ``{component name: 4x4}``
+    anchor frames, the frames every URDF origin on this tree is expressed in
+    (callers that place extra frames, e.g. CAD coordinate systems, need them)."""
     by_name = {c.name: c for c in comps}
 
     # anchor: revolute links anchor a world-aligned frame on the rotation axis;
@@ -2670,6 +2889,9 @@ def _finalize_tree(comps, adjacency, base, parent_of, edge_info, root_rpy=None,
                 np.eye(3), np.asarray(pt, float))
         else:
             anchor[child] = by_name[child].world.copy()
+
+    if anchors_out is not None:
+        anchors_out.update(anchor)
 
     for c in comps:
         rel = matrix_relative(anchor[c.name], c.world)
@@ -2739,7 +2961,7 @@ def _finalize_tree(comps, adjacency, base, parent_of, edge_info, root_rpy=None,
 
 def build_tree(comps, adjacency, base, directed=None, root_rpy=None,
                root_z_offset=0.0, root_xyz=None, closures_out=None,
-               anchor_frames=None):
+               anchor_frames=None, anchors_out=None):
     if directed:
         parent_of, edge_info = _config_parent_map(comps, adjacency, base,
                                                   directed)
@@ -2764,22 +2986,26 @@ def build_tree(comps, adjacency, base, directed=None, root_rpy=None,
             closures_out.append(lc)
     return _finalize_tree(comps, adjacency, base, parent_of, edge_info,
                           root_rpy=root_rpy, root_z_offset=root_z_offset,
-                          root_xyz=root_xyz, anchor_frames=anchor_frames)
+                          root_xyz=root_xyz, anchor_frames=anchor_frames,
+                          anchors_out=anchors_out)
 
 
 # ====================================================================
 # Extraction (SolidWorks, slow) <-> serializable GraphState
 # ====================================================================
 
-def extract_graph(doc, robot_name, source_assembly, progress=None):
+def extract_graph(doc, robot_name, source_assembly, progress=None,
+                  part_coordinate_systems_out=None):
     """SolidWorks -> internal (comps, adjacency, ground).
 
     Extracts ALL (non-suppressed) components and their mate graph.  Exclusion
     of parts is a BUILD-time decision, so nothing is excluded here.  Mesh files
     are filled in later (by mesh.export_meshes) before serializing.
     ``progress(link_name)`` is forwarded per component (see
-    :func:`extract_components`)."""
-    comps = extract_components(doc, progress=progress)
+    :func:`extract_components`), as is ``part_coordinate_systems_out``."""
+    comps = extract_components(
+        doc, progress=progress,
+        part_coordinate_systems_out=part_coordinate_systems_out)
     # DOF-folder mode: if the top assembly marks its real joints in a 'dof' mate
     # folder, switch on the whitelist for this whole extraction (top + subgraphs).
     global _DOF_ACTIVE
@@ -2892,14 +3118,16 @@ def extract_reference_geometry(doc):
             try:
                 transform = safe_call(
                     extension, "GetCoordinateSystemTransformByName", name)
-                if transform is None:
-                    data = safe_call(fi, "GetDefinition")
-                    data = as_iface(data, "ICoordinateSystemFeatureData")
+                data = as_iface(safe_call(fi, "GetDefinition"),
+                                "ICoordinateSystemFeatureData")
+                if data is not None:
                     # SolidWorks' examples access the feature selections before
-                    # reading Transform.  Some releases return the transform
-                    # without this call, but use the documented path here.
+                    # reading Transform (and OriginEntity needs them too).  Some
+                    # releases return the transform without this call, but use
+                    # the documented path here.
                     accessed = bool(safe_call(
                         data, "AccessSelections", doc, None))
+                if transform is None and data is not None:
                     transform = safe_prop(data, "Transform")
                 if transform is None:
                     raise ValueError("coordinate system has no Transform")
@@ -2908,7 +3136,9 @@ def extract_reference_geometry(doc):
                     name=name,
                     document_from_frame=[
                         float(x) for x in document_from_frame.flatten()
-                    ]))
+                    ],
+                    owner_component=(_coordsys_owner_component(data, doc)
+                                     if accessed else None)))
             except Exception as e:
                 print(f"      WARN: coordinate system {name!r} could not be "
                       f"read: {e!r}")
@@ -2949,7 +3179,32 @@ def extract_reference_geometry(doc):
             sw2urdf_marker, sw2urdf_config_xml)
 
 
-def extract_coordinate_systems(doc):
+def _coordsys_owner_component(data, doc):
+    """Name2 of the component the coordinate system's ORIGIN selection belongs
+    to, or None.
+
+    In an assembly a coordinate system is normally built on a component's
+    vertex/edge, and ``IEntity.GetComponent`` names that component -- which is
+    the link the frame is meant to travel with.  A frame built on the
+    assembly's own origin/planes has no owning component (returns None), and so
+    does every frame in a part document (the part itself is the owner).
+    Requires ``AccessSelections`` to have been called on ``data`` already.
+    """
+    try:
+        entity = safe_prop(data, "OriginEntity")
+        if entity is None:
+            return None
+        comp = safe_call(as_iface(entity, "IEntity"), "GetComponent")
+        if comp is None:
+            return None
+        name = safe_prop(as_iface(comp, "IComponent2"), "Name2")
+        return str(name) if name else None
+    except Exception as e:
+        print(f"      WARN: coordinate system owner lookup failed: {e!r}")
+        return None
+
+
+def extract_coordinate_systems(doc, owners=False):
     """Return named ``CoordSys`` features in the owning document frame.
 
     Use the same ``GetCoordinateSystemTransformByName`` result as the official
@@ -2959,6 +3214,13 @@ def extract_coordinate_systems(doc):
 
     ``ICoordinateSystemFeatureData.Transform`` is retained as a fallback for
     COM wrappers that do not expose ``IModelDocExtension``.
+
+    ``owners=True`` (ASSEMBLY documents only) additionally records WHICH
+    component each frame's origin was built on -- the link an assembly-level
+    frame belongs to (see :func:`_coordsys_owner_component`).  It costs an
+    ``AccessSelections`` round trip per frame, so the transform-only fast path
+    stays the default: in a PART document the part itself is the owner, and
+    there is nothing to look up.
     """
     out = []
     extension = as_iface(
@@ -2971,14 +3233,16 @@ def extract_coordinate_systems(doc):
             try:
                 transform = safe_call(
                     extension, "GetCoordinateSystemTransformByName", name)
-                if transform is None:
-                    data = safe_call(fi, "GetDefinition")
-                    data = as_iface(data, "ICoordinateSystemFeatureData")
+                if transform is None or owners:
+                    data = as_iface(safe_call(fi, "GetDefinition"),
+                                    "ICoordinateSystemFeatureData")
                     # SolidWorks' examples access the feature selections before
-                    # reading Transform.  Some releases return the transform
-                    # without this call, but use the documented path here.
+                    # reading Transform (and OriginEntity needs them too).  Some
+                    # releases return the transform without this call, but use
+                    # the documented path here.
                     accessed = bool(safe_call(
                         data, "AccessSelections", doc, None))
+                if transform is None and data is not None:
                     transform = safe_prop(data, "Transform")
                 if transform is None:
                     raise ValueError("coordinate system has no Transform")
@@ -2987,7 +3251,9 @@ def extract_coordinate_systems(doc):
                     name=str(name),
                     document_from_frame=[
                         float(x) for x in document_from_frame.flatten()
-                    ]))
+                    ],
+                    owner_component=(_coordsys_owner_component(data, doc)
+                                     if accessed else None)))
             except Exception as e:
                 print(f"      WARN: coordinate system {name!r} could not be "
                       f"read: {e!r}")
@@ -3206,7 +3472,8 @@ def to_graph_state(comps, adjacency, ground, robot_name, source_assembly,
                    assembly_mesh=None, subassemblies=None, deep_worlds=None,
                    hidden=None, limit_joints=None, coordinate_systems=None,
                    subassembly_coordinate_systems=None, reference_axes=None,
-                   sw2urdf_marker=None, sw2urdf_config_xml=None):
+                   sw2urdf_marker=None, sw2urdf_config_xml=None,
+                   part_coordinate_systems=None):
     subs = {}
     for path, (scomps, sadj, sground) in (subassemblies or {}).items():
         subs[path] = SubGraph(components=_component_states(scomps),
@@ -3220,6 +3487,9 @@ def to_graph_state(comps, adjacency, ground, robot_name, source_assembly,
                       edges=_mate_edges(adjacency), ground=sorted(ground),
                       assembly_mesh=assembly_mesh,
                       coordinate_systems=list(coordinate_systems or []),
+                      part_coordinate_systems={
+                          k: list(v) for k, v in
+                          (part_coordinate_systems or {}).items() if v},
                       reference_axes=list(reference_axes or []),
                       sw2urdf_marker=sw2urdf_marker,
                       sw2urdf_config_xml=sw2urdf_config_xml,
@@ -3258,7 +3528,8 @@ def capture_deep_worlds(doc):
 
 
 def extract_subgraphs(doc, comps, sw=None, progress=None,
-                      coordinate_systems_out=None):
+                      coordinate_systems_out=None,
+                      part_coordinate_systems_out=None):
     """{part_path: (comps, adjacency, ground)} for every unique sub-assembly
     appearing in ``comps``, RECURSIVELY (each sub-assembly's own internals in
     its own local frame).  Prefers the in-memory doc the parent resolved;
@@ -3314,11 +3585,14 @@ def extract_subgraphs(doc, comps, sw=None, progress=None,
                 print(f"      WARN: could not switch "
                       f"{os.path.basename(path)} to configuration "
                       f"{cfg!r}: {e!r}")
-        subcomps = extract_components(md, progress=progress)
+        subcomps = extract_components(
+            md, progress=progress,
+            part_coordinate_systems_out=part_coordinate_systems_out)
         subadj, subground = build_mate_graph(md, subcomps)
         out[path] = (subcomps, subadj, subground)
         if coordinate_systems_out is not None:
-            coordinate_systems_out[path] = extract_coordinate_systems(md)
+            coordinate_systems_out[path] = extract_coordinate_systems(
+                md, owners=True)
         print(f"      sub-assembly {os.path.basename(path)}: "
               f"{len(subcomps)} children, {len(subadj)} internal mate pairs")
         live2 = {}
@@ -4207,10 +4481,32 @@ def build_model(graph, robot_name=None, base_hint=None, config=None,
         if anchor_frames:
             print(f"      SW2URDF config: {len(anchor_frames)} authored link "
                   "frame(s) used as anchors")
+    anchors = {}
     joints = build_tree(comps, adjacency, base, directed=directed,
                         root_rpy=root_rpy, root_z_offset=root_z_offset,
                         root_xyz=root_xyz, closures_out=closures_out,
-                        anchor_frames=anchor_frames)
+                        anchor_frames=anchor_frames, anchors_out=anchors)
+
+    # Named CAD coordinate systems -> frame-only links.  Done here, not with the
+    # config ports above, because the pose is expressed in the owning link's
+    # ANCHOR frame -- which only exists once the tree is built.
+    cs_mode = "auto"
+    if config and config.get("coordinate_system_links") is not None:
+        cs_mode = config.get("coordinate_system_links")
+    consumed = set()
+    if sw2cfg is not None:
+        consumed = {rec.get("origin_name") for rec in sw2cfg["links"].values()
+                    if rec.get("origin_name")}
+    taken = {p.name for p in ports}
+    cad_ports = [p for p in coordinate_system_ports(
+        graph, comps, joints, anchors, base, mode=cs_mode, consumed=consumed)
+        if p.name not in taken]
+    if cad_ports:
+        print(f"      CAD coordinate systems: {len(cad_ports)} frame-only "
+              f"link(s) -- " + ", ".join(f"{p.name} on {p.parent_link}"
+                                         for p in cad_ports))
+        ports = list(ports) + cad_ports
+
     nrev = sum(1 for j in joints if j.jtype == "revolute")
     npri = sum(1 for j in joints if j.jtype == "prismatic")
     print(f"      joint types: {nrev} revolute, {npri} prismatic, "
