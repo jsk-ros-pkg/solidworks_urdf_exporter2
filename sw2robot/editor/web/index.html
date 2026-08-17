@@ -24,6 +24,10 @@
   /* replay/record live in #toolrow, not #views -- give them the same active tint */
   #toolrow button.toggle.active { background: #3d6fb4; border-color: #7db8ff;
            color: #fff; }
+  /* the SW2URDF migration toggle: nothing here styles a disabled button, and
+     this one is dead for every package that did NOT come from the add-in --
+     so grey it out plainly instead of leaving it looking clickable */
+  #sw2urdfbtn:disabled { opacity: .35; cursor: not-allowed; }
   /* recording: red + slow pulse so it's obvious a capture is live */
   #record.active { background: #c0392b; border-color: #ff8a7a; color: #fff;
            animation: recpulse 1.2s ease-in-out infinite; }
@@ -670,6 +674,13 @@
       <button id="masslistbtn" data-i18n="ui.masslist"
               data-i18n-title="t.masslist"
               title="質量を一覧で編集">⚖ 質量</button>
+      <!-- Enabled only when the CAD graph carries the classic add-in's embedded
+           configuration.  The wrapper carries the same title as the button: a
+           DISABLED button gets no pointer events, so the "why is this grey"
+           tooltip would never appear if it lived on the button alone. -->
+      <span id="sw2urdfwrap" style="display:inline-flex"><button
+              id="sw2urdfbtn" class="toggle btn-ico" disabled><span
+              class="ico">🧬</span><span data-i18n="sw2urdf.btn">SW2URDF</span></button></span>
       <button id="bug" data-i18n-title="t.bug"
               title="壊れたらこれ: 操作ログ+状態をサーバーに送る">🐞
       </button>
@@ -1685,6 +1696,22 @@ the config and does NOT re-detect). Needs graph.json (CAD mode).">🔗 re-detect
     'redetect.ok': { en: a => `mimic re-detected ✓ — ${a.n} follower(s) coupled`, ja: a => `mimic再検出 ✓ — ${a.n} 件を連結` },
     'redetect.none': { en: 'no closed-loop (four-bar) coupling found', ja: '閉ループ(四節)mimicは見つかりませんでした' },
     'redetect.fail': { en: a => `re-detect failed: ${a.e}`, ja: a => `mimic再検出に失敗: ${a.e}` },
+    'sw2urdf.btn': { en: 'SW2URDF', ja: 'SW2URDF' },
+    'sw2urdf.tOn': { en: 'ON — reproducing the classic add-in\'s own export: its authored joint axis signs and the mass/inertia it computed. Click to go back to sw2robot\'s conventions (normalised axis signs, inertia re-derived from the CAD).',
+                     ja: 'ON — 旧アドインの出力そのものを再現中: 作者が決めた関節軸の符号と、アドインが計算した質量・慣性を使用。クリックで sw2robot の流儀（軸符号を正規化、慣性はCADから再計算）に戻します。' },
+    'sw2urdf.tOff': { en: 'This assembly carries the classic add-in\'s embedded configuration. Click to reproduce its own export exactly — the authored joint axis signs and the mass/inertia it computed — instead of sw2robot\'s conventions.',
+                      ja: 'この組立てには旧アドインの設定が埋め込まれています。クリックすると、その出力をそのまま再現します（作者が決めた関節軸の符号＋アドインが計算した質量・慣性）。' },
+    'sw2urdf.tNone': { en: 'greyed out: this package has no embedded SW2URDF configuration — nothing to migrate. The link tree is inferred from the assembly mates instead.',
+                       ja: 'グレーアウト: このパッケージにSW2URDF設定は埋め込まれていません（移行元がない）。リンクツリーは組立ての合致から推定しています。' },
+    'sw2urdf.tStale': { en: a => `greyed out: the assembly IS add-in configured (${a.marker}) but this graph.json predates payload capture — re-extract the assembly to enable the migration.`,
+                        ja: a => `グレーアウト: 組立てはアドインで設定済み (${a.marker}) ですが、この graph.json は設定データを取り込む前のものです。再extractすると使えるようになります。` },
+    'sw2urdf.tUrdf': { en: 'greyed out: this is a plain URDF opened directly, not a CAD package.',
+                       ja: 'グレーアウト: これは直接開いたURDFで、CADパッケージではありません。' },
+    'sw2urdf.start': { en: a => `switching to sw2urdf_config: ${a.mode} and rebuilding …`,
+                       ja: a => `sw2urdf_config: ${a.mode} に切り替えて再ビルド中 …` },
+    'sw2urdf.ok': { en: a => `sw2urdf_config: ${a.mode} ✓ (written to joints.yaml, Ctrl+Z to undo)`,
+                    ja: a => `sw2urdf_config: ${a.mode} ✓（joints.yamlに書き込み。Ctrl+Zで戻せます）` },
+    'sw2urdf.fail': { en: a => `SW2URDF mode change failed: ${a.e}`, ja: a => `SW2URDFモードの切替に失敗: ${a.e}` },
     'ui.selroot': { en: '⌂ make root', ja: '⌂ ルート化' },
     'ui.bulkArrow': { en: '→ bulk set:', ja: '→ 一括設定:' },
     'ui.btFixed': { en: 'fixed', ja: '固定' },
@@ -3962,6 +3989,51 @@ function syncSubassemblyAccessButton() {
 
 document.getElementById('subassemblybtn')
   .addEventListener('click', () => openSubassemblyList());
+
+// The SW2URDF migration toggle is only meaningful for a CAD package whose
+// graph.json captured the classic add-in's embedded configuration, so it stays
+// greyed out everywhere else -- with a title that says which reason applies.
+function syncSw2urdfButton() {
+  const button = document.getElementById('sw2urdfbtn');
+  if (!button) { return; }
+  const info = currentInfo?.sw2urdf ?? null;
+  const usable = !!currentInfo && currentInfo.mode !== 'urdf' && !!info?.payload;
+  button.disabled = !usable;
+  button.classList.toggle('active', usable && info.mode === 'sw2urdf_compat');
+  button.title = !currentInfo ? t('sw2urdf.tNone')
+    : currentInfo.mode === 'urdf' ? t('sw2urdf.tUrdf')
+      : usable ? (info.mode === 'sw2urdf_compat' ? t('sw2urdf.tOn') : t('sw2urdf.tOff'))
+        : info?.marker ? t('sw2urdf.tStale', { marker: info.marker })
+          : t('sw2urdf.tNone');
+  const wrap = document.getElementById('sw2urdfwrap');
+  if (wrap) { wrap.title = button.title; }
+}
+
+async function toggleSw2urdfVerbatim() {
+  const info = currentInfo?.sw2urdf;
+  if (!currentInfo || !info?.payload) { return; }
+  const mode = info.mode === 'sw2urdf_compat' ? 'auto' : 'sw2urdf_compat';
+  op('sw2urdfMode', { mode });
+  log(t('sw2urdf.start', { mode }));
+  try {
+    const resp = await fetch('/api/set_sw2urdf_mode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode }) });
+    const r = await resp.json();
+    if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
+    currentInfo.sw2urdf = r.sw2urdf ?? { ...info, mode };
+    syncSw2urdfButton();
+    log(t('sw2urdf.ok', { mode: currentInfo.sw2urdf.mode }), 'ok');
+    loadRobot(currentInfo, { keepPose: true, followCamera: true });
+    refreshHistory();
+  } catch (e) {
+    log(t('sw2urdf.fail', { e: e.message ?? e }), 'err');
+  }
+}
+document.getElementById('sw2urdfbtn')
+  ?.addEventListener('click', toggleSw2urdfVerbatim);
+syncSw2urdfButton();          // give it its "why am I grey" title before any load
 
 // shared material/density presets (label -> density kg/m³; 'custom' = prompt),
 // used by both the mass editor and the per-link select popup
@@ -9187,6 +9259,7 @@ function clearViewer() {
   document.getElementById('emptyprompt').style.display = '';
   currentInfo = null;
   syncSubassemblyAccessButton();
+  syncSw2urdfButton();
   document.getElementById('title').textContent = t('ui.title');
   document.title = 'sw2robot';
   statusEl.textContent = t('view.cleared');
@@ -9230,6 +9303,7 @@ function loadRobot(info, { drop = false, keepPose = false,
     }
   }
   syncSubassemblyAccessButton();
+  syncSw2urdfButton();
   refreshExportName();          // export field placeholder follows the open pkg
   // cover the reload gap with a display-only clone of the current robot
   // (same world pose -> the swap is pixel-invisible); geometry/materials
@@ -9932,6 +10006,7 @@ window.onLangChange = () => {
   refreshHistory();              // undo/redo titles
   renderSwStatus();             // SolidWorks status line
   refreshCompMeta();            // 🗑 excluded chip text
+  syncSw2urdfButton();          // its title is built in JS, not data-i18n-title
   // #title shows the package name when one is open (language-neutral); only
   // the empty placeholder needs re-localizing.  #status is transient -- just
   // refresh the no-package case.
