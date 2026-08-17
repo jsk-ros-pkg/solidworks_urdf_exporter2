@@ -55,10 +55,72 @@ def _payload_number_dict(data, numeric_keys, text_keys=()):
     return out or None
 
 
+def _orient_axis_to_payload(direction, axis_xyz, child_origin, joint_name):
+    """Give ``direction`` the sign the add-in authored, instead of normalising.
+
+    A SolidWorks reference axis is an undirected line, so the route's default
+    is to pick a canonical sign (largest component positive).  The payload,
+    though, records the sign SW2URDF actually exported, in the JOINT frame --
+    which in URDF is the child link frame.  Rotating it into the document
+    frame with the child's authored anchor makes the two comparable, so the
+    RefAxis line keeps its (exact) geometry and only its sign is taken from
+    the payload.
+
+    Parameters
+    ----------
+    direction : array_like
+        Unit axis direction in the document frame, from the RefAxis feature.
+    axis_xyz : sequence | None
+        The payload's ``axis`` triple, in the joint frame.
+    child_origin : numpy.ndarray
+        4x4 document-frame pose of the child link's authored frame.
+    joint_name : str
+        Joint name, for messages.
+
+    Returns
+    -------
+    (numpy.ndarray, bool)
+        Oriented direction and the ``flipped`` flag (always False here: the
+        sign now MATCHES the payload, so its limits need no mirroring).
+    """
+    dn = _unit(direction)
+    if dn is None:
+        return np.asarray(direction, float), False
+    payload_axis = None
+    if axis_xyz is not None:
+        try:
+            payload_axis = _unit(axis_xyz)
+        except Exception:
+            payload_axis = None
+    if payload_axis is None:
+        _warn(f"sw2urdf_compat: joint {joint_name!r} has no payload axis to take a "
+              "sign from; falling back to canonical sign normalisation")
+        return _normalize_axis_direction(direction)
+
+    world_axis = np.asarray(child_origin, float)[:3, :3] @ payload_axis
+    world_axis = _unit(world_axis)
+    if world_axis is None:
+        _warn(f"sw2urdf_compat: joint {joint_name!r} payload axis degenerates under "
+              "the child anchor rotation; falling back to canonical sign")
+        return _normalize_axis_direction(direction)
+
+    dot = float(np.dot(dn, world_axis))
+    if abs(dot) < 0.9998:      # ~1.1 deg -- the two should be the same line
+        _warn(f"sw2urdf_compat: joint {joint_name!r} payload axis and reference axis "
+              f"disagree by {np.degrees(np.arccos(min(1.0, abs(dot)))):.3f} "
+              "deg; keeping the reference axis geometry with the payload sign")
+    if dot < 0.0:
+        dn = -dn
+    # Snap float noise (and negative zeros) so the URDF text stays clean.
+    dn[np.abs(dn) < 1e-12] = 0.0
+    return dn, False
+
+
 def reconstruct_sw2urdf_config_from_payload(payload, components,
                                             coordinate_systems, reference_axes,
                                             tolerance=1e-5,
-                                            subassemblies=None):
+                                            subassemblies=None,
+                                            compat=False):
     """Reconstruct SW2URDF mapping from parsed SW2URDF payload data.
 
     Parameters
@@ -81,6 +143,11 @@ def reconstruct_sw2urdf_config_from_payload(payload, components,
         sub-assembly, in which case the payload scopes its name as
         ``"<name> <component-N>"``; those are resolved through the owning
         component's sub-assembly and composed into the document frame.
+    compat : bool, optional
+        Reproduce the add-in's own output rather than sw2robot's conventions:
+        keep the authored axis SIGN (no canonical normalisation, so limits
+        need no mirroring) and carry each link's payload ``inertial`` through
+        for the caller to apply.
 
     Returns
     -------
@@ -271,6 +338,7 @@ def reconstruct_sw2urdf_config_from_payload(payload, components,
             "origin_name": root_origin_name,
             "origin": root_origin,
             "extra_components": list(root_members),
+            "inertial": root_payload.get("inertial") if compat else None,
         }
     }
 
@@ -364,6 +432,7 @@ def reconstruct_sw2urdf_config_from_payload(payload, components,
                 "origin": origin,
                 "extra_components": list(
                     members_by_component.get(child_component) or []),
+                "inertial": rec.get("inertial") if compat else None,
             }
 
         if axis_direction is not None and axis_point is None:
@@ -376,7 +445,11 @@ def reconstruct_sw2urdf_config_from_payload(payload, components,
             "child": child_component,
         }
         if axis_direction is not None and axis_point is not None:
-            axis_direction, flipped = _normalize_axis_direction(axis_direction)
+            if compat:
+                axis_direction, flipped = _orient_axis_to_payload(
+                    axis_direction, joint.get("axis_xyz"), origin, joint_name)
+            else:
+                axis_direction, flipped = _normalize_axis_direction(axis_direction)
             child_origin = np.asarray(origin[:3, 3], float)
             joint_rec.update({
                 "axis_point": np.asarray(axis_point, float).copy(),

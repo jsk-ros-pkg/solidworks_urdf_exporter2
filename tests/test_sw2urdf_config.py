@@ -440,3 +440,170 @@ def test_sw2urdf_config_off_accepts_the_yaml_boolean():
     # and the boolean TRUE keeps the default
     on = build_model(graph, config=yaml.safe_load("sw2urdf_config: yes\n"))
     assert {j.name for j in on.joints} == {"hip_y", "knee_p"}
+
+
+# ----------------------------------------------------- sw2urdf_compat mode
+
+
+def _doubles(values):
+    return "".join(f"<double>{v}</double>" for v in values)
+
+
+def _axis_element(xyz):
+    return f'''<URDFElement i:type="Axis">
+          <Attributes>
+            <Attribute><AttributeType>xyz</AttributeType>
+              <Value i:type="ArrayOfdouble">{_doubles(xyz)}</Value></Attribute>
+          </Attributes>
+          <ChildElements/><ElementName>axis</ElementName>
+        </URDFElement>'''
+
+
+def _inertial_element(mass, com, inertia):
+    keys = ("ixx", "ixy", "ixz", "iyy", "iyz", "izz")
+    cells = "".join(
+        f'<Attribute><AttributeType>{k}</AttributeType>'
+        f'<Value i:type="double">{v}</Value></Attribute>'
+        for k, v in zip(keys, inertia))
+    return f'''<URDFElement i:type="Inertial">
+        <Attributes/>
+        <ChildElements>
+          <URDFElement i:type="Origin">
+            <Attributes>
+              <Attribute><AttributeType>xyz</AttributeType>
+                <Value i:type="ArrayOfdouble">{_doubles(com)}</Value></Attribute>
+              <Attribute><AttributeType>rpy</AttributeType>
+                <Value i:type="ArrayOfdouble">{_doubles((0, 0, 0))}</Value></Attribute>
+            </Attributes>
+            <ChildElements/><ElementName>origin</ElementName>
+          </URDFElement>
+          <URDFElement i:type="Mass">
+            <Attributes><Attribute><AttributeType>value</AttributeType>
+              <Value i:type="double">{mass}</Value></Attribute></Attributes>
+            <ChildElements/><ElementName>mass</ElementName>
+          </URDFElement>
+          <URDFElement i:type="Inertia">
+            <Attributes>{cells}</Attributes>
+            <ChildElements/><ElementName>inertia</ElementName>
+          </URDFElement>
+        </ChildElements>
+        <ElementName>inertial</ElementName>
+      </URDFElement>'''
+
+
+_ROOT_INERTIAL = (2.5, (0.01, 0.02, 0.03), (0.4, 0.0, 0.0, 0.5, 0.0, 0.6))
+_HIP_INERTIAL = (0.75, (0.0, 0.0, -0.04), (0.1, 0.01, 0.0, 0.2, 0.0, 0.3))
+
+
+def _payload_xml_full(axis_xyz=(-1.0, 0.0, 0.0)):
+    """The fixture payload with what a real add-in export also carries: the
+    authored joint axis (with its sign) and a complete inertial per link."""
+    return f'''<Link xmlns:z="http://schemas.microsoft.com/2003/10/Serialization/" xmlns:i="http://www.w3.org/2001/XMLSchema-instance">
+  <Attributes>
+    <Attribute><AttributeType>name</AttributeType><Value>base_link</Value></Attribute>
+  </Attributes>
+  <ChildElements>{_inertial_element(*_ROOT_INERTIAL)}</ChildElements>
+  <ElementName>link</ElementName>
+  <Children>
+    <Link>
+      <Attributes>
+        <Attribute><AttributeType>name</AttributeType><Value>hip_link</Value></Attribute>
+      </Attributes>
+      <ChildElements>
+        {_inertial_element(*_HIP_INERTIAL)}
+        <URDFElement i:type="Joint">
+          <Attributes>
+            <Attribute z:Id="j1"><AttributeType>name</AttributeType><Value>hip_y</Value></Attribute>
+            <Attribute z:Id="j2"><AttributeType>type</AttributeType><Value>revolute</Value></Attribute>
+          </Attributes>
+          <ChildElements>
+            {_axis_element(axis_xyz)}
+            <URDFElement z:Id="LIM" i:type="Limit">
+              <Attributes>
+                <Attribute z:Id="L1"><AttributeType>lower</AttributeType><Value i:type="double">-1.0</Value></Attribute>
+                <Attribute z:Id="L2"><AttributeType>upper</AttributeType><Value i:type="double">0.5</Value></Attribute>
+              </Attributes>
+              <ChildElements/><ElementName>limit</ElementName>
+              <LowerAttribute z:Ref="L1"/><UpperAttribute z:Ref="L2"/>
+            </URDFElement>
+          </ChildElements>
+          <ElementName>joint</ElementName>
+          <AxisName>hip_y</AxisName>
+          <CoordinateSystemName>frameA</CoordinateSystemName>
+          <NameAttribute z:Ref="j1"/>
+          <TypeAttribute z:Ref="j2"/>
+          <Limit z:Ref="LIM"/>
+        </URDFElement>
+      </ChildElements>
+      <ElementName>link</ElementName>
+      <Children/>
+      <SWComponentPIDs><base64Binary>{_pid_blob("hip_link-1@asm")}</base64Binary></SWComponentPIDs>
+    </Link>
+  </Children>
+  <SWComponentPIDs><base64Binary>{_pid_blob("base_link-1@asm")}</base64Binary></SWComponentPIDs>
+</Link>'''
+
+
+def test_sw2urdf_compat_keeps_the_authored_axis_sign_and_limits():
+    """`auto` normalises the undirected RefAxis to a canonical sign and
+    mirrors the payload limits to match; `sw2urdf_compat` reproduces the
+    own export instead, so the axis keeps its authored -X and the limits are
+    written exactly as the author left them."""
+    graph = _payload_graph(_payload_xml_full(axis_xyz=(-1.0, 0.0, 0.0)))
+
+    auto = {j.name: j for j in build_model(
+        graph, config={"sw2urdf_config": "auto"}).joints}
+    np.testing.assert_allclose(auto["hip_y"].axis, [1.0, 0.0, 0.0])
+    assert auto["hip_y"].lower == pytest.approx(-0.5)
+    assert auto["hip_y"].upper == pytest.approx(1.0)
+
+    compat = {j.name: j for j in build_model(
+        graph, config={"sw2urdf_config": "sw2urdf_compat"}).joints}
+    np.testing.assert_allclose(compat["hip_y"].axis, [-1.0, 0.0, 0.0])
+    assert compat["hip_y"].lower == pytest.approx(-1.0)
+    assert compat["hip_y"].upper == pytest.approx(0.5)
+
+
+def test_sw2urdf_compat_takes_the_payload_inertial():
+    """The add-in stores the mass properties it computed from the CAD, in the
+    link frame.  `sw2urdf_compat` emits those; `auto` keeps deriving its own."""
+    graph = _payload_graph(_payload_xml_full())
+
+    auto = build_model(graph, config={"sw2urdf_config": "auto"})
+    assert all(c.inertial_override is None for c in auto.components)
+
+    model = build_model(graph, config={"sw2urdf_config": "sw2urdf_compat"})
+    by_link = {c.link_name: c for c in model.components}
+    hip = by_link["hip_link"].inertial_override
+    assert hip["mass"] == pytest.approx(_HIP_INERTIAL[0])
+    np.testing.assert_allclose(hip["com"], _HIP_INERTIAL[1])
+    np.testing.assert_allclose(hip["inertia"], _HIP_INERTIAL[2])
+    assert by_link["base_link"].inertial_override["mass"] == pytest.approx(
+        _ROOT_INERTIAL[0])
+
+
+def test_sw2urdf_compat_skips_the_inertial_of_a_bundled_link(capsys):
+    """A link bundling extra components leaves them as separate fixed links
+    that carry their own inertial, so the add-in's whole-link value must NOT
+    be copied onto the main component -- that would double-count."""
+    xml = _payload_xml_full().replace(
+        _pid_blob("hip_link-1@asm"),
+        _pid_blob2("hip_link-1@asm", "bracket-1@asm"))
+    graph = _payload_graph(xml)
+    graph.components.append(_comp("bracket-1", [0.0, 0.1, 0.1]))
+
+    model = build_model(graph, config={"sw2urdf_config": "sw2urdf_compat"})
+    by_link = {c.link_name: c for c in model.components}
+    assert by_link["hip_link"].inertial_override is None
+    assert by_link["base_link"].inertial_override is not None
+    assert "compat inertial skipped" in capsys.readouterr().out
+
+
+def test_sw2urdf_compat_refuses_a_graph_without_the_payload():
+    """sw2urdf_compat reproduces the add-in's OWN output, which only the payload
+    route can do -- without a payload it must fail rather than quietly
+    reconstruct something close."""
+    graph = _graph(include_knee_axis=True)
+    graph.sw2urdf_config_xml = None
+    with pytest.raises(RuntimeError, match="sw2urdf_compat"):
+        build_model(graph, config={"sw2urdf_config": "sw2urdf_compat"})

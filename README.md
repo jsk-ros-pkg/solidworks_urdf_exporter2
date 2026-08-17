@@ -53,6 +53,12 @@ SolidWorks add-in. The two tools solve the same first mile differently, and they
   the classic add-in? Open that `.urdf` in sw2robot's editor to re-root the tree,
   retype joints, add limits/mimic, place end-coord frames, and re-export a ROS
   package. sw2robot works on *any* URDF, not only its own output.
+- **An assembly the add-in already configured is read, not re-guessed.** The
+  add-in stores its whole configuration inside the `.SLDASM`; sw2robot finds it
+  and uses the authored link tree, names, frames and axes instead of inferring
+  them. Add `sw2urdf_config: sw2urdf_compat` to the joint config to go further and
+  reproduce the add-in's *own export* — its authored axis signs and the mass /
+  inertia it computed — so a migrated URDF matches the one you already have.
 
 Which one fits depends on your workflow, not on which is "better":
 

@@ -214,6 +214,57 @@ def _cad_mode(pkg_dir):
     return bool(pkg_dir) and os.path.exists(os.path.join(pkg_dir, "graph.json"))
 
 
+# joints.yaml `sw2urdf_config:` values, and the two YAML spellings that arrive
+# as booleans (a bare `off:` parses to False) -- kept in step with
+# exporter.model.build_model, which does the same mapping.
+SW2URDF_MODES = ("auto", "off", "require", "sw2urdf_compat")
+_SW2URDF_BOOL = {"false": "off", "true": "auto"}
+
+
+def _sw2urdf_status(pkg_dir, urdf_rel):
+    """What the SW2URDF control needs: is the add-in's configuration embedded
+    in this package, and which mode is selected.
+
+    ``payload`` is True only when the CAD graph carries the add-in's own
+    serialized configuration -- the sole thing ``sw2urdf_compat`` can copy the
+    authored axis signs and mass properties from, and the reason the UI greys
+    the control out for every other package rather than offering a mode whose
+    rebuild would fail.  ``marker`` is set for an assembly that was configured
+    with the add-in even when the payload could not be captured, so the UI can
+    say "configured, but re-extract to migrate it" instead of staying silent.
+    """
+    out = {"payload": False, "marker": None, "mode": "auto"}
+    if not pkg_dir or not urdf_rel:
+        return out
+    gj = os.path.join(pkg_dir, "graph.json")
+    if os.path.exists(gj):
+        from sw2robot.exporter.state import GraphState
+        try:
+            gs = GraphState.load(gj)
+        except Exception:
+            gs = None
+        if gs is not None:
+            out["marker"] = str(
+                getattr(gs, "sw2urdf_marker", "") or "").strip() or None
+            out["payload"] = bool(str(
+                getattr(gs, "sw2urdf_config_xml", "") or "").strip())
+    name = os.path.splitext(os.path.basename(urdf_rel))[0]
+    yml = os.path.join(pkg_dir, name + ".joints.yaml")
+    if os.path.exists(yml):
+        import yaml as _yaml
+        try:
+            cfg = _yaml.safe_load(open(yml, encoding="utf-8").read()) or {}
+        except Exception:
+            cfg = {}
+        raw = cfg.get("sw2urdf_config") if isinstance(cfg, dict) else None
+        if raw is not None:
+            mode = str(raw).strip().lower()
+            mode = _SW2URDF_BOOL.get(mode, mode)
+            if mode in SW2URDF_MODES:
+                out["mode"] = mode
+    return out
+
+
 def _um_load(pkg_dir, urdf_rel):
     """(Re)build the URDF-mode overlay state for the freshly-opened package and
     merge any saved sidecar edits.  Returns the state."""
@@ -4748,7 +4799,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         # 'cad' = joints.yaml + build() path; 'urdf' = direct overlay editing
         # (the frontend gates URDF-only controls such as inertial editing on this)
         return {"name": cls.robot_name, "urdf": "/pkg/" + cls.urdf_rel,
-                "mode": "cad" if _cad_mode(cls.pkg_dir) else "urdf"}
+                "mode": "cad" if _cad_mode(cls.pkg_dir) else "urdf",
+                "sw2urdf": _sw2urdf_status(cls.pkg_dir, cls.urdf_rel)}
 
     def _um_reply(self, fn, *args):
         """Run a URDF-mode edit and JSON-reply, turning a bad-input error into a
@@ -6493,6 +6545,57 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 print(f"[sw2robot.web] set_exclude: {names} "
                       f"on={body.get('on', True)} clear={body.get('clear')}")
                 return self._send_json({"excluded": excluded})
+            if parsed.path == "/api/set_sw2urdf_mode":
+                # How much of the classic add-in's embedded configuration to
+                # follow (joints.yaml `sw2urdf_config:`).  'sw2urdf_compat'
+                # its OWN export -- authored axis signs and its mass/inertia --
+                # and needs the serialized payload, so refuse it up front with
+                # the reason rather than letting the rebuild fail deep inside.
+                cls = type(self)
+                n = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(n) or b"{}")
+                mode = str(body.get("mode") or "").strip().lower()
+                if mode not in SW2URDF_MODES:
+                    return self._send_json(
+                        {"error": f"unknown mode {body.get('mode')!r}; "
+                                  f"use one of {', '.join(SW2URDF_MODES)}"}, 400)
+                if not cls.pkg_dir:
+                    return self._send_json({"error": "no package open"}, 400)
+                status = _sw2urdf_status(cls.pkg_dir, cls.urdf_rel)
+                if mode == "sw2urdf_compat" and not status["payload"]:
+                    return self._send_json(
+                        {"error": "this package carries no embedded SW2URDF "
+                                  "payload to migrate"
+                                  + (" -- the assembly is add-in configured "
+                                     "but the payload was not captured; "
+                                     "re-extract it" if status["marker"]
+                                     else ""),
+                         "sw2urdf": status}, 400)
+                name = os.path.splitext(os.path.basename(cls.urdf_rel))[0]
+                yml = os.path.join(cls.pkg_dir, name + ".joints.yaml")
+                if not os.path.exists(yml):
+                    return self._send_json(
+                        {"error": "joints.yaml not found"}, 400)
+                with open(yml, encoding="utf-8") as f:
+                    txt = f.read()
+                key = "sw2urdf_config"
+                if re.search(r"(?m)^" + key + r":", txt):
+                    txt = re.sub(r"(?m)^" + key + r":.*$", f"{key}: {mode}",
+                                 txt, count=1)
+                else:
+                    txt = f"{key}: {mode}\n" + txt
+                _snapshot(cls.pkg_dir, yml, f"sw2urdf_config: {mode}")
+                with open(yml, "w", encoding="utf-8") as f:
+                    f.write(txt)
+                from sw2robot.exporter.export import build
+                try:
+                    build(cls.pkg_dir, config_path=yml)
+                except Exception as e:
+                    return self._send_json(
+                        {"error": f"rebuild failed: {e}"}, 500)
+                print(f"[sw2robot.web] set_sw2urdf_mode: {mode}")
+                return self._send_json(
+                    {"sw2urdf": _sw2urdf_status(cls.pkg_dir, cls.urdf_rel)})
             if parsed.path == "/api/set_material":
                 cls = type(self)
                 n = int(self.headers.get("Content-Length", 0))
