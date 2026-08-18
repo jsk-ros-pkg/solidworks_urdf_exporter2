@@ -4367,8 +4367,82 @@ def _shutdown_sw():
     _reap_spawned_sw()             # belt-and-suspenders: kill any we spawned
 
 
-def _run_extract(sldasm):
-    """Background thread: SolidWorks extract + build -> module package."""
+def _acquire_sw(progress):
+    """The SolidWorks session to work in: the warm one, else the user's
+    running instance, else a private one -- cached in ``_sw['sess']``.
+
+    Split out of :func:`_run_extract` because listing an assembly's
+    configurations needs the same session (and warms it for the extract that
+    usually follows)."""
+    sw = _warm_sw(progress)
+    if sw is not None:
+        return sw
+    from sw2robot.exporter.swcom import SolidWorks
+    # Reuse the user's ALREADY-RUNNING SolidWorks if we can attach to it
+    # (same login session): no new process to start (instant, no ~1 min
+    # cold start) and nothing to leak.  The throwaway copy is opened in
+    # that instance and closed afterwards; the user's own documents are
+    # never modified.
+    try:
+        progress("attaching to the running SolidWorks ...")
+        sw = SolidWorks(attach=True)
+        progress("attached to the running SolidWorks ✓ (reusing it)")
+    except Exception:
+        progress("no attachable SolidWorks; starting a private instance "
+                 "(this can take a minute; later extractions reuse it) ...")
+        # Create the COM object in THIS thread.  SolidWorks is STA-bound:
+        # an instance built on another thread (e.g. a timeout worker)
+        # loses its apartment when that thread ends, so OpenDoc6 then
+        # fails with CO_E_OBJNOTCONNECTED ("object not connected").
+        before = _sldworks_pids()
+        sw = SolidWorks(visible=False)
+        for pid in _sldworks_pids() - before:   # the one(s) we just spawned
+            _record_spawned_pid(pid)
+    _sw["sess"] = sw
+    return sw
+
+
+def _configurations_of(cad_path):
+    """(names, source) -- the configurations ``cad_path`` offers, read WITHOUT
+    loading the document (ISldWorks::GetConfigurationNames on the closed file).
+
+    Uses the warm session when there is one, else the user's running
+    SolidWorks.  It deliberately does NOT start a private instance: a picker
+    must not cost the user a minute of cold start, and a COM object created on
+    this short-lived request thread could not be cached anyway (see
+    :func:`_acquire_sw`).  With no session reachable, returns
+    ``([], "unavailable")`` and the caller falls back to the file's
+    saved-active configuration."""
+    from sw2robot.exporter.export import configuration_names
+    from sw2robot.exporter.swcom import SolidWorks
+
+    sess = _sw.get("sess")
+    if sess is not None:
+        try:
+            if sess.app is not None and sess._responds():
+                return configuration_names(cad_path, sw=sess), "warm"
+        except Exception:
+            pass
+    try:
+        own = SolidWorks(attach=True)
+    except Exception:
+        return [], "unavailable"
+    try:
+        return configuration_names(cad_path, sw=own), "attached"
+    except Exception as e:
+        print(f"[sw2robot.web] configuration list failed: {e!r}")
+        return [], "unavailable"
+    finally:
+        own.shutdown()           # attach mode leaves the user's SolidWorks alone
+
+
+def _run_extract(sldasm, configuration=None):
+    """Background thread: SolidWorks extract + build -> module package.
+
+    ``configuration`` -- extract THIS assembly configuration instead of the
+    file's saved-active one.  Configurations can suppress whole components and
+    swap a part for another length/variant, so the choice changes what comes
+    out; None keeps the previous behaviour (whatever the file was saved on)."""
     def progress(msg):
         # cooperative cancel: the extract calls progress() between COM steps
         # (per phase, per mesh), so raising here aborts at the next checkpoint
@@ -5308,6 +5382,24 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                          "phase": _limjob["phase"], "error": _limjob["error"],
                          "results": _limjob["results"],
                          "done": not _limjob["running"]})
+            if path == "/api/configurations":
+                # what the assembly-configuration picker offers, before the
+                # (multi-minute) extract commits to one
+                target = (query.get("path") or [""])[0]
+                target = os.path.abspath(os.path.expanduser(
+                    target.strip().strip('"')))
+                if not (os.path.isfile(target)
+                        and target.lower().endswith((".sldasm", ".sldprt"))):
+                    return self._send_json(
+                        {"error": f"not a .sldasm/.sldprt file: {target}"}, 400)
+                try:
+                    names, src = _configurations_of(target)
+                except Exception as e:
+                    return self._send_json(
+                        {"configurations": [], "source": "error",
+                         "error": f"{type(e).__name__}: {e}"})
+                return self._send_json({"configurations": names,
+                                        "source": src})
             if path == "/api/extract":
                 target = (query.get("path") or [""])[0]
                 target = os.path.abspath(os.path.expanduser(
@@ -5316,6 +5408,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                         and target.lower().endswith((".sldasm", ".sldprt"))):
                     return self._send_json(
                         {"error": f"not a .sldasm/.sldprt file: {target}"}, 400)
+                # "" = keep the file's saved-active configuration
+                cfg = (query.get("configuration") or [""])[0].strip() or None
                 if not _prog_start("extract", _EXTRACT_STAGES):
                     return self._send_json(
                         {"error": "a job is already running"}, 409)
@@ -5323,7 +5417,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                     _job.update(running=True, log=[], error=None,
                                 package=None, cancel=False, cancelled=False)
                 try:
-                    threading.Thread(target=_run_extract, args=(target,),
+                    threading.Thread(target=_run_extract, args=(target, cfg),
                                      daemon=True).start()
                 except Exception as e:
                     # release the guard the never-started worker can't (see the

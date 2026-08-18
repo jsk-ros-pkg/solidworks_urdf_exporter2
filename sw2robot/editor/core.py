@@ -175,7 +175,7 @@ def import_module(package_dir, config_path=None, base_hint=None,
 def extract_and_import(assembly_path, out_dir=None, robot_name=None,
                        base_hint=None, config_path=None,
                        visible=False, progress=None,
-                       sw=None) -> RobotCompilerState:
+                       sw=None, configuration=None) -> RobotCompilerState:
     """Drive SolidWorks to extract a live assembly, then build it into a state.
 
     This is the *whole* CAD->state pipeline in one call (the slow ``extract``
@@ -188,6 +188,12 @@ def extract_and_import(assembly_path, out_dir=None, robot_name=None,
     module stays cheap and OS-agnostic (the headless ``build`` path never needs
     them).  ``progress`` -- if given -- is called with short status strings so a
     UI can show what the (multi-minute) extract is doing.
+
+    ``configuration`` -- extract THIS assembly configuration instead of the
+    file's saved-active one.  A configuration can suppress whole components and
+    point instances at other variants of a part, so it decides what the URDF
+    contains; None keeps the file's saved-active one (see
+    :func:`sw2robot.exporter.export.configuration_names` for the choices).
     """
     from sw2robot.exporter.export import extract
 
@@ -195,7 +201,8 @@ def extract_and_import(assembly_path, out_dir=None, robot_name=None,
         progress("reusing the warm SolidWorks session ..." if sw is not None
                  else "starting SolidWorks (this can take a minute) ...")
     pkg_dir = extract(assembly_path, out_dir=out_dir, robot_name=robot_name,
-                      visible=visible, progress=progress, sw=sw)
+                      visible=visible, progress=progress, sw=sw,
+                      configuration=configuration)
     # A re-extract regenerates graph.json but extract() leaves the existing
     # <name>.joints.yaml in place.  Without a config the build would take the
     # auto path and OVERWRITE that file -- silently dropping every edit the user

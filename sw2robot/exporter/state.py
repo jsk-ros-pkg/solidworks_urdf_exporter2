@@ -191,6 +191,14 @@ class GraphState(BaseModel):
     # LimitDistance/LimitAngle mates = the assembly's real sliders/hinges; the
     # build promotes these edges to prismatic/revolute (empty on older extracts)
     limit_joints: list[LimitJoint] = []
+    # Which CONFIGURATION of the top-level assembly this graph was read from,
+    # and every configuration the file offers.  A configuration suppresses
+    # components and swaps part variants, so two graphs of one .SLDASM can
+    # legitimately differ; recording the choice makes a package say which
+    # variant it is, and lets the editor offer the others without SolidWorks.
+    # Both empty/None on older extracts.
+    configuration: str | None = None
+    configurations: list[str] = []
 
     def save(self, path):
         with open(path, "w", encoding="utf-8") as f:

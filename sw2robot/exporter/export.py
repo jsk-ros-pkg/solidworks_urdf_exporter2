@@ -60,6 +60,29 @@ from .urdf_writer import write_ros_package, write_urdf
 GRAPH_FILE = "graph.json"
 
 
+def configuration_names(cad_path, sw=None, visible=False):
+    """Configuration names in a .SLDASM/.SLDPRT, WITHOUT opening it.
+
+    ``ISldWorks::GetConfigurationNames`` reads them straight off the closed
+    file, so a UI can offer the choice up front instead of paying the
+    multi-minute assembly load first.  Pass a live ``SolidWorks`` session as
+    ``sw`` to reuse it; otherwise a private one is started and shut down.
+
+    Returns ``[]`` when the file has none to report -- callers should treat
+    that as "just use the saved-active one", not as an error.  Which one IS
+    saved-active is not knowable without opening the document; that is why the
+    extract's ``configuration=None`` (keep whatever the file was saved on)
+    stays the default.
+    """
+    cad_path = os.path.abspath(cad_path)
+    if sw is not None:
+        names = safe_call(sw.app, "GetConfigurationNames", cad_path)
+    else:
+        with SolidWorks(visible=visible) as own:
+            names = safe_call(own.app, "GetConfigurationNames", cad_path)
+    return [str(n) for n in (names or [])]
+
+
 def _tolerant_console():
     """Don't let a non-ASCII component name (e.g. a Turkish 'gövde') crash a
     print on a legacy console code page (Japanese cp932, ...)."""
@@ -129,6 +152,7 @@ def _extract_into(sw, assembly_path, pkg_dir, meshes_dir, robot_name, _say,
     doc = sw.open_copy(assembly_path)
     # surface the choice: extracts silently follow the file's SAVED-ACTIVE
     # configuration, which is not necessarily the one on the user's screen
+    cfgs, used_cfg = [], None
     try:
         md = as_iface(doc, "IModelDoc2")
         cfgs = [str(c) for c in (safe_call(md, "GetConfigurationNames") or [])]
@@ -141,6 +165,11 @@ def _extract_into(sw, assembly_path, pkg_dir, meshes_dir, robot_name, _say,
             else:
                 print(f"      WARN: configuration {configuration!r} not found; "
                       f"staying on {active!r}")
+        # what is ACTUALLY in effect -- a rejected switch must not be recorded
+        # as if it had happened
+        used_cfg = str(md.ConfigurationManager.ActiveConfiguration.Name)
+        if len(cfgs) > 1:
+            _say(f"extracting configuration {used_cfg!r}")
     except Exception as e:
         if configuration:
             print(f"      WARN: could not switch configuration ({e!r})")
@@ -240,7 +269,8 @@ def _extract_into(sw, assembly_path, pkg_dir, meshes_dir, robot_name, _say,
                            sw2urdf_config_xml=sw2urdf_config_xml,
                            subassembly_coordinate_systems=
                            subassembly_coordinate_systems,
-                           part_coordinate_systems=part_coordinate_systems)
+                           part_coordinate_systems=part_coordinate_systems,
+                           configuration=used_cfg, configurations=cfgs)
     graph.save(os.path.join(pkg_dir, GRAPH_FILE))
     sw.close_doc(doc)
     return pkg_dir

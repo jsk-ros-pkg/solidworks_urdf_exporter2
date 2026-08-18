@@ -479,6 +479,7 @@ await page.evaluate(() => {
     const url = typeof u === 'string' ? u : u?.url;
     const J = o => new Response(JSON.stringify(o),
       { headers: { 'Content-Type': 'application/json' } });
+    if (url && url.includes('/api/configurations')) return J({ configurations: [] });
     if (url && url.includes('/api/extract?')) return J({ started: true });
     if (url && url.includes('/api/progress')) return J(window._P[window._phase]);
     return of(u, opts);
@@ -520,6 +521,7 @@ await page.evaluate(() => {
       return J([{ name: 'built_pkg', path: 'C:/out/built_pkg' }]);
     if (url && url.includes('/api/fs'))           // server browser root
       return J({ path: '', parent: null, dirs: [], files: [] });
+    if (url && url.includes('/api/configurations')) return J({ configurations: [] });
     if (url && url.includes('/api/extract?')) return J({ started: true });
     if (url && url.includes('/api/progress'))
       return J({ job: 'extract', running: true, done: false, cancelled: false,
