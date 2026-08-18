@@ -10,6 +10,7 @@ closed afterwards.
 
 from __future__ import annotations
 
+import json
 import os
 
 from .swcom import (
@@ -126,6 +127,58 @@ def _cache_is_fresh(cand, source_path):
         return True
 
 
+# meshes/<MANIFEST>: which (part file, configuration) produced each cached
+# mesh.  The cache is keyed on the LINK NAME, and a .3dxml carries no record of
+# the configuration it was tessellated from -- so after the user switches a
+# part (or the assembly) to another configuration, the previous config's mesh
+# sits at exactly the filename the new one would take, passes the mtime gate
+# (the .SLDPRT itself did not change) and is reused: the export then MIXES
+# geometry from two configurations.  The manifest makes the cached config
+# checkable, so a config change invalidates just the meshes it affects.
+_CACHE_MANIFEST = "cache_manifest.json"
+
+
+def _manifest_load(meshes_dir):
+    try:
+        with open(os.path.join(meshes_dir, _CACHE_MANIFEST),
+                  encoding="utf-8") as f:
+            man = json.load(f)
+        return man if isinstance(man, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _manifest_record(meshes_dir, mesh_path, source_path, config):
+    """Remember that ``mesh_path`` holds ``source_path`` @ ``config``."""
+    if not meshes_dir:
+        return
+    man = _manifest_load(meshes_dir)
+    man[os.path.basename(mesh_path)] = {"source": str(source_path),
+                                        "config": config or None}
+    dst = os.path.join(meshes_dir, _CACHE_MANIFEST)
+    try:
+        tmp = dst + ".part"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(man, f, ensure_ascii=False, indent=1, sort_keys=True)
+        os.replace(tmp, dst)
+    except OSError as e:
+        print(f"    could not update the mesh cache manifest: {e!r}")
+
+
+def _cache_holds_config(meshes_dir, cand, config):
+    """Whether the cached ``cand`` is known to hold ``config``'s geometry.
+
+    A mesh with no manifest entry is of UNKNOWN configuration (written by an
+    older version, or by hand), so it is refused rather than trusted -- one
+    slower extract beats silently mixing two configurations."""
+    if not meshes_dir:
+        return False
+    rec = _manifest_load(meshes_dir).get(os.path.basename(cand))
+    if not isinstance(rec, dict):
+        return False
+    return (rec.get("config") or None) == (config or None)
+
+
 def _refresh_mass_with_config(app, comp):
     """Re-read material/density/mass properties on the instance's OWN
     configuration.  The values captured during the graph walk came from the
@@ -204,11 +257,11 @@ def export_meshes(app, doc, comps, meshes_dir, progress=None, by_path=None):
             progress(len(by_path) + 1, total, comp.link_name)
         out = os.path.join(meshes_dir, comp.link_name + ".3dxml")
         reused = False
-        # a cached file cannot say WHICH configuration it holds -- for files
-        # whose instances diverge, always re-export on the right config
-        for cand in (() if path in divergent else
-                     (out, os.path.join(meshes_dir, comp.link_name + ".glb"))):
-            if _cache_is_fresh(cand, path):
+        # a cached file cannot say WHICH configuration it holds -- the
+        # manifest can, so reuse only a mesh recorded as THIS config's
+        for cand in (out, os.path.join(meshes_dir, comp.link_name + ".glb")):
+            if _cache_is_fresh(cand, path) \
+                    and _cache_holds_config(meshes_dir, cand, cfg):
                 rel = os.path.join("meshes", os.path.basename(cand))
                 by_path[key] = rel
                 comp.mesh_file = rel
@@ -227,6 +280,13 @@ def export_meshes(app, doc, comps, meshes_dir, progress=None, by_path=None):
             # parent already fully resolved, so it exports real geometry where
             # a standalone OpenDoc6 of the same file comes up hollow
             try:
+                # ... but the shared doc opens on the file's SAVED-ACTIVE
+                # configuration, which need NOT be the one this instance
+                # references (a part saved on 'variant_b' but assembled as
+                # 'Default').  Exporting it as-is tessellates the wrong
+                # variant, so switch first -- as _export_by_opening and
+                # _compose_from_parts already do.
+                _show_config(md, cfg)
                 ok = _save_3dxml(md, out)
             except Exception as e:
                 print(f"  {comp.name}: in-session export failed ({e!r}); "
@@ -246,6 +306,7 @@ def export_meshes(app, doc, comps, meshes_dir, progress=None, by_path=None):
             by_path[key] = rel
             comp.mesh_file = rel
             n += 1
+            _manifest_record(meshes_dir, out, path, cfg)
             print(f"  mesh: {comp.link_name} <- {os.path.basename(path)} "
                   f"({os.path.getsize(out)} B)")
             if path in divergent and not comp.is_subassembly:
@@ -267,7 +328,11 @@ def export_part_mesh(md, comp, meshes_dir):
     cache of real geometry is reused when present (see :func:`_cache_is_fresh`)."""
     os.makedirs(meshes_dir, exist_ok=True)
     out = os.path.join(meshes_dir, comp.link_name + ".3dxml")
-    if _cache_is_fresh(out, comp.part_path):
+    # the part may have been re-saved on another configuration since; the
+    # manifest is what tells the cached mesh's config apart (see _CACHE_MANIFEST)
+    cfg = getattr(comp, "configuration", None) or active_config(md)
+    if _cache_is_fresh(out, comp.part_path) \
+            and _cache_holds_config(meshes_dir, out, cfg):
         comp.mesh_file = os.path.join("meshes", os.path.basename(out))
         return 1
     ok = False
@@ -277,6 +342,7 @@ def export_part_mesh(md, comp, meshes_dir):
         print(f"  part mesh in-session export failed ({e!r})")
     if ok:
         comp.mesh_file = os.path.join("meshes", os.path.basename(out))
+        _manifest_record(meshes_dir, out, comp.part_path, cfg)
         print(f"  mesh: {comp.link_name} <- {os.path.basename(comp.part_path)} "
               f"({os.path.getsize(out)} B)")
         return 1
@@ -322,11 +388,12 @@ def export_subgraph_meshes(app, subgraphs, meshes_dir, by_path=None):
             base = f"{prefix}__{sc.link_name}"
             out = os.path.join(meshes_dir, base + ".3dxml")
             ok = False
-            # config-divergent files: never trust the config-blind cache
-            for cand in (() if p in divergent else
-                         (out, os.path.join(meshes_dir, base + ".glb"))):
-                if _cache_is_fresh(cand, p):
-                    out, ok = cand, True
+            reused = False
+            # only a mesh the manifest records as THIS config may be reused
+            for cand in (out, os.path.join(meshes_dir, base + ".glb")):
+                if _cache_is_fresh(cand, p) \
+                        and _cache_holds_config(meshes_dir, cand, cfg):
+                    out, ok, reused = cand, True, True
                     break
             if not ok:
                 ok = _export_by_opening(app, p, out, config=cfg)
@@ -340,6 +407,8 @@ def export_subgraph_meshes(app, subgraphs, meshes_dir, by_path=None):
                 by_path[key] = rel
                 sc.mesh_file = rel
                 n += 1
+                if not reused:
+                    _manifest_record(meshes_dir, out, p, cfg)
                 if p in divergent and not sc.is_subassembly:
                     _refresh_mass_with_config(app, sc)
                 print(f"  sub-mesh: {base} <- {os.path.basename(p)} "
@@ -399,6 +468,7 @@ def _compose_from_parts(app, md, path, out_glb, meshes_dir=None, by_path=None):
                 os.replace(tmp, dst)
                 _persisted[dst] = key
                 by_path[key] = os.path.join("meshes", os.path.basename(dst))
+                _manifest_record(meshes_dir, dst, cpath, ccfg)
         except Exception as e:
             print(f"    compose: could not persist part mesh "
                   f"{os.path.basename(cpath)}: {e!r}")
@@ -508,9 +578,23 @@ def _mkey(path, cfg):
     return (path, cfg or None)
 
 
+def active_config(md):
+    """Name of the configuration ``md`` currently shows, or None."""
+    try:
+        return str(as_iface(md, "IModelDoc2")
+                   .ConfigurationManager.ActiveConfiguration.Name)
+    except Exception:
+        return None
+
+
 def _show_config(md, config):
-    """Activate ``config`` on ``md`` (no-op when already active / None)."""
+    """Activate ``config`` on ``md`` (no-op when already active / None).
+
+    The already-active check is not just an optimisation: ShowConfiguration2
+    forces a rebuild, and this runs once per component."""
     if not config:
+        return
+    if active_config(md) == str(config):
         return
     try:
         as_iface(md, "IModelDoc2").ShowConfiguration2(config)
