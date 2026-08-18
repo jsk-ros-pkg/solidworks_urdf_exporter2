@@ -741,10 +741,17 @@ def extract_components(doc, exclude=None, progress=None,
     used = set()
     n_skipped = 0
     n_excluded = 0
-    matcache = {}        # part_path -> (material name, density kg/m^3)
+    # (part_path, configuration) -> (material name, density kg/m^3, mass props).
+    # The CONFIGURATION belongs in the key: mass, centre of mass and inertia are
+    # per-configuration (a part saved on 'variant_b' weighs 18.7 g where the
+    # 'Default' the assembly references weighs 10.2 g), and the shared document
+    # opens on the file's saved-active config, not this instance's.
+    matcache = {}
 
-    def _material_of(ct, path):
-        key = path.lower()
+    def _material_of(ct, path, config):
+        from .mesh import _show_config  # lazy: mesh imports model back
+
+        key = (path.lower(), config or None)
         if key in matcache:
             return matcache[key]
         props = (None, None, None)
@@ -752,6 +759,9 @@ def extract_components(doc, exclude=None, progress=None,
         try:
             md = safe_call(ct, "GetModelDoc2")
             if md is not None:
+                # read on the config this INSTANCE references, not on whatever
+                # the shared doc happens to show
+                _show_config(md, config)
                 props = _read_part_props(md)
         except Exception:
             pass
@@ -802,12 +812,12 @@ def extract_components(doc, exclude=None, progress=None,
         used.add(ln)
         if progress:
             progress(ln)
+        cfg = safe_prop(ct, "ReferencedConfiguration") or None
         material = density = None
         sw = None
         if path and not is_asm:
-            material, density, sw = _material_of(ct, path)
+            material, density, sw = _material_of(ct, path, cfg)
         sw = sw or {}
-        cfg = safe_prop(ct, "ReferencedConfiguration") or None
         comps.append(Component(name=name, link_name=ln, part_path=path,
                                is_subassembly=is_asm, world=world,
                                fixed=fixed, dof=dof,
@@ -3473,7 +3483,8 @@ def to_graph_state(comps, adjacency, ground, robot_name, source_assembly,
                    hidden=None, limit_joints=None, coordinate_systems=None,
                    subassembly_coordinate_systems=None, reference_axes=None,
                    sw2urdf_marker=None, sw2urdf_config_xml=None,
-                   part_coordinate_systems=None):
+                   part_coordinate_systems=None, configuration=None,
+                   configurations=None):
     subs = {}
     for path, (scomps, sadj, sground) in (subassemblies or {}).items():
         subs[path] = SubGraph(components=_component_states(scomps),
@@ -3496,7 +3507,9 @@ def to_graph_state(comps, adjacency, ground, robot_name, source_assembly,
                       subassemblies=subs,
                       deep_worlds=deep_worlds or {}, hidden=hidden or [],
                       limit_joints=[LimitJoint(**j) for j in
-                                    (limit_joints or [])])
+                                    (limit_joints or [])],
+                      configuration=configuration,
+                      configurations=list(configurations or []))
 
 
 def capture_deep_worlds(doc):

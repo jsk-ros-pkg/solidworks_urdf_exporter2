@@ -562,6 +562,24 @@
       </div>
       <div id="fslist" style="overflow-y:auto;font-size:12.5px"></div>
     </div>
+    <!-- assembly-configuration picker: shown only when the .SLDASM has more
+         than one, since the choice decides which parts the URDF gets -->
+    <div id="cfgmodal" style="position:absolute;left:50%;top:22%;
+         transform:translateX(-50%);z-index:9;display:none;width:420px;
+         background:#1c2228f5;border:1px solid #456;border-radius:8px;
+         padding:12px 14px;flex-direction:column;gap:8px">
+      <div style="font-size:13px;color:#cdd" data-i18n="cfg.title">
+        どのコンフィギュレーション？</div>
+      <div id="cfgnote" style="font-size:11px;color:#9ab;line-height:1.5"></div>
+      <select id="cfgsel" style="font-size:12px;color:#cdd;background:#0e1216;
+              border:1px solid #345;border-radius:4px;padding:4px 6px"></select>
+      <div style="display:flex;gap:6px;justify-content:flex-end">
+        <button id="cfgcancel">✕</button>
+        <button id="cfggo" data-i18n="cfg.go"
+                style="background:#2b5f8a;color:#fff;border-color:#4a86c0">
+          抽出</button>
+      </div>
+    </div>
     <div id="loadbackdrop" style="position:absolute;inset:0;z-index:6;
          display:none;background:rgba(16,19,25,0.93)"></div>
     <div id="loadbar">
@@ -657,6 +675,10 @@
                 title="サーバー側のファイルブラウザ（最近のファイル＋フルパス貼り付け）">
           🗄 開く…</button>
       </div>
+      <button id="clearmesh" style="display:none;width:100%;margin:2px 0"
+              data-i18n="ui.clearmesh" data-i18n-title="t.clearmesh"
+              title="meshes/ を消してSolidWorksから全メッシュを出し直す（関節設定は残る）">
+        ♻ メッシュを捨てて再抽出</button>
     </div>
     <div id="toolrow">
       <button id="reset" data-i18n="ui.reset">Reset pose</button>
@@ -1663,6 +1685,19 @@ the config and does NOT re-detect). Needs graph.json (CAD mode).">🔗 re-detect
     'extract.cancelling': { en: 'cancelling extraction … (stops at the next step)', ja: '抽出をキャンセル中 … (次の処理の区切りで停止します)' },
     'extract.cancelled': { en: 'extraction cancelled', ja: '抽出をキャンセルしました' },
     'extract.statusElapsed': { en: a => `⏳ extracting … ${a.time}`, ja: a => `⏳ 抽出中 … ${a.time}` },
+    // assembly-configuration picker (only shown when the file has >1)
+    'cfg.title': { en: 'Which configuration?', ja: 'どのコンフィギュレーション？' },
+    'cfg.note': { en: a => `${a.name} has ${a.n} configurations. A configuration can suppress whole components and swap part variants, so the choice changes what the URDF contains.`, ja: a => `${a.name} には ${a.n} 個のコンフィギュレーションがあります。コンフィギュレーションは部品を抑制したり別バリエーションに差し替えたりするので、どれを選ぶかで URDF の中身が変わります。` },
+    'cfg.saved': { en: '(the file’s saved-active one)', ja: '(ファイル保存時のアクティブ)' },
+    'cfg.go': { en: 'extract', ja: '抽出' },
+    'cfg.chose': { en: a => `configuration: ${a.c}`, ja: a => `コンフィギュレーション: ${a.c}` },
+    // clear the mesh cache + re-extract
+    'ui.clearmesh': { en: '♻ drop meshes & re-extract', ja: '♻ メッシュを捨てて再抽出' },
+    't.clearmesh': { en: 'delete meshes/ and re-export every mesh from SolidWorks (your joint edits are kept)', ja: 'meshes/ を消して SolidWorks から全メッシュを出し直す（関節の編集は残ります）' },
+    'clearmesh.confirm': { en: a => `Re-export every mesh of ${a.name} from SolidWorks?\n\n${a.src}\n\nThis takes as long as the first extraction. Nothing is deleted up front -- the current meshes stay until their replacements are written, so a failed re-extract costs time, not your package. graph.json and your <name>.joints.yaml (joint types, limits, renames) are not touched.\n\nNormally you do not need this: the cache already invalidates itself when the CAD changes or you pick another configuration.`, ja: a => `${a.name} のメッシュを SolidWorks から全部出し直しますか？\n\n${a.src}\n\n初回の抽出と同じだけ時間がかかります。先に消すことはしません — 新しいメッシュが書けるまで今のメッシュは残るので、再抽出が失敗しても失うのは時間だけです。graph.json と <name>.joints.yaml（関節タイプ・可動域・改名）には触れません。\n\n通常は不要です: CAD を編集したときやコンフィギュレーションを変えたときは、キャッシュは自動で無効化されます。` },
+    'clearmesh.done': { en: a => `mesh cache invalidated: ${a.n} mesh(es), ${a.mb} MB will be re-exported`, ja: a => `メッシュキャッシュを無効化: ${a.n} 個 / ${a.mb} MB を出し直します` },
+    'clearmesh.fail': { en: a => `could not clear the mesh cache: ${a.e}`, ja: a => `メッシュキャッシュの削除に失敗: ${a.e}` },
+    'clearmesh.noSource': { en: 'the source CAD file is gone — nothing to re-extract from', ja: '元の CAD ファイルが見つかりません — 再抽出できません' },
     // file browser
     'fs.error': { en: a => `📁 ${a.e}`, ja: a => `📁 ${a.e}` },
     'fs.packageHint': { en: '(package — click to open)', ja: '(パッケージ — クリックで開く)' },
@@ -4037,6 +4072,41 @@ function syncSw2urdfButton() {
           : t('sw2urdf.tNone');
   const wrap = document.getElementById('sw2urdfwrap');
   if (wrap) { wrap.title = button.title; }
+}
+
+// The mesh cache lives in the package's meshes/ and is normally self-managing:
+// a CAD edit invalidates it by mtime, a configuration change by the cache
+// manifest.  The button exists for the case those cannot cover -- ruling the
+// cache out when an export still looks wrong -- so it only appears for a CAD
+// package whose source assembly is still reachable to re-extract from.
+function syncClearMeshButton() {
+  const btn = document.getElementById('clearmesh');
+  if (!btn) { return; }
+  const usable = !!currentInfo && currentInfo.mode === 'cad'
+    && !!currentInfo.source_assembly;
+  btn.style.display = usable ? '' : 'none';
+  if (usable) { btn.title = t('t.clearmesh') + '\n' + currentInfo.source_assembly; }
+}
+
+async function clearMeshCacheAndReextract() {
+  if (!currentInfo?.source_assembly) { log(t('clearmesh.noSource'), 'err'); return; }
+  const src = currentInfo.source_assembly;
+  const cfg = currentInfo.configuration || '';
+  if (!confirm(t('clearmesh.confirm', { name: currentInfo.name, src }))) { return; }
+  let r;
+  try {
+    const resp = await fetch('/api/clear_mesh_cache', { method: 'POST' });
+    r = await resp.json();
+    if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
+  } catch (e) {
+    log(t('clearmesh.fail', { e: e.message ?? e }), 'err');
+    return;
+  }
+  log(t('clearmesh.done',
+        { n: r.removed, mb: (r.bytes / 1048576).toFixed(1) }), 'ok');
+  // re-extract on the SAME configuration this package came from, so the only
+  // thing that changed is that every mesh was rebuilt from scratch
+  extractFlow(src, cfg);
 }
 
 async function toggleSw2urdfVerbatim() {
@@ -9416,6 +9486,7 @@ function loadRobot(info, { drop = false, keepPose = false,
   }
   syncSubassemblyAccessButton();
   syncSw2urdfButton();
+  syncClearMeshButton();
   refreshExportName();          // export field placeholder follows the open pkg
   // cover the reload gap with a display-only clone of the current robot
   // (same world pose -> the swap is pixel-invisible); geometry/materials
@@ -9651,12 +9722,58 @@ async function ensureNoExtraction() {
   }
 }
 
+// Which assembly configuration to extract.  Resolves to a config name, '' for
+// "the file's saved-active one", or null when the user backed out.  The picker
+// only appears when the file genuinely offers a choice (>1 configuration and a
+// SolidWorks session that could list them) -- a single-config assembly, or a
+// machine with no SolidWorks running, goes straight through as before.
+async function pickConfiguration(p) {
+  let info;
+  try {
+    const r = await fetch('/api/configurations?path=' + encodeURIComponent(p));
+    info = await r.json();
+  } catch { return ''; }
+  const names = (info && info.configurations) || [];
+  if (names.length < 2) { return ''; }
+  const modal = document.getElementById('cfgmodal');
+  const sel = document.getElementById('cfgsel');
+  document.getElementById('cfgnote').textContent =
+    t('cfg.note', { name: p.split(/[\\/]/).pop(), n: names.length });
+  sel.innerHTML = '';
+  const dflt = document.createElement('option');
+  dflt.value = '';
+  dflt.textContent = t('cfg.saved');
+  sel.appendChild(dflt);
+  for (const n of names) {
+    const o = document.createElement('option');
+    o.value = n; o.textContent = n;       // a config name is a CAD identifier
+    sel.appendChild(o);
+  }
+  modal.style.display = 'flex';
+  return await new Promise(resolve => {
+    const done = v => {
+      modal.style.display = 'none';
+      document.getElementById('cfggo').onclick = null;
+      document.getElementById('cfgcancel').onclick = null;
+      resolve(v);
+    };
+    document.getElementById('cfggo').onclick = () => done(sel.value);
+    document.getElementById('cfgcancel').onclick = () => done(null);
+  });
+}
+
 // SolidWorks extraction: start the job, stream its progress into the log
-async function extractFlow(p) {
+async function extractFlow(p, configuration) {
   await ensureNoExtraction();           // a heavy job in flight? cancel it first
+  if (configuration === undefined) {
+    configuration = await pickConfiguration(p);
+    if (configuration === null) { return; }      // user cancelled
+  }
   log(t('extract.request', { p }), 'wrn');
+  if (configuration) { log(t('cfg.chose', { c: configuration })); }
   statusEl.textContent = t('extract.statusRunning');
-  const resp = await fetch('/api/extract?path=' + encodeURIComponent(p));
+  const resp = await fetch('/api/extract?path=' + encodeURIComponent(p) +
+    (configuration ? '&configuration=' + encodeURIComponent(configuration) : ''));
   const r = await resp.json();
   if (!resp.ok || r.error) {
     log(t('extract.startFail', { e: r.error ?? resp.status }), 'err');
@@ -9863,6 +9980,8 @@ function openFsBrowser() {
 }
 function closeFsBrowser() { fsmodal.style.display = 'none'; }
 document.getElementById('fsbrowse').addEventListener('click', openFsBrowser);
+document.getElementById('clearmesh')
+  .addEventListener('click', clearMeshCacheAndReextract);
 
 // Clicking the EMPTY viewer opens the file browser (no robot loaded -> the only
 // thing to do is open one), like pressing 🗄.  While the browser is open, a
@@ -10044,7 +10163,7 @@ function sw2robotDump() {
 window.sw2robot = {
   dump: sw2robotDump,
   collision: () => ({ ready: colReady, links: [...collisionLinks] }),
-  extractFlow: p => extractFlow(p),     // for E2E (fetch is mocked there)
+  extractFlow: (p, c) => extractFlow(p, c),   // for E2E (fetch is mocked there)
   boxSelect: rect => selectLinksInBox(rect ??
     { l: -1e9, t: -1e9, r: 1e9, b: 1e9 }),   // no rect => everything on screen
   boxSelected: () => [...boxSelected],
