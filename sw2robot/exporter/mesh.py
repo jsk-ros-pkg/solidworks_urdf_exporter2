@@ -12,6 +12,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import xml.etree.ElementTree as ET
+import zipfile
 
 from .swcom import (
     SW_OPEN_SILENT,
@@ -66,6 +69,199 @@ def _open_doc(app, path):
         return None
 
 
+_REF3D = re.compile(rb"<Reference3D\b[^>]*>")
+_XML_NAME = re.compile(rb'\bname="([^"]*)"')
+
+
+def _dedupe_reference_names(raw):
+    """``(xml, renamed)`` -- make every ``Reference3D`` name in a 3DXML
+    structure unique, keeping the first of each.
+
+    SolidWorks writes ONE tessellation per CONFIGURATION, so a part used with
+    two configurations lands in the file as two ``Reference3D`` nodes carrying
+    the SAME name.  That is valid -- the structure is driven by ``id``, and the
+    name is only a label -- but trimesh's reader re-keys geometry BY NAME
+    ("remap geometry names from id numbers to the name string",
+    trimesh/exchange/threedxml.py), so the second silently overwrites the
+    first and every instance is then drawn with whichever variant survived: a
+    mirrored bracket on the wrong side, a spacer 8 mm short.  Both the editor's
+    viewer and the ROS export read these files through trimesh.
+
+    Renaming the duplicates costs nothing structurally and fixes all of them.
+    The suffix is appended to the RAW attribute bytes, so an XML-escaped or
+    CJK name is never re-encoded."""
+    seen = {}
+    n = 0
+
+    def sub(m):
+        nonlocal n
+        tag = m.group(0)
+        mn = _XML_NAME.search(tag)
+        if mn is None:
+            return tag
+        raw_name = mn.group(1)
+        seen[raw_name] = seen.get(raw_name, 0) + 1
+        if seen[raw_name] == 1:
+            return tag
+        n += 1
+        new = raw_name + b"__" + str(seen[raw_name]).encode()
+        return tag[:mn.start(1)] + new + tag[mn.end(1):]
+
+    return _REF3D.sub(sub, raw), n
+
+
+def _unique_part_names(path):
+    """Rewrite ``path`` in place so no two ``Reference3D`` share a name.
+
+    Returns how many were renamed (0 = the file was already unambiguous and
+    nothing was rewritten).  Best-effort: any failure leaves the original file
+    untouched, since a mesh with ambiguous names still beats no mesh."""
+    try:
+        with zipfile.ZipFile(path) as z:
+            root_name = None
+            try:
+                man = ET.fromstring(z.read("Manifest.xml"))
+                root_name = next(
+                    (e.text for e in man.iter()
+                     if e.tag.split("}")[-1] == "Root" and e.text), None)
+            except KeyError:
+                pass
+            if root_name is None or root_name not in z.namelist():
+                return 0
+            raw = z.read(root_name)
+            fixed, n = _dedupe_reference_names(raw)
+            if not n:
+                return 0
+            items = [(i, z.read(i.filename)) for i in z.infolist()]
+    except (OSError, zipfile.BadZipFile, ET.ParseError) as e:
+        print(f"    could not inspect {os.path.basename(path)}: {e!r}")
+        return 0
+
+    tmp = path + ".uniq"
+    try:
+        with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as out:
+            for info, data in items:
+                zi = zipfile.ZipInfo(info.filename, _safe_date(info.date_time))
+                zi.compress_type = info.compress_type
+                zi.external_attr = info.external_attr
+                out.writestr(zi, fixed if info.filename == root_name else data)
+        os.replace(tmp, path)
+    except OSError as e:
+        print(f"    could not rewrite {os.path.basename(path)}: {e!r}")
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return 0
+    return n
+
+
+def _declared_counts(path):
+    """``(tessellations, part instances)`` the 3DXML itself declares, or None.
+
+    Read straight from the file's own product structure, so it is what
+    SolidWorks says it wrote -- the yardstick a loader has to match."""
+    try:
+        with zipfile.ZipFile(path) as z:
+            man = ET.fromstring(z.read("Manifest.xml"))
+            root_name = next(
+                (e.text for e in man.iter()
+                 if e.tag.split("}")[-1] == "Root" and e.text), None)
+            if root_name is None or root_name not in z.namelist():
+                return None
+            root = ET.fromstring(z.read(root_name))
+    except (OSError, KeyError, StopIteration, zipfile.BadZipFile,
+            ET.ParseError):
+        return None
+
+    def tag(e):
+        return e.tag.split("}")[-1]
+
+    # a Reference3D that owns an InstanceRep carries geometry; one that does
+    # not is a sub-assembly node and draws nothing itself
+    with_geometry = set()
+    for e in root.iter():
+        if tag(e) == "InstanceRep":
+            for ch in e:
+                if tag(ch) == "IsAggregatedBy":
+                    with_geometry.add(ch.text)
+    instances = 0
+    for e in root.iter():
+        if tag(e) == "Instance3D":
+            for ch in e:
+                if tag(ch) == "IsInstanceOf" and ch.text in with_geometry:
+                    instances += 1
+    return len(with_geometry), instances
+
+
+def verify_mesh(path):
+    """``None`` if the mesh reads back whole, else a one-line complaint.
+
+    The export hands geometry to a third-party loader and never sees it again,
+    so anything the loader drops or merges is silently WRONG output: two
+    configuration variants of one part collapsed into one shape, superimposed,
+    and the part COUNT still looked right, which is why it went unnoticed.
+    Comparing the file's own declared counts against what the loader returns
+    turns that class of failure -- not just the one we know about -- into a
+    visible one."""
+    declared = _declared_counts(path)
+    if declared is None:
+        return None                     # not a structured 3DXML; nothing to check
+    n_geom, n_inst = declared
+    try:
+        import trimesh
+        scene = trimesh.load(path)
+    except Exception as e:
+        return f"{os.path.basename(path)}: could not be read back ({e!r})"
+    got_geom = len(getattr(scene, "geometry", {}) or {})
+    got_nodes = len(getattr(getattr(scene, "graph", None),
+                            "nodes_geometry", []) or [])
+    if got_geom != n_geom:
+        return (f"{os.path.basename(path)}: declares {n_geom} shape(s) but "
+                f"reads back as {got_geom} -- geometry was merged or dropped")
+    # A single-PART export has no Instance3D at all: the root reference IS the
+    # geometry, and the loader still yields one node.  Only an assembly, which
+    # does declare its instances, can be checked this way.
+    if n_inst and got_nodes != n_inst:
+        return (f"{os.path.basename(path)}: declares {n_inst} instance(s) but "
+                f"reads back as {got_nodes} -- placements were lost")
+    return None
+
+
+def verify_meshes(paths, say=None):
+    """Check every written mesh reads back whole; return the complaints."""
+    bad = []
+    for p in paths:
+        try:
+            problem = verify_mesh(p)
+        except Exception as e:                     # never fail an export here
+            problem = f"{os.path.basename(p)}: verification raised {e!r}"
+        if problem:
+            bad.append(problem)
+            print(f"      MESH FIDELITY: {problem}")
+    if say:
+        # plain ASCII: this can reach a cp932 console that has not been through
+        # _tolerant_console(), and a status line must never raise
+        say(f"verified {len(paths)} mesh(es)"
+            + (f" -- {len(bad)} PROBLEM(S), see the log" if bad
+               else " -- all read back whole"))
+    return bad
+
+
+def _safe_date(dt):
+    """A zip date these files can actually be written with.  SolidWorks stamps
+    3DXML entries with impossible dates (day 0, month 13), which zipfile
+    refuses to pack -- fall back to the DOS epoch rather than lose the entry."""
+    try:
+        y, mo, d, h, mi, s = dt
+        if 1980 <= y <= 2107 and 1 <= mo <= 12 and 1 <= d <= 31 \
+                and 0 <= h <= 23 and 0 <= mi <= 59 and 0 <= s <= 59:
+            return dt
+    except (TypeError, ValueError):
+        pass
+    return (1980, 1, 1, 0, 0, 0)
+
+
 def _save_3dxml(model_doc, out_path):
     # SolidWorks resolves a RELATIVE SaveAs path against ITS OWN working
     # directory (the SLDWORKS.exe process), not ours -- a `-o output` relative
@@ -88,6 +284,13 @@ def _save_3dxml(model_doc, out_path):
         raise
     ok = bool(res[0]) if isinstance(res, (tuple, list)) else bool(res)
     if ok and os.path.exists(tmp) and os.path.getsize(tmp) >= _MIN_MESH_BYTES:
+        # one tessellation per configuration means same-named Reference3D
+        # nodes, which collapse to one geometry in trimesh -- see
+        # _dedupe_reference_names.  Every 3DXML we write goes through here.
+        n = _unique_part_names(tmp)
+        if n:
+            print(f"    {os.path.basename(out_path)}: disambiguated {n} "
+                  f"config variant(s) sharing a part name")
         os.replace(tmp, out_path)
         return True
     # say WHY: a res=True but tiny file is the empty-envelope failure mode

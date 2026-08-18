@@ -26,9 +26,11 @@ import sys
 from . import jointcfg
 from .mesh import (
     _SAVE_OPTS,
+    _unique_part_names,
     export_meshes,
     export_part_mesh,
     export_subgraph_meshes,
+    verify_meshes,
 )
 from .model import (
     build_model,
@@ -201,9 +203,31 @@ def _extract_into(sw, assembly_path, pkg_dir, meshes_dir, robot_name, _say,
         res = ext.SaveAs(whole, 0, _SAVE_OPTS, None, 0, 0)
         ok = res[0] if isinstance(res, (tuple, list)) else res
         if ok and os.path.exists(whole):
+            # this one SaveAs does not go through _save_3dxml, so give it the
+            # same treatment: a part used with two configurations lands as two
+            # same-named Reference3D nodes that collapse into one when the file
+            # is read back (see mesh._dedupe_reference_names)
+            n_dup = _unique_part_names(whole)
+            if n_dup:
+                _say(f"assembly mesh: disambiguated {n_dup} config "
+                     f"variant(s) sharing a part name")
             whole_rel = os.path.basename(whole)
     except Exception as e:
         print(f"      assembly 3dxml raised {e!r}")
+
+    # Read every mesh back and compare it with what the file says it holds.
+    # An export that hands geometry to a loader and never checks it can be
+    # silently WRONG -- two configuration variants of one part collapsing into
+    # one shape, superimposed, with the part COUNT still correct.  This makes
+    # that class of failure visible instead of shipping it into the URDF.
+    _say("verifying meshes read back whole ...")
+    written = sorted(
+        os.path.join(meshes_dir, f) for f in os.listdir(meshes_dir)
+        if f.lower().endswith(".3dxml"))
+    if whole_rel:
+        written.append(whole)
+    verify_meshes(written, say=_say)
+
     _say(f"{n} meshes exported; saving graph.json ...")
 
     graph = to_graph_state(comps, adjacency, ground, robot_name,
