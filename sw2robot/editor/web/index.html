@@ -675,6 +675,10 @@
                 title="サーバー側のファイルブラウザ（最近のファイル＋フルパス貼り付け）">
           🗄 開く…</button>
       </div>
+      <button id="clearmesh" style="display:none;width:100%;margin:2px 0"
+              data-i18n="ui.clearmesh" data-i18n-title="t.clearmesh"
+              title="meshes/ を消してSolidWorksから全メッシュを出し直す（関節設定は残る）">
+        ♻ メッシュを捨てて再抽出</button>
     </div>
     <div id="toolrow">
       <button id="reset" data-i18n="ui.reset">Reset pose</button>
@@ -4068,6 +4072,41 @@ function syncSw2urdfButton() {
           : t('sw2urdf.tNone');
   const wrap = document.getElementById('sw2urdfwrap');
   if (wrap) { wrap.title = button.title; }
+}
+
+// The mesh cache lives in the package's meshes/ and is normally self-managing:
+// a CAD edit invalidates it by mtime, a configuration change by the cache
+// manifest.  The button exists for the case those cannot cover -- ruling the
+// cache out when an export still looks wrong -- so it only appears for a CAD
+// package whose source assembly is still reachable to re-extract from.
+function syncClearMeshButton() {
+  const btn = document.getElementById('clearmesh');
+  if (!btn) { return; }
+  const usable = !!currentInfo && currentInfo.mode === 'cad'
+    && !!currentInfo.source_assembly;
+  btn.style.display = usable ? '' : 'none';
+  if (usable) { btn.title = t('t.clearmesh') + '\n' + currentInfo.source_assembly; }
+}
+
+async function clearMeshCacheAndReextract() {
+  if (!currentInfo?.source_assembly) { log(t('clearmesh.noSource'), 'err'); return; }
+  const src = currentInfo.source_assembly;
+  const cfg = currentInfo.configuration || '';
+  if (!confirm(t('clearmesh.confirm', { name: currentInfo.name, src }))) { return; }
+  let r;
+  try {
+    const resp = await fetch('/api/clear_mesh_cache', { method: 'POST' });
+    r = await resp.json();
+    if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
+  } catch (e) {
+    log(t('clearmesh.fail', { e: e.message ?? e }), 'err');
+    return;
+  }
+  log(t('clearmesh.done',
+        { n: r.removed, mb: (r.bytes / 1048576).toFixed(1) }), 'ok');
+  // re-extract on the SAME configuration this package came from, so the only
+  // thing that changed is that every mesh was rebuilt from scratch
+  extractFlow(src, cfg);
 }
 
 async function toggleSw2urdfVerbatim() {
@@ -9447,6 +9486,7 @@ function loadRobot(info, { drop = false, keepPose = false,
   }
   syncSubassemblyAccessButton();
   syncSw2urdfButton();
+  syncClearMeshButton();
   refreshExportName();          // export field placeholder follows the open pkg
   // cover the reload gap with a display-only clone of the current robot
   // (same world pose -> the swap is pixel-invisible); geometry/materials
@@ -9940,6 +9980,8 @@ function openFsBrowser() {
 }
 function closeFsBrowser() { fsmodal.style.display = 'none'; }
 document.getElementById('fsbrowse').addEventListener('click', openFsBrowser);
+document.getElementById('clearmesh')
+  .addEventListener('click', clearMeshCacheAndReextract);
 
 // Clicking the EMPTY viewer opens the file browser (no robot loaded -> the only
 // thing to do is open one), like pressing 🗄.  While the browser is open, a

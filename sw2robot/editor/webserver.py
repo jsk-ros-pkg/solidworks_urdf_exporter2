@@ -142,6 +142,68 @@ def _preconvert_meshes(pkg_dir):
     threading.Thread(target=run, daemon=True).start()
 
 
+def _graph_origin(pkg_dir):
+    """``(source CAD file, configuration)`` this package was extracted from.
+
+    The file is None unless it is still reachable -- that is what a re-extract
+    would re-open, so an unreachable one must not offer the choice.  The
+    configuration is None on packages from before it was recorded; re-extracting
+    those falls back to the file's saved-active one, as they were built."""
+    try:
+        with open(os.path.join(pkg_dir or "", "graph.json"),
+                  encoding="utf-8") as f:
+            g = json.load(f)
+        src, cfg = g.get("source_assembly"), g.get("configuration")
+    except (OSError, ValueError, TypeError):
+        return None, None
+    return (src if src and os.path.isfile(src) else None), cfg
+
+
+# the sidecar mesh.py writes next to the meshes, recording which
+# (part file, configuration) produced each one
+_MESH_MANIFEST = "cache_manifest.json"
+
+
+def _clear_mesh_cache(pkg_dir):
+    """Invalidate the package's mesh cache; return (meshes invalidated, bytes).
+
+    It does NOT delete the meshes -- it deletes only
+    ``meshes/cache_manifest.json``, the record of which (part, configuration)
+    each mesh came from.  Without a record a mesh is of unknown configuration,
+    which ``mesh._cache_holds_config`` refuses to reuse, so the next extract
+    re-exports every one of them from SolidWorks -- the whole point of the
+    button -- while the existing meshes stay on disk.
+
+    That difference matters: the re-extract can fail (SolidWorks busy, the
+    assembly's references unresolvable), and deleting first would leave the
+    user with a package that renders nothing and no way back.  This way a
+    failed re-extract costs time, not data.
+
+    graph.json (the extraction result) and <name>.joints.yaml (the user's joint
+    edits) are not cache and are never touched."""
+    meshes = os.path.join(pkg_dir, "meshes")
+    if not os.path.isdir(meshes):
+        return 0, 0
+    n = size = 0
+    for f in os.listdir(meshes):
+        p = os.path.join(meshes, f)
+        if os.path.isfile(p) and f != _MESH_MANIFEST:
+            try:
+                size += os.path.getsize(p)
+                n += 1
+            except OSError:
+                pass
+    manifest = os.path.join(meshes, _MESH_MANIFEST)
+    try:
+        os.remove(manifest)
+    except FileNotFoundError:
+        pass                      # already invalid; the re-extract redoes them
+    except OSError as e:
+        print(f"[sw2robot.web] could not invalidate the mesh cache: {e!r}")
+        return 0, 0
+    return n, size
+
+
 def _resolve_package(path):
     """Accept a package dir, a dir containing urdf/, or a .urdf path; return
     ``(pkg_dir, urdf_rel)`` or raise ValueError."""
@@ -4492,35 +4554,38 @@ def _run_extract(sldasm, configuration=None):
     threading.Thread(target=heartbeat, daemon=True).start()
     try:
         from . import core
-        progress(f"extracting {os.path.basename(sldasm)} -- this opens a "
-                 f"throwaway COPY in a hidden SolidWorks instance "
-                 f"(the original is never modified)")
-        sw = _warm_sw(progress)
-        if sw is None:
+        progress(f"extracting {os.path.basename(sldasm)}"
+                 + (f" @ configuration {configuration!r}" if configuration
+                    else "")
+                 + " -- this opens a throwaway COPY in a hidden SolidWorks "
+                   "instance (the original is never modified)")
+        sw = _acquire_sw(progress)
+        try:
+            state = core.extract_and_import(
+                sldasm, out_dir=_Handler.root_dir, progress=progress, sw=sw,
+                configuration=configuration)
+        except ValueError as e:
+            # "no usable components" out of the USER's SolidWorks does not mean
+            # the assembly is broken: a session busy with the user's own
+            # documents can hand back a copy whose component tree is empty.
+            # A private instance opens it from scratch, so retry there once
+            # rather than telling the user their CAD cannot be read.
+            if not (getattr(sw, "_attached", False)
+                    and "no usable components" in str(e)):
+                raise
+            progress("the running SolidWorks returned an empty assembly "
+                     "(it is busy with your own documents); retrying in a "
+                     "private instance ...")
+            _sw["sess"] = None
             from sw2robot.exporter.swcom import SolidWorks
-            # Reuse the user's ALREADY-RUNNING SolidWorks if we can attach to it
-            # (same login session): no new process to start (instant, no ~1 min
-            # cold start) and nothing to leak.  The throwaway copy is opened in
-            # that instance and closed afterwards; the user's own documents are
-            # never modified.
-            try:
-                progress("attaching to the running SolidWorks ...")
-                sw = SolidWorks(attach=True)
-                progress("attached to the running SolidWorks ✓ (reusing it)")
-            except Exception:
-                progress("no attachable SolidWorks; starting a private instance "
-                         "(this can take a minute; later extractions reuse it) ...")
-                # Create the COM object in THIS thread.  SolidWorks is STA-bound:
-                # an instance built on another thread (e.g. a timeout worker)
-                # loses its apartment when that thread ends, so OpenDoc6 then
-                # fails with CO_E_OBJNOTCONNECTED ("object not connected").
-                before = _sldworks_pids()
-                sw = SolidWorks(visible=False)
-                for pid in _sldworks_pids() - before:   # the one(s) we just spawned
-                    _record_spawned_pid(pid)
+            before = _sldworks_pids()
+            sw = SolidWorks(visible=False)
+            for pid in _sldworks_pids() - before:
+                _record_spawned_pid(pid)
             _sw["sess"] = sw
-        state = core.extract_and_import(
-            sldasm, out_dir=_Handler.root_dir, progress=progress, sw=sw)
+            state = core.extract_and_import(
+                sldasm, out_dir=_Handler.root_dir, progress=progress, sw=sw,
+                configuration=configuration)
         _job["package"] = str(state.package_dir)
         _preconvert_meshes(str(state.package_dir))
         progress(f"done -> {state.package_dir} (SolidWorks kept warm for "
@@ -4918,8 +4983,14 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             return {"name": None, "urdf": None, "mode": None}
         # 'cad' = joints.yaml + build() path; 'urdf' = direct overlay editing
         # (the frontend gates URDF-only controls such as inertial editing on this)
+        src, cfg = _graph_origin(cls.pkg_dir)   # one graph.json read, not two
         return {"name": cls.robot_name, "urdf": "/pkg/" + cls.urdf_rel,
                 "mode": "cad" if _cad_mode(cls.pkg_dir) else "urdf",
+                # what a re-extract would re-open, and on which configuration.
+                # A null source disables the clear-mesh-cache control -- there
+                # would be nothing to rebuild the meshes from.
+                "source_assembly": src,
+                "configuration": cfg,
                 "sw2urdf": _sw2urdf_status(cls.pkg_dir, cls.urdf_rel)}
 
     def _um_reply(self, fn, *args):
@@ -7243,6 +7314,27 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                         {"error": f"rebuild failed: {e}"}, 500)
                 print(f"[sw2robot.web] remove_port: {pname}")
                 return self._send_json({"ok": True, "name": pname})
+            if parsed.path == "/api/clear_mesh_cache":
+                # wipe meshes/ so the next extract re-exports every mesh from
+                # SolidWorks.  Normally unnecessary -- the cache invalidates
+                # itself on a CAD edit (mtime) and on a configuration change
+                # (meshes/cache_manifest.json) -- but it is the way to rule the
+                # cache out when an export looks wrong.
+                cls = type(self)
+                if not cls.pkg_dir:
+                    return self._send_json({"error": "no package open"}, 400)
+                if _job["running"]:
+                    return self._send_json(
+                        {"error": "an extraction is running"}, 409)
+                src, cfg = _graph_origin(cls.pkg_dir)
+                n, size = _clear_mesh_cache(cls.pkg_dir)
+                print(f"[sw2robot.web] mesh cache invalidated: {n} mesh(es), "
+                      f"{size} B under {cls.pkg_dir} (files kept; the "
+                      f"re-extract rebuilds them)")
+                return self._send_json({"ok": True, "removed": n,
+                                        "bytes": size,
+                                        "source_assembly": src,
+                                        "configuration": cfg})
             if parsed.path == "/api/reset_names":
                 # drop ALL rename overlays -> every link/joint back to default
                 cls = type(self)
