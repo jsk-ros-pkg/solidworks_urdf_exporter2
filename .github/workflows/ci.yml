@@ -194,6 +194,11 @@ jobs:
           node verify_record.mjs    http://localhost:8090
           node verify_replay.mjs    http://localhost:8090
           node verify_jointrec.mjs  http://localhost:8090
+          # LAST on purpose: proving the bare 'f' shortcut still works POSTs
+          # /api/set_axis, which edits the served URDF.  The script flips back
+          # when the count is odd, but keeping it after the others means no
+          # script above ever observes a mid-flip model.
+          node verify_shortcuts.mjs http://localhost:8090
 
       - name: Server log (on failure)
         if: failure()
