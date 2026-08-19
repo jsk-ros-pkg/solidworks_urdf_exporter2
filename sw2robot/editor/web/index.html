@@ -590,6 +590,120 @@ the config and does NOT re-detect). Needs graph.json (CAD mode).">🔗 re-detect
 <script src="boot.js"></script>
 
 <script type="module">
+// ---- cross-module shared state ------------------------------------------
+// Every module-top-level `let` that is ASSIGNED from more than one `// ----`
+// section below lives here.  Section banners are the finest structural unit in
+// this block and every planned module boundary lands on one, so "assigned from
+// two sections" is a superset of "assigned from two modules" under any split
+// that respects them.
+//
+// Why it matters: once this block becomes ES modules, such a `let` has to be
+// `export let`, and an import binding is READ-ONLY -- modules are always strict,
+// so a cross-module assignment throws "TypeError: Assignment to constant
+// variable".  Reads stay live either way; only writes break.  Collecting them
+// into named `const` objects makes the write legal, and makes a use site read as
+// "this is state that outlives the module".
+//
+// Field names are deliberately IDENTICAL to the old top-level `let` names, so
+// this commit is one mechanical rewrite (`x` -> `group.x`) that can be checked
+// line by line.  Renaming (e.g. mimicState.mimicMode -> mimicState.active) is a
+// readability change and belongs in its own commit.
+//
+// Variables assigned from only ONE section stay plain `let`: they will end up
+// module-private, and `export let` is fine for the read-only cross-module reads
+// (THREE, poseDrag, ecTool, boxSelected, faceOverlay, ...).
+
+// The package currently open in the editor plus the sidecar metadata that came
+// with it.  Written by the loader / the extractor; read by nearly every panel.
+const packageState = {
+  dropMode: false,          // meshes come from dropped blobs, not /pkg/
+  currentInfo: null,        // {name, urdf} of the open server package
+  compMeta: {},             // link -> {material, density, name, override}
+  linkColors: {},           // URDF/viewer link name -> '#rrggbb' override
+  excludedList: [],         // component names excluded from the URDF
+  massOnlyLinks: new Set(), // links flagged mass-only (weight kept, no mesh)
+  rootBaseName: null,       // which COMPONENT is base_link right now
+                            // (the URDF rename hides it)
+};
+
+// What the 3D view is currently showing.
+const viewState = {
+  mergedView: false,        // viewer shows the fixed-joint-lumped URDF
+  tfNodes: [],              // per-link TF triads + parent->child lines
+  // The orbit BASE: null = robot bbox centre (default / after C); otherwise a link
+  // whose frame origin we orbit. Set by double-click, cleared by C. Right-drag pan
+  // rides on top of this (controls.target = base + pan); V removes the pan.
+  orbitBaseLink: null,
+};
+
+// The sidebar tree / joint-list view controls.
+const treeState = {
+  // when on, the joint list shows ONLY the joints the classifier flagged as
+  // guesses (compMeta[...].joint_attention) -- the review worklist
+  jointCheckOnly: false,
+  jointFilter: '',          // substring filter: when set, the tree collapses
+                            // to a FLAT list of joints whose link/joint name
+                            // matches -- so select-all / Set / Delete scope
+                            // to exactly the matches (see buildJointRows)
+  treeViewMode: 'expanded', // expanded = editable URDF tree; subassembly =
+                            // read-only collapse_preview tree
+  robotViewMode: 'normal',  // normal | collapsed_preview
+  pendingRobotViewMode: null,
+  subasmTreeRequest: 0,     // discard stale async preview responses
+  playMode: false,          // movable-joints-only panel active
+};
+
+// What the user has selected / hovered, and the UI hooks that follow it.
+const selectionState = {
+  selectedLink: null,
+  hoveredLink: null,
+  hoveredAxis: null,        // joint name whose axis the cursor is near
+  selVis: null,             // selection visuals: link frame triad + CoM marker
+  selAxisJoint: null,       // joint whose axis is force-shown while its
+                            // child link is selected (incl. fixed joints)
+  // while the colour picker for a link is open we suppress that link's tint
+  // (selection cyan etc.) so the user judges the TRUE colour, not the overlay
+  colorPreviewLink: null,
+  // the in-viewer joint editor's live-sync hook, set while #linkinfo shows a
+  // movable joint: {name, set(nativeVal)} so the sidebar slider and the overlay
+  // slider always show the same angle.
+  jpSync: null,
+  // link to re-select after the next edit-rebuild reload, so the joint panel
+  // stays open on the same link after an immediate type change
+  reselectAfterLoad: null,
+};
+
+// Live self-collision query, plus the CoACD collision-preview handshake that
+// hands its results to the same tinting path.
+const collisionState = {
+  collisionLinks: new Set(),   // links in a NEW (non-rest) self-collision
+  colReady: false,
+  colBusy: false,
+  colQueued: false,
+  colPoll: 0,
+  collPreviewFinalized: false, // ran the post-generation hookup (export + collision)
+};
+
+// The mimic-linking session (master joint + follower joints).
+const mimicState = {
+  mimicMode: false,
+  mimicMaster: null,        // master joint name (the driver)
+  mimicMasterChild: null,   // master's child link (can't follow itself)
+};
+
+// The edit-rebuild reload handshake: the viewer is torn down and reloaded, so
+// what has to survive that gap lives here.
+const loadState = {
+  pendingRestore: null,     // {angles} saved across an edit-rebuild reload
+  loadCover: null,          // visual clone shown while the URDF reloads,
+                            // so re-root / type edits never flash blank
+};
+
+// Replay (②) re-performs a recorded op() stream; the camera-track sampler and
+// the recorders must not record the playback itself.
+const replayState = {
+  _replaying: false,        // true while replayLog() re-performs a session
+};
 let THREE, GLTFLoader, STLLoader, ColladaLoader, OBJLoader, mergeGeometries,
     TransformControls;
 try {
@@ -690,20 +804,13 @@ viewer.addEventListener('joint-mouseover', e => {
   });
   viewer.redraw();
 });
-let dropMode = false;          // meshes come from dropped blobs, not /pkg/
-let currentInfo = null;        // {name, urdf} of the open server package
 // a directly-opened URDF has no graph.json behind it, so the CAD-only per-link
 // controls (frame-only, mass source, ...) do not apply
-const urdfInputMode = () => currentInfo?.mode === 'urdf';
-let mergedView = false;        // viewer shows the fixed-joint-lumped URDF
-let compMeta = {};             // link -> {material, density, name, override}
+const urdfInputMode = () => packageState.currentInfo?.mode === 'urdf';
 // HTML-attribute escape for text that goes into a title="" (classifier notes
 // carry quotes and angle brackets)
 const escAttr = v => String(v ?? '').replace(/[&<>"]/g,
   c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-let linkColors = {};           // URDF/viewer link name -> '#rrggbb' override
-let excludedList = [];         // component names excluded from the URDF
-let massOnlyLinks = new Set(); // links flagged mass-only (weight kept, no mesh)
 
 // ---- operation log + diagnostic dump: every user action is recorded, and
 // window.sw2robot.report() ships the session state to the server, so a "now
@@ -712,12 +819,11 @@ let massOnlyLinks = new Set(); // links flagged mass-only (weight kept, no mesh)
 const oplog = [];
 const opSubs = [];               // live subscribers (keycast overlay, future recorders)
 function onOp(fn) { opSubs.push(fn); }   // subscribe to the semantic action stream
-let _replaying = false;          // true while replayLog() re-performs a session
 function op(name, args = {}) {
   const entry = { t: Math.round(performance.now()), op: name, ...args };
   // while replaying we still light up the overlay, but we must NOT append the
   // re-performed actions back into the log we're reading from.
-  if (!_replaying) {
+  if (!replayState._replaying) {
     oplog.push(entry);
     if (oplog.length > 400) { oplog.splice(0, 100); }
   }
@@ -731,7 +837,7 @@ function op(name, args = {}) {
 const camlog = [];               // { t, op:'camera', pos:[x,y,z], tgt:[x,y,z] }
 let _camLastT = 0;
 viewer.controls.addEventListener('change', () => {
-  if (_replaying) { return; }                     // don't record our own playback
+  if (replayState._replaying) { return; }                     // don't record our own playback
   const now = Math.round(performance.now());
   if (now - _camLastT < 100) { return; }          // ~10 keyframes/sec max
   _camLastT = now;
@@ -807,7 +913,7 @@ function actionLogText() {
 function downloadActionLog(kind = 'txt') {
   const raw = kind === 'json';
   const body = raw ? JSON.stringify(fullTimeline(), null, 2) : actionLogText();
-  const pkg = (currentInfo?.name || 'sw2robot').replace(/[^\w.-]+/g, '_');
+  const pkg = (packageState.currentInfo?.name || 'sw2robot').replace(/[^\w.-]+/g, '_');
   const blob = new Blob([body], {
     type: raw ? 'application/json' : 'text/plain;charset=utf-8' });
   const url = URL.createObjectURL(blob);
@@ -865,7 +971,7 @@ const REPLAY = {
   eye:       e => {
     if (hiddenLinks.has(e.link) === !!e.hide) { return; }   // already in target state
     toggleLinkVisible(e.link, jointRecForLink(e.link)?.row);  // pass the row so its UI updates
-    if (e.link === selectedLink) {                           // keep the selbar eye in sync too
+    if (e.link === selectionState.selectedLink) {                           // keep the selbar eye in sync too
       document.getElementById('seleye').classList.toggle('off', hiddenLinks.has(e.link));
     }
   },
@@ -917,15 +1023,15 @@ function _moveCursor(x, y, click) {
   c.style.left = x + 'px'; c.style.top = y + 'px';
   if (click) { c.classList.remove('click'); void c.offsetWidth; c.classList.add('click'); }
 }
-function replayCancel() { _cancelTweens(); _replaying = false; }   // stop eases where they are
+function replayCancel() { _cancelTweens(); replayState._replaying = false; }   // stop eases where they are
 async function replayLog(entries, { speed = 1, maxGap = 1500 } = {}) {
-  if (_replaying) { return; }                   // no re-entrancy
+  if (replayState._replaying) { return; }                   // no re-entrancy
   if (!Array.isArray(entries) || !entries.length) {
     log(t('replay.empty'), 'wrn'); return;
   }
   _cancelTweens();                              // drop any ease left over from a prior run
   speed = speed > 0 ? speed : 1;               // guard against a 0 / negative speed
-  _replaying = true;
+  replayState._replaying = true;
   document.getElementById('replay')?.classList.add('active');
   _showCursor(true);
   let done = 0, prev = entries[0].t ?? 0;
@@ -941,7 +1047,7 @@ async function replayLog(entries, { speed = 1, maxGap = 1500 } = {}) {
       const pos = (fn && e.op !== 'camera') ? _actionScreenPos(e) : null;
       if (pos) { _moveCursor(pos.x, pos.y, false); }
       if (wait) { await new Promise(r => setTimeout(r, wait)); }
-      if (!_replaying) { break; }                // cancelled mid-run
+      if (!replayState._replaying) { break; }                // cancelled mid-run
       if (pos && CLICK_OPS.has(e.op)) { _moveCursor(pos.x, pos.y, true); }  // click pulse
       if (!fn) { skippedOps.add(e.op); continue; }
       try { fn(e); done += 1; }
@@ -951,11 +1057,11 @@ async function replayLog(entries, { speed = 1, maxGap = 1500 } = {}) {
     // screen recording on our promise captures the full motion (bounded so a
     // stuck tween can't hang the await)
     const drainUntil = performance.now() + 800;
-    while (_replaying && _activeTweens > 0 && performance.now() < drainUntil) {
+    while (replayState._replaying && _activeTweens > 0 && performance.now() < drainUntil) {
       await new Promise(r => setTimeout(r, 30));
     }
   } finally {
-    _replaying = false;
+    replayState._replaying = false;
     document.getElementById('replay')?.classList.remove('active');
     _showCursor(false);
   }
@@ -991,7 +1097,7 @@ async function startScreenRecording() {
   recorder.onstop = () => {
     stream.getTracks().forEach(tr => tr.stop());
     const blob = new Blob(chunks, { type: mime });
-    const pkg = (currentInfo?.name || 'sw2robot').replace(/[^\w.-]+/g, '_');
+    const pkg = (packageState.currentInfo?.name || 'sw2robot').replace(/[^\w.-]+/g, '_');
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url; a.download = `${pkg}-demo.webm`;
@@ -1018,16 +1124,16 @@ async function refreshCompMeta() {
   try {
     const r = await (await fetch('/api/components')).json();
     if (!r.error) {
-      compMeta = r.links ?? {};
-      linkColors = r.colors ?? {};   // keyed by viewer link name (composed too)
+      packageState.compMeta = r.links ?? {};
+      packageState.linkColors = r.colors ?? {};   // keyed by viewer link name (composed too)
       applyPersistedColors();     // meta may arrive after geometry-loaded
-      excludedList = r.excluded ?? [];
+      packageState.excludedList = r.excluded ?? [];
       // mass-only links (final URDF link names == the viewer's link names)
-      massOnlyLinks = new Set(r.mass_only ?? []);
+      packageState.massOnlyLinks = new Set(r.mass_only ?? []);
       const chip = document.getElementById('exclchip');
-      chip.style.display = excludedList.length ? '' : 'none';
-      chip.textContent = t('excl.chip', { n: excludedList.length });
-      chip.title = excludedList.join('\n') + '\n' + t('excl.restoreAll');
+      chip.style.display = packageState.excludedList.length ? '' : 'none';
+      chip.textContent = t('excl.chip', { n: packageState.excludedList.length });
+      chip.title = packageState.excludedList.join('\n') + '\n' + t('excl.restoreAll');
       // keep an open mass-editor popup in sync with mass-only / material edits
       // made from the main panel (both read the same /api/components data)
       if (document.getElementById('masslist')) { openMassList(); }
@@ -1232,7 +1338,7 @@ viewer.loadMeshFunc = (path, manager, done) => {
     safeDone(new THREE.Group());      // empty placeholder, not null
   };
   if (lower.endsWith('.3dxml')) {
-    const url = dropMode ? path : path + '?glb=1';
+    const url = packageState.dropMode ? path : path + '?glb=1';
     new GLTFLoader(manager).load(url, g => ok(g.scene), null, fail);
   } else if (lower.endsWith('.glb') || lower.endsWith('.gltf')) {
     new GLTFLoader(manager).load(path, g => ok(g.scene), null, fail);
@@ -1279,28 +1385,8 @@ viewer.loadMeshFunc = (path, manager, done) => {
 // ---- joint rows: slider (movable) + type select + bulk checkbox ---------
 const fmt = v => (Math.abs(v) < 1e-10 ? 0 : v).toFixed(2);
 const rows = new Map();        // joint name -> row record
-// when on, the joint list shows ONLY the joints the classifier flagged as
-// guesses (compMeta[...].joint_attention) -- the review worklist
-let jointCheckOnly = false;
-let jointFilter = '';          // substring filter: when set, the tree collapses
-                               // to a FLAT list of joints whose link/joint name
-                               // matches -- so select-all / Set / Delete scope
-                               // to exactly the matches (see buildJointRows)
-let treeViewMode = 'expanded'; // expanded = editable URDF tree; subassembly =
-                               // read-only collapse_preview tree
-let robotViewMode = 'normal';  // normal | collapsed_preview
-let pendingRobotViewMode = null;
-let subasmTreeRequest = 0;     // discard stale async preview responses
 const playRows = new Map();    // joint name -> "move" mode slider record
-let playMode = false;          // movable-joints-only panel active
 
-// the in-viewer joint editor's live-sync hook, set while #linkinfo shows a
-// movable joint: {name, set(nativeVal)} so the sidebar slider and the overlay
-// slider always show the same angle.
-let jpSync = null;
-// link to re-select after the next edit-rebuild reload, so the joint panel
-// stays open on the same link after an immediate type change
-let reselectAfterLoad = null;
 
 // move a joint AND keep every UI that displays it in lock-step (the sidebar
 // row + the in-viewer joint panel).  `val` is in the joint's native unit
@@ -1314,7 +1400,7 @@ function previewJoint(name, val) {
   }
   const pr = playRows.get(name);
   if (pr) { pr.slider.value = val; pr.val.value = pr.fmt(val); }
-  if (jpSync && jpSync.name === name) { jpSync.set(val); }
+  if (selectionState.jpSync && selectionState.jpSync.name === name) { selectionState.jpSync.set(val); }
 }
 
 function jointLinkOf(j, tag) {
@@ -1341,8 +1427,6 @@ function previewJointForPlanRow(row) {
 
 const collapsed = new Set();    // link names folded in the tree (persists
                                 // across rebuilds within the session)
-let rootBaseName = null;        // which COMPONENT is base_link right now
-                                // (the URDF rename hides it)
 
 // ---- rename a joint / link (dbl-click in tree/panel, or the ≣ 改名 list) ----
 async function doRename(kind, oldName, newName) {
@@ -1361,7 +1445,7 @@ async function doRename(kind, oldName, newName) {
     // a link rename invalidates the current selection (its name changed); clear
     // it so the reload doesn't reference a link that no longer exists
     selectLink(null);
-    loadRobot(currentInfo, { keepPose: true });   // rebuild with the new name
+    loadRobot(packageState.currentInfo, { keepPose: true });   // rebuild with the new name
     return true;
   } catch (e) {
     log(t('rename.fail', { reset, e: e.message ?? e }), 'err');
@@ -1371,7 +1455,7 @@ async function doRename(kind, oldName, newName) {
 
 // revert ALL joint/link names to their defaults (one rebuild)
 async function resetAllNames() {
-  if (!currentInfo) { return; }
+  if (!packageState.currentInfo) { return; }
   if (!confirm(t('rename.confirmResetAll'))) { return; }
   try {
     const resp = await fetch('/api/reset_names', { method: 'POST' });
@@ -1381,7 +1465,7 @@ async function resetAllNames() {
     refreshHistory();
     selectLink(null);
     document.getElementById('renamelist')?.remove();
-    loadRobot(currentInfo, { keepPose: true });
+    loadRobot(packageState.currentInfo, { keepPose: true });
   } catch (e) {
     log(t('rename.resetAllFail', { e: e.message ?? e }), 'err');
   }
@@ -2132,15 +2216,15 @@ function bindSubassemblyCycleBreakChoices(root, ov) {
 }
 
 async function loadCollapsedPreviewRobot() {
-  if (!currentInfo) { log(t('common.openFirst'), 'wrn'); return; }
+  if (!packageState.currentInfo) { log(t('common.openFirst'), 'wrn'); return; }
   log(t('subasm.previewRobotLoading'));
   try {
     const resp = await fetch('/api/collapsed_preview_urdf');
     const r = await resp.json();
     if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
     loadRobot({
-      ...currentInfo,
-      name: `${currentInfo.name} collapsed preview`,
+      ...packageState.currentInfo,
+      name: `${packageState.currentInfo.name} collapsed preview`,
       urdf: r.urdf,
     }, {
       keepPose: false,
@@ -2161,8 +2245,8 @@ async function loadCollapsedPreviewRobot() {
 }
 
 function loadNormalRobot() {
-  if (!currentInfo) { log(t('common.openFirst'), 'wrn'); return; }
-  loadRobot(currentInfo, { keepPose: false });
+  if (!packageState.currentInfo) { log(t('common.openFirst'), 'wrn'); return; }
+  loadRobot(packageState.currentInfo, { keepPose: false });
   log(t('subasm.normalRobotOk'), 'ok');
 }
 
@@ -2200,7 +2284,7 @@ async function setSubassemblyMode(name, mode, ov) {
 }
 
 async function openSubassemblyList(ov) {
-  if (!viewer.robot && !currentInfo) { log(t('common.openFirst'), 'wrn'); return; }
+  if (!viewer.robot && !packageState.currentInfo) { log(t('common.openFirst'), 'wrn'); return; }
   document.getElementById('masslist')?.remove();
   if (!ov) { document.getElementById('renamelist')?.remove(); }
   const owned = ov || document.createElement('div');
@@ -2283,7 +2367,7 @@ async function openSubassemblyList(ov) {
 }
 
 async function openSubassemblyPreview(ov, preparedPayload = null) {
-  if (!viewer.robot && !currentInfo) { log(t('common.openFirst'), 'wrn'); return; }
+  if (!viewer.robot && !packageState.currentInfo) { log(t('common.openFirst'), 'wrn'); return; }
   const owned = ov || document.getElementById('renamelist') ||
     document.createElement('div');
   owned.id = 'renamelist';
@@ -2461,8 +2545,8 @@ document.getElementById('renamelistbtn')
 
 function syncSubassemblyAccessButton() {
   const button = document.getElementById('subassemblybtn');
-  const hasPackage = !!currentInfo;
-  const available = hasPackage && currentInfo.mode !== 'urdf';
+  const hasPackage = !!packageState.currentInfo;
+  const available = hasPackage && packageState.currentInfo.mode !== 'urdf';
   button.disabled = !available;
   button.style.display = hasPackage && !available ? 'none' : '';
 }
@@ -2476,12 +2560,12 @@ document.getElementById('subassemblybtn')
 function syncSw2urdfButton() {
   const button = document.getElementById('sw2urdfbtn');
   if (!button) { return; }
-  const info = currentInfo?.sw2urdf ?? null;
-  const usable = !!currentInfo && currentInfo.mode !== 'urdf' && !!info?.payload;
+  const info = packageState.currentInfo?.sw2urdf ?? null;
+  const usable = !!packageState.currentInfo && packageState.currentInfo.mode !== 'urdf' && !!info?.payload;
   button.disabled = !usable;
   button.classList.toggle('active', usable && info.mode === 'sw2urdf_compat');
-  button.title = !currentInfo ? t('sw2urdf.tNone')
-    : currentInfo.mode === 'urdf' ? t('sw2urdf.tUrdf')
+  button.title = !packageState.currentInfo ? t('sw2urdf.tNone')
+    : packageState.currentInfo.mode === 'urdf' ? t('sw2urdf.tUrdf')
       : usable ? (info.mode === 'sw2urdf_compat' ? t('sw2urdf.tOn') : t('sw2urdf.tOff'))
         : info?.marker ? t('sw2urdf.tStale', { marker: info.marker })
           : t('sw2urdf.tNone');
@@ -2497,17 +2581,17 @@ function syncSw2urdfButton() {
 function syncClearMeshButton() {
   const btn = document.getElementById('clearmesh');
   if (!btn) { return; }
-  const usable = !!currentInfo && currentInfo.mode === 'cad'
-    && !!currentInfo.source_assembly;
+  const usable = !!packageState.currentInfo && packageState.currentInfo.mode === 'cad'
+    && !!packageState.currentInfo.source_assembly;
   btn.style.display = usable ? '' : 'none';
-  if (usable) { btn.title = t('t.clearmesh') + '\n' + currentInfo.source_assembly; }
+  if (usable) { btn.title = t('t.clearmesh') + '\n' + packageState.currentInfo.source_assembly; }
 }
 
 async function clearMeshCacheAndReextract() {
-  if (!currentInfo?.source_assembly) { log(t('clearmesh.noSource'), 'err'); return; }
-  const src = currentInfo.source_assembly;
-  const cfg = currentInfo.configuration || '';
-  if (!confirm(t('clearmesh.confirm', { name: currentInfo.name, src }))) { return; }
+  if (!packageState.currentInfo?.source_assembly) { log(t('clearmesh.noSource'), 'err'); return; }
+  const src = packageState.currentInfo.source_assembly;
+  const cfg = packageState.currentInfo.configuration || '';
+  if (!confirm(t('clearmesh.confirm', { name: packageState.currentInfo.name, src }))) { return; }
   let r;
   try {
     const resp = await fetch('/api/clear_mesh_cache', { method: 'POST' });
@@ -2525,8 +2609,8 @@ async function clearMeshCacheAndReextract() {
 }
 
 async function toggleSw2urdfVerbatim() {
-  const info = currentInfo?.sw2urdf;
-  if (!currentInfo || !info?.payload) { return; }
+  const info = packageState.currentInfo?.sw2urdf;
+  if (!packageState.currentInfo || !info?.payload) { return; }
   const mode = info.mode === 'sw2urdf_compat' ? 'auto' : 'sw2urdf_compat';
   op('sw2urdfMode', { mode });
   log(t('sw2urdf.start', { mode }));
@@ -2537,10 +2621,10 @@ async function toggleSw2urdfVerbatim() {
       body: JSON.stringify({ mode }) });
     const r = await resp.json();
     if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
-    currentInfo.sw2urdf = r.sw2urdf ?? { ...info, mode };
+    packageState.currentInfo.sw2urdf = r.sw2urdf ?? { ...info, mode };
     syncSw2urdfButton();
-    log(t('sw2urdf.ok', { mode: currentInfo.sw2urdf.mode }), 'ok');
-    loadRobot(currentInfo, { keepPose: true, followCamera: true });
+    log(t('sw2urdf.ok', { mode: packageState.currentInfo.sw2urdf.mode }), 'ok');
+    loadRobot(packageState.currentInfo, { keepPose: true, followCamera: true });
     refreshHistory();
   } catch (e) {
     log(t('sw2urdf.fail', { e: e.message ?? e }), 'err');
@@ -2622,7 +2706,7 @@ const applyLinkEdit = async (fetchArgs, { rebuild, okMsg } = {}) => {
     if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
     log(okMsg ?? t('mass.setOk'), 'ok');
     if (rebuild) {
-      loadRobot(currentInfo, { keepPose: true });
+      loadRobot(packageState.currentInfo, { keepPose: true });
       refreshHistory();
     }
     await refreshCompMeta();      // repaints the mass popup (see refreshCompMeta)
@@ -2782,10 +2866,10 @@ document.getElementById('masslistbtn').addEventListener('click', () => {
 });
 
 function syncTreeModeControls() {
-  const subassemblyModeAvailable = currentInfo?.mode !== 'urdf';
-  const effectiveMode = robotViewMode === 'collapsed_preview'
+  const subassemblyModeAvailable = packageState.currentInfo?.mode !== 'urdf';
+  const effectiveMode = treeState.robotViewMode === 'collapsed_preview'
     ? 'subassembly'
-    : subassemblyModeAvailable ? treeViewMode : 'expanded';
+    : subassemblyModeAvailable ? treeState.treeViewMode : 'expanded';
   const readonly = effectiveMode === 'subassembly';
   const treeMode = document.getElementById('treemode');
   if (treeMode) {
@@ -2794,7 +2878,7 @@ function syncTreeModeControls() {
     treeMode.querySelector('option[value="subassembly"]').textContent =
       t('tree.modeSubassembly');
     treeMode.value = effectiveMode;
-    treeMode.disabled = robotViewMode === 'collapsed_preview'
+    treeMode.disabled = treeState.robotViewMode === 'collapsed_preview'
       || !subassemblyModeAvailable;
   }
   for (const id of ['selall', 'bulktype', 'bulkset', 'bulkdel']) {
@@ -2804,8 +2888,8 @@ function syncTreeModeControls() {
 }
 
 function effectiveTreeViewMode() {
-  if (robotViewMode === 'collapsed_preview') { return 'subassembly'; }
-  return currentInfo?.mode === 'urdf' ? 'expanded' : treeViewMode;
+  if (treeState.robotViewMode === 'collapsed_preview') { return 'subassembly'; }
+  return packageState.currentInfo?.mode === 'urdf' ? 'expanded' : treeState.treeViewMode;
 }
 
 function previewTreeLinkSet(row) {
@@ -2820,7 +2904,7 @@ function highlightPreviewTreeRow(row, on) {
 }
 
 function collapsedPreviewSlidersHtml(plan) {
-  if (robotViewMode !== 'collapsed_preview') { return null; }
+  if (treeState.robotViewMode !== 'collapsed_preview') { return null; }
   const seen = new Set();
   const joints = [];
   for (const row of (plan?.joints || [])) {
@@ -2893,7 +2977,7 @@ function collapsedPreviewSlidersHtml(plan) {
 }
 
 async function renderSubassemblyTreeRows(robot, movable) {
-  const req = ++subasmTreeRequest;
+  const req = ++treeState.subasmTreeRequest;
   rows.clear();
   jointsEl.innerHTML = `<div class="joint" style="color:#8a93a3">` +
     `${t('tree.subasmLoading')}</div>`;
@@ -2902,11 +2986,11 @@ async function renderSubassemblyTreeRows(robot, movable) {
   try {
     const resp = await fetch('/api/collapse_preview');
     const r = await resp.json();
-    if (req !== subasmTreeRequest || effectiveTreeViewMode() !== 'subassembly') {
+    if (req !== treeState.subasmTreeRequest || effectiveTreeViewMode() !== 'subassembly') {
       return;
     }
     if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
-    const q = jointFilter.trim().toLowerCase();
+    const q = treeState.jointFilter.trim().toLowerCase();
     const allRows = r.tree_rows || [];
     const treeRows = q ? allRows.filter(row =>
       [row.link, row.joint, row.source_joint, row.joint_type]
@@ -3020,7 +3104,7 @@ async function renderSubassemblyTreeRows(robot, movable) {
       jointsEl.appendChild(el);
     }
   } catch (e) {
-    if (req !== subasmTreeRequest || effectiveTreeViewMode() !== 'subassembly') {
+    if (req !== treeState.subasmTreeRequest || effectiveTreeViewMode() !== 'subassembly') {
       return;
     }
     jointsEl.innerHTML = `<div class="joint" style="color:#ffb4b4">` +
@@ -3115,24 +3199,24 @@ function buildJointRows(robot) {
         { name: j.name, parent, child })}">` +
       `${child}</span>` +
       (isMimic ? `<span class="mimictag">mimic</span>` : '') +
-      (massOnlyLinks.has(child) ? `<span class="motag">mass</span>` : '') +
-      (compMeta[child]?.frame_only
+      (packageState.massOnlyLinks.has(child) ? `<span class="motag">mass</span>` : '') +
+      (packageState.compMeta[child]?.frame_only
         ? `<span class="frameonlytag">frame</span>` : '') +
       // the classifier's own reason, and a badge when it is one of the
       // guesses worth checking (the server decides -- _JOINT_ATTENTION)
-      (compMeta[child]?.joint_attention
-        ? `<span class="chktag" title="${escAttr(compMeta[child].joint_attention)}` +
-          `&#10;&#10;${escAttr(compMeta[child].joint_note)}` +
+      (packageState.compMeta[child]?.joint_attention
+        ? `<span class="chktag" title="${escAttr(packageState.compMeta[child].joint_attention)}` +
+          `&#10;&#10;${escAttr(packageState.compMeta[child].joint_note)}` +
           `&#10;&#10;${escAttr(t('row.chkHint'))}">?</span>`
-        : (compMeta[child]?.joint_reviewed
+        : (packageState.compMeta[child]?.joint_reviewed
             ? `<span class="chktag done" title="${escAttr(t('row.chkDone'))}` +
-              `&#10;&#10;${escAttr(compMeta[child].joint_note)}">✓</span>`
+              `&#10;&#10;${escAttr(packageState.compMeta[child].joint_note)}">✓</span>`
             : '')) +
       // a mass-only link reads as 'mass_only' (its joint is fixed underneath);
       // picking any real type clears the flag, picking mass_only sets it
-      `<select class="jtypesel t-${massOnlyLinks.has(child)
+      `<select class="jtypesel t-${packageState.massOnlyLinks.has(child)
         ? 'mass_only' : j.jointType}">` +
-      typeOptionsHtml(massOnlyLinks.has(child) ? 'mass_only' : j.jointType) +
+      typeOptionsHtml(packageState.massOnlyLinks.has(child) ? 'mass_only' : j.jointType) +
       `</select>` +
       `<span class="jval">${isMov ? fmtDisp(Number(j.angle)) : ''}</span>` +
       // export this link's shape + weight?  Unchecked = a CAD-only part
@@ -3141,13 +3225,13 @@ function buildJointRows(robot) {
       (urdfInputMode()
         ? ''
         : `<input type="checkbox" class="geo"` +
-          `${compMeta[child]?.frame_only ? '' : ' checked'} ` +
+          `${packageState.compMeta[child]?.frame_only ? '' : ' checked'} ` +
           `title="${escAttr(t('row.geoTitle'))}">`) +
       // a mass-only / frame-only link has no geometry to hide/show
       `<button class="eye${hiddenLinks.has(child) ? ' off' : ''}" ` +
-      (massOnlyLinks.has(child)
+      (packageState.massOnlyLinks.has(child)
         ? `disabled title="${t('row.eyeMassOnly')}"`
-        : compMeta[child]?.frame_only
+        : packageState.compMeta[child]?.frame_only
           ? `disabled title="${t('row.eyeFrameOnly')}"`
           : `title="${t('row.eyeTitle')}"`) + `>👁</button>` +
       `<button class="mkroot" title="${t('row.mkrootTitle')}">⌂</button>` +
@@ -3177,7 +3261,7 @@ function buildJointRows(robot) {
     const rec = { joint: j, row, parent, child,
                   // origType is the DISPLAYED type so the change handler fires
                   // correctly when toggling mass-only on/off (its joint is fixed)
-                  origType: massOnlyLinks.has(child) ? 'mass_only' : j.jointType,
+                  origType: packageState.massOnlyLinks.has(child) ? 'mass_only' : j.jointType,
                   typeSel: row.querySelector('.jtypesel'),
                   pick: row.querySelector('.pick'),
                   slider, val: row.querySelector('.jval'), fmtDisp };
@@ -3193,7 +3277,7 @@ function buildJointRows(robot) {
     if (chk) {
       chk.addEventListener('click', async ev => {
         ev.stopPropagation();
-        const on = !compMeta[child]?.joint_reviewed;
+        const on = !packageState.compMeta[child]?.joint_reviewed;
         // acknowledgement only -- it changes nothing about the model, so
         // there is no rebuild (same contract as /api/set_mass_reviewed)
         await fetch('/api/set_joint_reviewed', {
@@ -3255,18 +3339,18 @@ function buildJointRows(robot) {
   // filtered mode: drop the tree + root heads, render a FLAT list of just the
   // joints whose child-link or joint name matches the substring.  `rows` then
   // holds exactly the matches, so select-all / Set / Delete scope to them.
-  const q = jointFilter.trim().toLowerCase();
+  const q = treeState.jointFilter.trim().toLowerCase();
   const countEl = document.getElementById('jfiltercount');
   // "needs check": the joints the server flagged as guesses
   const flagged = Object.values(robot?.joints ?? {}).filter(
-    j => compMeta[linkOf(j, 'child')]?.joint_attention);
+    j => packageState.compMeta[linkOf(j, 'child')]?.joint_attention);
   const chkBtn = document.getElementById('jcheckonly');
   if (chkBtn) {
     chkBtn.style.display = flagged.length ? '' : 'none';
     chkBtn.textContent = t('jfilter.checkCount', { n: flagged.length });
-    chkBtn.style.opacity = jointCheckOnly ? '1' : '.55';
+    chkBtn.style.opacity = treeState.jointCheckOnly ? '1' : '.55';
   }
-  if (jointCheckOnly && flagged.length) {
+  if (treeState.jointCheckOnly && flagged.length) {
     for (const j of flagged.sort(
         (a, b) => linkOf(a, 'child').localeCompare(linkOf(b, 'child')))) {
       jointRow(j, 0, true);
@@ -3295,20 +3379,20 @@ function buildJointRows(robot) {
       `cursor:pointer" title="${t('row.rootLinkTitle')}">${rootName}</span>` +
       `<span class="rootcomp" style="color:#6b7480;font-size:10px;` +
       `overflow:hidden;text-overflow:ellipsis;white-space:nowrap">` +
-      `${rootBaseName && rootName === 'base_link'
-        ? '= ' + rootBaseName : ''}</span>` +
+      `${packageState.rootBaseName && rootName === 'base_link'
+        ? '= ' + packageState.rootBaseName : ''}</span>` +
       `<span class="jtype" style="background:#2d4a35;color:#8fd99f">root` +
       `</span>` +
-      (compMeta[rootName]?.frame_only
+      (packageState.compMeta[rootName]?.frame_only
         ? `<span class="frameonlytag">frame</span>` : '') +
       // same "export shape + weight" switch as the joint rows below
       (urdfInputMode()
         ? ''
         : `<input type="checkbox" class="geo"` +
-          `${compMeta[rootName]?.frame_only ? '' : ' checked'} ` +
+          `${packageState.compMeta[rootName]?.frame_only ? '' : ' checked'} ` +
           `title="${escAttr(t('row.geoTitle'))}">`) +
       `<button class="eye${hiddenLinks.has(rootName) ? ' off' : ''}" ` +
-      (compMeta[rootName]?.frame_only
+      (packageState.compMeta[rootName]?.frame_only
         ? `disabled title="${t('row.eyeFrameOnly')}"`
         : `title="${t('row.eyeTitle')}"`) + `>👁</button></div>`;
     head.classList.toggle('hiddenlink', hiddenLinks.has(rootName));
@@ -3436,15 +3520,15 @@ function buildPlayRows(robot) {
 const playBtn = document.getElementById('playmode');
 const _panelEl = document.getElementById('panel');
 playBtn.addEventListener('click', () => {
-  playMode = playBtn.classList.toggle('active');
-  _panelEl.classList.toggle('playmode', playMode);
-  if (playMode) {
+  treeState.playMode = playBtn.classList.toggle('active');
+  _panelEl.classList.toggle('playmode', treeState.playMode);
+  if (treeState.playMode) {
     buildPlayRows(viewer.robot);
   } else {
     playRows.clear();                 // drop refs to the now-hidden rows
     playRowsEl.innerHTML = '';
   }
-  log(playMode ? t('play.on') : t('play.off'), 'ok');
+  log(treeState.playMode ? t('play.on') : t('play.off'), 'ok');
 });
 document.getElementById('playhome').addEventListener('click', () => {
   let n = 0;
@@ -3729,11 +3813,11 @@ const originOn = () => originBtn.classList.contains('active');
 function setAxesVisible(on) {
   // keep the selected link's joint axis shown even with the global toggle off
   axisMarkers.forEach((m, name) => {
-    m.mesh.visible = (on && !m.ghost) || name === selAxisJoint;
+    m.mesh.visible = (on && !m.ghost) || name === selectionState.selAxisJoint;
     // the rich glyph (arrow + arc): on every joint when the 'dir' toggle is on,
     // else only on the hovered / selected joint (cluttered shown everywhere)
     const gl = axisGlyphs.get(name);
-    if (gl) { gl.visible = dirsOn() || name === selAxisJoint; }
+    if (gl) { gl.visible = dirsOn() || name === selectionState.selAxisJoint; }
   });
   viewer.redraw();
 }
@@ -3741,7 +3825,7 @@ function setAxesVisible(on) {
 dirsBtn.addEventListener('click', () => {
   dirsBtn.classList.toggle('active');
   axisGlyphs.forEach((gl, name) => {
-    gl.visible = dirsOn() || name === selAxisJoint;
+    gl.visible = dirsOn() || name === selectionState.selAxisJoint;
   });
   viewer.redraw();
 });
@@ -3917,12 +4001,11 @@ function pickPort(ev) {
 // meshes dimmed (rviz-style) so the frame tree is point-at-able ------------
 const tfBtn = document.getElementById('tf');
 const tfOn = () => tfBtn.classList.contains('active');
-let tfNodes = [];
 const dimmedMats = new Map();   // material -> original {transparent,opacity}
 
 function buildTF(robot) {
-  tfNodes.forEach(o => o.removeFromParent());
-  tfNodes = [];
+  viewState.tfNodes.forEach(o => o.removeFromParent());
+  viewState.tfNodes = [];
   const box = robotBox();
   const diag = box ? box.getSize(new THREE.Vector3()).length() : 0.3;
   const len = Math.max(diag * 0.045, 0.012);
@@ -3938,7 +4021,7 @@ function buildTF(robot) {
     const big = name === rootName;
     const t = makeTriad(len * (big ? 2.5 : 1), r * (big ? 2 : 1));
     link.add(t);
-    tfNodes.push(t);
+    viewState.tfNodes.push(t);
   }
   // parent -> child connectors WITH direction (cone at the child end),
   // so the tree visibly flows outward from the root
@@ -3957,7 +4040,7 @@ function buildTF(robot) {
     line.renderOrder = 997;
     markHelper(line);
     j.parent.add(line);
-    tfNodes.push(line);
+    viewState.tfNodes.push(line);
     const cone = new THREE.Mesh(
       new THREE.CylinderGeometry(0, r * 3.2, Math.min(d * 0.25, len * 0.5),
                                  10), coneMat);
@@ -3968,7 +4051,7 @@ function buildTF(robot) {
     cone.renderOrder = 997;
     markHelper(cone);
     j.parent.add(cone);
-    tfNodes.push(cone);
+    viewState.tfNodes.push(cone);
   }
 }
 
@@ -3984,8 +4067,8 @@ function undimAll() {
 }
 
 function setTF(on) {
-  if (on && !tfNodes.length && viewer.robot) { buildTF(viewer.robot); }
-  tfNodes.forEach(o => { o.visible = on; });
+  if (on && !viewState.tfNodes.length && viewer.robot) { buildTF(viewer.robot); }
+  viewState.tfNodes.forEach(o => { o.visible = on; });
   if (on) {
     viewer.robot?.traverse(c => {
       if (c.isMesh && !c.userData.sw2robotMarker && c.material
@@ -4015,8 +4098,6 @@ document.getElementById('axes').addEventListener('change',
 // colours and shading stay visible (a flat replacement read as black)
 const tintClones = new Map();   // original material -> {hov, sel, col}
 const savedMats = new Map();    // mesh -> original material
-let selectedLink = null;
-let collisionLinks = new Set(); // links in a NEW (non-rest) self-collision
 
 const TINT_GLOW = { sel: 0x0e5d80, hov: 0x7a5500, col: 0x8a0e0e,
                     mim: 0x4a2e8a, mas: 0x267a3a };
@@ -4043,12 +4124,12 @@ function _tintedClone(orig, kind) {
 // the tint a link should wear when neither hovered nor freshly (de)selected:
 // collision red wins over the selection blue
 function baseTint(name) {
-  if (mimicMode) {                 // mimic session: master=green, follower=purple
-    if (name === mimicMasterChild) { return 'mas'; }
+  if (mimicState.mimicMode) {                 // mimic session: master=green, follower=purple
+    if (name === mimicState.mimicMasterChild) { return 'mas'; }
     if (mimicFollowers.has(name)) { return 'mim'; }
   }
-  return collisionLinks.has(name) ? 'col'
-       : (name === selectedLink || boxSelected.has(name) ? 'sel' : null);
+  return collisionState.collisionLinks.has(name) ? 'col'
+       : (name === selectionState.selectedLink || boxSelected.has(name) ? 'sel' : null);
 }
 
 function _tintLink(linkName, kind) {   // kind: 'hov' | 'sel' | null
@@ -4090,7 +4171,7 @@ function _tintLink(linkName, kind) {   // kind: 'hov' | 'sel' | null
 
 // hover tint, but never repaint over the selection
 function highlightLink(linkName, on) {
-  if (linkName === selectedLink) { return; }
+  if (linkName === selectionState.selectedLink) { return; }
   _tintLink(linkName, on ? 'hov' : _colorTint(linkName));
 }
 
@@ -4102,12 +4183,9 @@ function highlightLink(linkName, on) {
 // Materials are shared with the mesh cache, so this survives edit-rebuilds; on a
 // fresh page load applyPersistedColors() re-applies from the server.
 const origMatColor = new WeakMap();   // material -> THREE.Color before overrides
-// while the colour picker for a link is open we suppress that link's tint
-// (selection cyan etc.) so the user judges the TRUE colour, not the overlay
-let colorPreviewLink = null;
 // the tint a link should currently wear, honouring colour-preview suppression
 function _colorTint(name) {
-  return name === colorPreviewLink ? null : baseTint(name);
+  return name === selectionState.colorPreviewLink ? null : baseTint(name);
 }
 
 // recently-set colours, newest first, shown as a reusable palette and kept in
@@ -4134,7 +4212,7 @@ function pushRecentColor(hex) {
 // or freshly-applied swatch) is judged without the selection-cyan overlay.  The
 // preview persists until a DIFFERENT link is selected (selectLink clears it).
 function beginColorPreview(name) {
-  colorPreviewLink = name;
+  selectionState.colorPreviewLink = name;
   _tintLink(name, null);
   viewer.redraw();
 }
@@ -4195,7 +4273,7 @@ function resetLinkColor(linkName) {
 // safe to call repeatedly (idempotent) once geometry + compMeta are both in
 function applyPersistedColors() {
   if (!viewer.robot) { return; }
-  for (const [name, hex] of Object.entries(linkColors)) {
+  for (const [name, hex] of Object.entries(packageState.linkColors)) {
     if (hex && viewer.robot.links[name]) { applyLinkColor(name, hex); }
   }
 }
@@ -4204,7 +4282,7 @@ function applyPersistedColors() {
 // flow but needs NO rebuild -- the override is purely a viewer/export concern
 async function setLinkColor(name, hex) {
   op('setColor', { link: name, color: hex });
-  colorPreviewLink = name;          // keep the true colour visible after applying
+  selectionState.colorPreviewLink = name;          // keep the true colour visible after applying
   if (hex) { applyLinkColor(name, hex); } else { resetLinkColor(name); }
   try {
     const resp = await fetch('/api/set_color', {
@@ -4213,11 +4291,11 @@ async function setLinkColor(name, hex) {
       body: JSON.stringify({ link: name, color: hex }) });
     const r = await resp.json();
     if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
-    if (compMeta[name]) { compMeta[name].color = r.color; }
-    if (r.color) { linkColors[name] = r.color; } else { delete linkColors[name]; }
+    if (packageState.compMeta[name]) { packageState.compMeta[name].color = r.color; }
+    if (r.color) { packageState.linkColors[name] = r.color; } else { delete packageState.linkColors[name]; }
     if (r.color) { pushRecentColor(r.color); }   // remember for the palette
     log(t('li.colorOk'), 'ok');
-    if (name === selectedLink) { selectLink(name); }   // refresh reset-btn state
+    if (name === selectionState.selectedLink) { selectLink(name); }   // refresh reset-btn state
   } catch (e) {
     log(t('li.colorFail', { e: e.message ?? e }), 'err');
   }
@@ -4226,20 +4304,19 @@ async function setLinkColor(name, hex) {
 // ---- live self-collision: NEW contacts (not present at the rest pose)
 // turn the offending links red.  The hull model lives server-side
 // (autoinit.SelfCollision); we POST the joint angles, debounced.
-let colReady = false, colBusy = false, colQueued = false;
 let lastActiveJoint = null;    // joint most recently moved (drag/slider)
 const colstatEl = document.getElementById('colstat');
 
 function applyCollision(links, pairs) {
-  for (const n of collisionLinks) {
+  for (const n of collisionState.collisionLinks) {
     if (!links.has(n)) {
-      _tintLink(n, n === selectedLink ? 'sel' : null);
+      _tintLink(n, n === selectionState.selectedLink ? 'sel' : null);
     }
   }
   for (const n of links) {
-    if (!collisionLinks.has(n)) { _tintLink(n, 'col'); }
+    if (!collisionState.collisionLinks.has(n)) { _tintLink(n, 'col'); }
   }
-  collisionLinks = links;
+  collisionState.collisionLinks = links;
   collPreviewRevealColliding(links);   // show colliding links' collision mesh even
                                  // when the CoACD overlay is globally hidden
   if (pairs.length) {
@@ -4262,9 +4339,9 @@ function applyCollision(links, pairs) {
 }
 
 async function collisionCheck() {
-  if (!colReady || !viewer.robot) { return; }
-  if (colBusy) { colQueued = true; return; }
-  colBusy = true;
+  if (!collisionState.colReady || !viewer.robot) { return; }
+  if (collisionState.colBusy) { collisionState.colQueued = true; return; }
+  collisionState.colBusy = true;
   try {
     const angles = {};
     for (const [n, j] of Object.entries(viewer.robot.joints)) {
@@ -4276,8 +4353,8 @@ async function collisionCheck() {
       body: JSON.stringify({ angles }) })).json();
     if (r.ready) { applyCollision(new Set(r.links), r.pairs); }
   } catch { /* transient; next angle change retries */ }
-  colBusy = false;
-  if (colQueued) { colQueued = false; collisionCheck(); }
+  collisionState.colBusy = false;
+  if (collisionState.colQueued) { collisionState.colQueued = false; collisionCheck(); }
 }
 
 // NOT debounced: a smooth drag fires angle-change ~60x/s, and a trailing
@@ -4291,17 +4368,16 @@ function scheduleCollision(e) {
 }
 viewer.addEventListener('angle-change', scheduleCollision);
 
-let colPoll = 0;
 async function initCollision() {
-  colReady = false;
-  clearTimeout(colPoll);
+  collisionState.colReady = false;
+  clearTimeout(collisionState.colPoll);
   applyCollision(new Set(), []);
-  if (dropMode) { return; }       // server has no matching model to query
+  if (packageState.dropMode) { return; }       // server has no matching model to query
   try {
     const r = await (await fetch('/api/collision/init')).json();
     if (r.error) { log(t('col.modelErr', { e: r.error }), 'wrn'); return; }
-    if (!r.ready) { colPoll = setTimeout(initCollision, 2000); return; }
-    colReady = true;
+    if (!r.ready) { collisionState.colPoll = setTimeout(initCollision, 2000); return; }
+    collisionState.colReady = true;
     log(t('col.ready', { n: r.baseline }), 'ok');
     collisionCheck();
   } catch { /* server gone; harmless */ }
@@ -4341,13 +4417,7 @@ function toggleLinkVisible(name, row) {
 }
 
 // ---- selection visuals: link frame triad + centre-of-mass marker --------
-let selVis = null;
-let selAxisJoint = null;          // joint whose axis is force-shown while its
-                                  // child link is selected (incl. fixed joints)
 // ---- mimic-linking session (master joint + follower joints) state -----------
-let mimicMode = false;
-let mimicMaster = null;           // master joint name (the driver)
-let mimicMasterChild = null;      // master's child link (can't follow itself)
 const mimicFollowers = new Set(); // follower child-link names chosen this run
 
 // resting visibility of an axis marker (no hover): a fixed joint's ghost is
@@ -4355,14 +4425,14 @@ const mimicFollowers = new Set(); // follower child-link names chosen this run
 // link's joint axis is always shown -- so you can see where a fixed joint would
 // turn and what `t` will toggle.
 function _markerRestVisible(name, m) {
-  if (name === selAxisJoint) { return true; }
+  if (name === selectionState.selAxisJoint) { return true; }
   return m.ghost ? false : axesOn();
 }
 // reveal the selected link's joint axis (and restore the previously shown one).
 // The rod + its always-on glyph track visibility together.
 function revealSelectedJointAxis(linkName) {
-  const prev = selAxisJoint;
-  selAxisJoint = null;
+  const prev = selectionState.selAxisJoint;
+  selectionState.selAxisJoint = null;
   if (prev) {
     const pm = axisMarkers.get(prev);
     if (pm) { pm.mesh.visible = _markerRestVisible(prev, pm); }
@@ -4373,7 +4443,7 @@ function revealSelectedJointAxis(linkName) {
     const rec = [...rows.values()].find(r => r.child === linkName);
     const m = rec && axisMarkers.get(rec.joint.name);
     if (m) {
-      m.mesh.visible = true; selAxisJoint = rec.joint.name;
+      m.mesh.visible = true; selectionState.selAxisJoint = rec.joint.name;
       const gl = axisGlyphs.get(rec.joint.name);
       if (gl) { gl.visible = true; }
     }
@@ -4400,8 +4470,8 @@ function parseInertial(link) {
 }
 
 function showSelectionVisuals(name) {
-  selVis?.removeFromParent();
-  selVis = null;
+  selectionState.selVis?.removeFromParent();
+  selectionState.selVis = null;
   const link = viewer.robot?.links?.[name];
   if (!link) { return; }
   const box = ownLinkBox(link, new THREE.Box3());
@@ -4422,7 +4492,7 @@ function showSelectionVisuals(name) {
   }
   markHelper(g);
   link.add(g);                        // link frame: follows FK
-  selVis = g;
+  selectionState.selVis = g;
   viewer.redraw();
 }
 
@@ -4508,7 +4578,7 @@ function physicsSectionHtml(j) {
 
 // gather the physics inputs (blank -> null = clear) and POST /api/set_physics
 async function applyPhysics(child, phys) {
-  if (!currentInfo) { return; }
+  if (!packageState.currentInfo) { return; }
   log(t('phys.applying'));
   statusEl.textContent = t('status.rebuilding');
   try {
@@ -4519,15 +4589,15 @@ async function applyPhysics(child, phys) {
     if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
     if (!r.applied?.length) {
       log(t('limits.noneMatched', { child }), 'err');
-      reselectAfterLoad = null;
+      selectionState.reselectAfterLoad = null;
       return;
     }
     log(t('phys.done'), 'ok');
-    loadRobot(currentInfo, { keepPose: true });
+    loadRobot(packageState.currentInfo, { keepPose: true });
     refreshHistory();
   } catch (e) {
     log(t('phys.fail', { e: e.message ?? e }), 'err');
-    reselectAfterLoad = null;
+    selectionState.reselectAfterLoad = null;
   }
 }
 
@@ -4545,7 +4615,7 @@ function jointPanelHtml(j, parentLink, childLink) {
   const snaps = [...new Set(cand
     .filter(v => v >= dLo - 1e-6 && v <= dHi + 1e-6)
     .map(v => Math.round(v * 10) / 10))].sort((a, b) => a - b);
-  const curType = massOnlyLinks.has(childLink) ? 'mass_only' : j.jointType;
+  const curType = packageState.massOnlyLinks.has(childLink) ? 'mass_only' : j.jointType;
   const typeOpts = typeOptionsHtml(curType);
   let body = '';
   if (movable && !mimic) {
@@ -4635,7 +4705,7 @@ function wireJointPanel(el, j) {
       .find(e => e.tagName === 'child')?.getAttribute('link') ?? '';
     // a focused single-joint edit applies immediately (rebuild + reload), so
     // the change actually takes effect (axis, export) without a separate Apply
-    reselectAfterLoad = child;        // keep this panel open on the new model
+    selectionState.reselectAfterLoad = child;        // keep this panel open on the new model
     typeSel.disabled = true;
     const reloading = await applyTypeChanges(
       [{ name: j.name, parent: '', child, type: t }]);
@@ -4671,7 +4741,7 @@ function wireJointPanel(el, j) {
       const v = inp.value.trim();
       phys[inp.dataset.key] = v === '' ? null : parseFloat(v);
     });
-    reselectAfterLoad = childLink;      // keep this panel open after rebuild
+    selectionState.reselectAfterLoad = childLink;      // keep this panel open after rebuild
     applyPhysics(childLink, phys);
   });
 
@@ -4702,7 +4772,7 @@ function wireJointPanel(el, j) {
     b.addEventListener('click', () => apply(parseFloat(b.dataset.v))));
   markCur(parseFloat(slider.value));
   // external moves (the sidebar slider) refresh this panel without re-firing
-  jpSync = { name: j.name, set: nat => show(clamp(um.toDisp(nat))) };
+  selectionState.jpSync = { name: j.name, set: nat => show(clamp(um.toDisp(nat))) };
 
   // editable travel range (revolute/prismatic): write lower/upper -> rebuild
   const limApply = panel.querySelector('.jp-lim-apply');
@@ -4716,14 +4786,14 @@ function wireJointPanel(el, j) {
         return;
       }
       limApply.disabled = true;
-      reselectAfterLoad = childLink;     // keep this panel open after rebuild
+      selectionState.reselectAfterLoad = childLink;     // keep this panel open after rebuild
       applyJointLimits(childLink, um.toNat(dlo), um.toNat(dhi));
     });
   }
 }
 
 function fillLinkInfo(name) {
-  jpSync = null;                  // the panel for the previous link is gone
+  selectionState.jpSync = null;                  // the panel for the previous link is gone
   const el = document.getElementById('linkinfo');
   const link = viewer.robot?.links?.[name];
   if (!link) { el.style.display = 'none'; return; }
@@ -4776,7 +4846,7 @@ function fillLinkInfo(name) {
   }
   // CAD packages show inertia read-only (it is derived from mesh + density);
   // a directly-opened URDF lets the user edit it (URDF-input mode).
-  const urdfMode = currentInfo?.mode === 'urdf';
+  const urdfMode = packageState.currentInfo?.mode === 'urdf';
   if (inert && !urdfMode) {
     add(t('li.mass'), inert.mass >= 0.1
       ? `${inert.mass.toFixed(3)} kg` : `${(inert.mass * 1000).toFixed(1)} g`);
@@ -4813,7 +4883,7 @@ function fillLinkInfo(name) {
   // editable colour: the picker shows the persisted override if any, else the
   // mesh's own colour; the 'reset' button (active only when overridden) clears
   // the override back to the CAD colour
-  const ov = linkColors[name];                         // '#rrggbb' or undefined
+  const ov = packageState.linkColors[name];                         // '#rrggbb' or undefined
   const cur = (ov || (c ? '#' + c : '#cccccc')).toLowerCase();
   rowsHtml.push(
     `<tr><td>${t('li.color')}</td><td>` +
@@ -4840,7 +4910,7 @@ function fillLinkInfo(name) {
     rowsHtml.push(`<tr><td>${t('li.recentColors')}</td><td>${sw}</td></tr>`);
   }
   // SolidWorks material + density (with web override), editable below
-  const meta = compMeta[name];
+  const meta = packageState.compMeta[name];
   const matTxt = meta?.override
     ? `${meta.override} kg/m³ <span style="color:#e8c468">${t('li.override')}</span>`
     : meta?.material
@@ -4917,8 +4987,8 @@ function fillLinkInfo(name) {
       // refresh compMeta FIRST so the reselect below re-renders the popup in the
       // new state (checkbox / override), not the stale pre-edit one
       await refreshCompMeta();
-      reselectAfterLoad = name;   // reopen this popup when the reload completes
-      loadRobot(currentInfo, { keepPose: true });
+      selectionState.reselectAfterLoad = name;   // reopen this popup when the reload completes
+      loadRobot(packageState.currentInfo, { keepPose: true });
       refreshHistory();
     } catch (err) { log(t('mass.fail', { e: err.message ?? err }), 'err'); }
   };
@@ -4935,8 +5005,8 @@ function fillLinkInfo(name) {
       if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
       log(t(off ? 'row.frameOnlyOn' : 'row.frameOnlyOff', { name }), 'ok');
       await refreshCompMeta();
-      reselectAfterLoad = name;   // reopen this popup when the reload completes
-      loadRobot(currentInfo, { keepPose: true });
+      selectionState.reselectAfterLoad = name;   // reopen this popup when the reload completes
+      loadRobot(packageState.currentInfo, { keepPose: true });
       refreshHistory();
     } catch (err) { log(t('mass.fail', { e: err.message ?? err }), 'err'); }
   });
@@ -4960,8 +5030,8 @@ function fillLinkInfo(name) {
       if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
       log(t('li.densityOk'), 'ok');
       await refreshCompMeta();    // fresh meta so the reselect shows the override
-      reselectAfterLoad = name;   // reopen this popup when the reload completes
-      loadRobot(currentInfo, { keepPose: true });
+      selectionState.reselectAfterLoad = name;   // reopen this popup when the reload completes
+      loadRobot(packageState.currentInfo, { keepPose: true });
       refreshHistory();
     } catch (e) {
       log(t('li.densityFail', { e: e.message ?? e }), 'err');
@@ -5009,7 +5079,7 @@ function fillLinkInfo(name) {
         const r = await resp.json();
         if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
         log(t('li.inertialOk'), 'ok');
-        loadRobot(currentInfo, { keepPose: true });   // re-read the edited URDF
+        loadRobot(packageState.currentInfo, { keepPose: true });   // re-read the edited URDF
         refreshHistory();
         const reselect = name;
         setTimeout(() => selectLink(reselect), 1500);  // reopen panel after rebuild
@@ -5028,9 +5098,9 @@ function selectLink(linkName) {
   if (linkName && boxSelected.size) { clearBoxSelection(); }  // single replaces box
   // moving to a different link ends any colour preview, so the link we leave
   // gets its normal resting tint back
-  if (linkName !== colorPreviewLink) { colorPreviewLink = null; }
-  const prev = selectedLink;
-  selectedLink = linkName;
+  if (linkName !== selectionState.colorPreviewLink) { selectionState.colorPreviewLink = null; }
+  const prev = selectionState.selectedLink;
+  selectionState.selectedLink = linkName;
   if (prev) { _tintLink(prev, _colorTint(prev)); }
   const bar = document.getElementById('selbar');
   if (linkName) {
@@ -5045,35 +5115,35 @@ function selectLink(linkName) {
     fillLinkInfo(linkName);
     const rec = [...rows.values()].find(r => r.child === linkName);
     rec?.row.scrollIntoView({ block: 'nearest' });
-    if (playMode) {                       // 3D click -> jump to the play slider
+    if (treeState.playMode) {                       // 3D click -> jump to the play slider
       for (const r of playRows.values()) { r.row.classList.remove('hl'); }
       const pr = [...playRows.values()].find(r => r.child === linkName);
       if (pr) { pr.row.classList.add('hl'); pr.row.scrollIntoView({ block: 'nearest' }); }
     }
   } else {
-    if (playMode) {
+    if (treeState.playMode) {
       for (const r of playRows.values()) { r.row.classList.remove('hl'); }
     }
     bar.style.display = 'none';
-    selVis?.removeFromParent();
-    selVis = null;
+    selectionState.selVis?.removeFromParent();
+    selectionState.selVis = null;
     revealSelectedJointAxis(null);        // hide the de-selected joint's axis
-    jpSync = null;
+    selectionState.jpSync = null;
     document.getElementById('linkinfo').style.display = 'none';
     viewer.redraw();
   }
 }
 document.getElementById('selroot').addEventListener('click', () => {
-  if (selectedLink) { const l = selectedLink; selectLink(null); reRoot(l); }
+  if (selectionState.selectedLink) { const l = selectionState.selectedLink; selectLink(null); reRoot(l); }
 });
 document.getElementById('seldesel').addEventListener('click',
   () => selectLink(null));
 document.getElementById('seleye').addEventListener('click', () => {
-  if (!selectedLink) { return; }
-  const rec = [...rows.values()].find(r => r.child === selectedLink);
-  toggleLinkVisible(selectedLink, rec?.row);
+  if (!selectionState.selectedLink) { return; }
+  const rec = [...rows.values()].find(r => r.child === selectionState.selectedLink);
+  toggleLinkVisible(selectionState.selectedLink, rec?.row);
   document.getElementById('seleye').classList.toggle(
-    'off', hiddenLinks.has(selectedLink));
+    'off', hiddenLinks.has(selectionState.selectedLink));
 });
 
 // 🗑 = REALLY remove from the built URDF (yaml exclude:), not just hide
@@ -5088,16 +5158,16 @@ async function setExclude(body, what) {
     const r = await resp.json();
     if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
     log(t('excl.now', { n: r.excluded.length }), 'ok');
-    loadRobot(currentInfo, { keepPose: true });
+    loadRobot(packageState.currentInfo, { keepPose: true });
     refreshHistory();
   } catch (e) {
     log(t('excl.fail', { e: e.message ?? e }), 'err');
   }
 }
 document.getElementById('selexclude').addEventListener('click', () => {
-  if (!selectedLink || !currentInfo) { return; }
-  const comp = compMeta[selectedLink]?.name ?? selectedLink;
-  const l = selectedLink;
+  if (!selectionState.selectedLink || !packageState.currentInfo) { return; }
+  const comp = packageState.compMeta[selectionState.selectedLink]?.name ?? selectionState.selectedLink;
+  const l = selectionState.selectedLink;
   selectLink(null);
   setExclude({ name: comp, on: true }, t('excl.excluding', { l }));
 });
@@ -5108,10 +5178,10 @@ document.getElementById('selexclude').addEventListener('click', () => {
 const _exclChip = document.getElementById('exclchip');
 const _exclPop = document.getElementById('exclpop');
 function showExclPopover() {
-  if (!excludedList.length) { _exclPop.style.display = 'none'; return; }
+  if (!packageState.excludedList.length) { _exclPop.style.display = 'none'; return; }
   const esc = s => String(s).replace(/[&<>"]/g,
     c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-  const rows = excludedList.map(n =>
+  const rows = packageState.excludedList.map(n =>
     '<div style="display:flex;gap:6px;align-items:center;'
     + 'justify-content:space-between;padding:2px 0">'
     + `<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"`
@@ -5120,7 +5190,7 @@ function showExclPopover() {
   ).join('');
   _exclPop.innerHTML =
     `<div style="color:#8a93a3;margin-bottom:4px">`
-    + `${t('excl.popTitle', { n: excludedList.length })}</div>${rows}`
+    + `${t('excl.popTitle', { n: packageState.excludedList.length })}</div>${rows}`
     + '<div style="border-top:1px solid #456;margin-top:4px;padding-top:4px">'
     + `<button id="exclrestoreall" style="width:100%">`
     + `${t('excl.restoreAllBtn')}</button></div>`;
@@ -5169,11 +5239,11 @@ function linkSubtree(linkName) {
 // Delete key: remove the selected link AND its whole subtree from the URDF
 // (children would otherwise dangle).  Excluded as one rebuild; Ctrl+Z restores.
 function deleteSelectedSubtree() {
-  if (!selectedLink || !currentInfo) { return; }
-  const links = linkSubtree(selectedLink);
+  if (!selectionState.selectedLink || !packageState.currentInfo) { return; }
+  const links = linkSubtree(selectionState.selectedLink);
   if (!links.length) { return; }
-  const comps = [...new Set(links.map(n => compMeta[n]?.name ?? n))];
-  const l = selectedLink, n = links.length;
+  const comps = [...new Set(links.map(n => packageState.compMeta[n]?.name ?? n))];
+  const l = selectionState.selectedLink, n = links.length;
   selectLink(null);
   setExclude({ names: comps, on: true }, t('del.deleting', { l, n }));
 }
@@ -5182,7 +5252,7 @@ function deleteSelectedSubtree() {
 // so it rides hover (and selection): only the joint under the cursor gets it.
 function showJointGlyph(name, on) {
   const gl = axisGlyphs.get(name);
-  if (gl) { gl.visible = on || name === selAxisJoint || dirsOn(); }
+  if (gl) { gl.visible = on || name === selectionState.selAxisJoint || dirsOn(); }
 }
 
 function highlightJoint(name, on) {
@@ -5228,14 +5298,14 @@ viewer.addEventListener('joint-mouseout',
 // select-all + Set/Delete below act on exactly those (e.g. all "flange" joints).
 const _jfilterEl = document.getElementById('jfilter');
 _jfilterEl.addEventListener('input', () => {
-  jointFilter = _jfilterEl.value;
-  jointCheckOnly = false;         // typing a name means "search", not "review"
+  treeState.jointFilter = _jfilterEl.value;
+  treeState.jointCheckOnly = false;         // typing a name means "search", not "review"
   document.getElementById('selall').checked = false;
   if (viewer.robot) { buildJointRows(viewer.robot); }
 });
 document.getElementById('jcheckonly').addEventListener('click', () => {
-  jointCheckOnly = !jointCheckOnly;
-  if (jointCheckOnly) { jointFilter = ''; _jfilterEl.value = ''; }
+  treeState.jointCheckOnly = !treeState.jointCheckOnly;
+  if (treeState.jointCheckOnly) { treeState.jointFilter = ''; _jfilterEl.value = ''; }
   if (viewer.robot) { buildJointRows(viewer.robot); }
 });
 // Esc clears the filter (without bubbling to the global Escape handler)
@@ -5244,14 +5314,14 @@ _jfilterEl.addEventListener('keydown', e => {
   if (e.key === 'Escape' && _jfilterEl.value) {
     e.preventDefault();
     _jfilterEl.value = '';
-    jointFilter = '';
+    treeState.jointFilter = '';
     document.getElementById('selall').checked = false;
     if (viewer.robot) { buildJointRows(viewer.robot); }
   }
 });
 const _treeModeEl = document.getElementById('treemode');
 _treeModeEl?.addEventListener('change', () => {
-  treeViewMode = _treeModeEl.value === 'subassembly'
+  treeState.treeViewMode = _treeModeEl.value === 'subassembly'
     ? 'subassembly' : 'expanded';
   document.getElementById('selall').checked = false;
   if (viewer.robot) { buildJointRows(viewer.robot); }
@@ -5282,7 +5352,7 @@ document.getElementById('bulkset').addEventListener('click', () => {
 // (children would otherwise dangle).  Same exclude path as Del / 🗑 — Ctrl+Z
 // restores.  Pairs with the filter: filter to "flange", select-all, Delete.
 document.getElementById('bulkdel').addEventListener('click', () => {
-  if (!currentInfo) { return; }
+  if (!packageState.currentInfo) { return; }
   const picked = [...rows.values()].filter(r => r.pick.checked);
   if (!picked.length) { log(t('bulk.delNone'), 'wrn'); return; }
   // expand each picked link to its whole subtree, mapped to component names
@@ -5290,7 +5360,7 @@ document.getElementById('bulkdel').addEventListener('click', () => {
   for (const r of picked) {
     for (const n of linkSubtree(r.child)) { links.add(n); }
   }
-  const comps = [...new Set([...links].map(n => compMeta[n]?.name ?? n))];
+  const comps = [...new Set([...links].map(n => packageState.compMeta[n]?.name ?? n))];
   if (!confirm(t('bulk.delConfirm', { n: picked.length }))) { return; }
   selectLink(null);
   setExclude({ names: comps, on: true },
@@ -5351,10 +5421,10 @@ function patchJointTypeLive(j, type) {
 // open joint panel.  DOM-only -> this is what makes a type flip feel instant.
 function refreshAfterTypeChange() {
   buildJointRows(viewer.robot);
-  if (playMode) { buildPlayRows(viewer.robot); }
+  if (treeState.playMode) { buildPlayRows(viewer.robot); }
   addAxisMarkers(viewer.robot);
-  if (selectedLink && viewer.robot.links[selectedLink]) {
-    selectLink(selectedLink);          // rebuild the panel (type / limit / axis)
+  if (selectionState.selectedLink && viewer.robot.links[selectionState.selectedLink]) {
+    selectLink(selectionState.selectedLink);          // rebuild the panel (type / limit / axis)
   }
   viewer.redraw();
 }
@@ -5380,31 +5450,31 @@ async function persistTypeChanges(changes, { reload = false } = {}) {
       log(t('types.saved', { n: r.applied.length }), 'ok');
       // a mass-only toggle changes geometry (strip/restore + fold), so the
       // optimistic patch was skipped -- reload to show the new link set
-      if (reload && currentInfo) {
+      if (reload && packageState.currentInfo) {
         await refreshCompMeta();
-        loadRobot(currentInfo, { keepPose: true });
+        loadRobot(packageState.currentInfo, { keepPose: true });
       }
       return;
     }
     // anything the optimistic view changed but the file did NOT accept -> resync
     // the live model from the server's URDF so the editor never drifts.
-    if (currentInfo) { loadRobot(currentInfo, { keepPose: true }); }
+    if (packageState.currentInfo) { loadRobot(packageState.currentInfo, { keepPose: true }); }
   } catch (e) {
     log(t('types.applyFail', { e: e.message ?? e }), 'err');
-    if (currentInfo) { loadRobot(currentInfo, { keepPose: true }); }
+    if (packageState.currentInfo) { loadRobot(packageState.currentInfo, { keepPose: true }); }
   }
 }
 
 function applyTypeChanges(changes) {
-  if (!changes.length || !currentInfo || !viewer.robot) {
-    reselectAfterLoad = null;
+  if (!changes.length || !packageState.currentInfo || !viewer.robot) {
+    selectionState.reselectAfterLoad = null;
     return false;
   }
   // mass-only toggles (to OR away from) change the built link set -- geometry is
   // stripped and the link folds into its parent -- which the optimistic in-place
   // patch can't represent.  Persist and reload the whole batch instead.
-  if (changes.some(ch => ch.type === 'mass_only' || massOnlyLinks.has(ch.child))) {
-    reselectAfterLoad = null;
+  if (changes.some(ch => ch.type === 'mass_only' || packageState.massOnlyLinks.has(ch.child))) {
+    selectionState.reselectAfterLoad = null;
     log(t('types.applied', { n: changes.length }));
     typePersistChain = typePersistChain
       .then(() => persistTypeChanges(changes, { reload: true }));
@@ -5418,7 +5488,7 @@ function applyTypeChanges(changes) {
     patchJointTypeLive(j, ch.type);
     patched.push(ch);
   }
-  reselectAfterLoad = null;            // no reload -> nothing to reselect
+  selectionState.reselectAfterLoad = null;            // no reload -> nothing to reselect
   if (!patched.length) { return false; }
   refreshAfterTypeChange();
   log(t('types.applied', { n: patched.length }));
@@ -5432,8 +5502,8 @@ function applyTypeChanges(changes) {
 // rad for revolute, m for prismatic) and rebuild -- shares /api/set_limits with
 // the auto-limit sweep, so a joint with no SolidWorks limit mate is editable too
 async function applyJointLimits(child, lowerNat, upperNat) {
-  if (!currentInfo) {
-    reselectAfterLoad = null;
+  if (!packageState.currentInfo) {
+    selectionState.reselectAfterLoad = null;
     return;
   }
   log(t('limits.applying'));
@@ -5448,15 +5518,15 @@ async function applyJointLimits(child, lowerNat, upperNat) {
     if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
     if (!r.applied?.length) {
       log(t('limits.noneMatched', { child }), 'err');
-      reselectAfterLoad = null;
+      selectionState.reselectAfterLoad = null;
       return;
     }
     log(t('limits.done'), 'ok');
-    loadRobot(currentInfo, { keepPose: true });
+    loadRobot(packageState.currentInfo, { keepPose: true });
     refreshHistory();
   } catch (e) {
     log(t('limits.fail', { e: e.message ?? e }), 'err');
-    reselectAfterLoad = null;
+    selectionState.reselectAfterLoad = null;
   }
 }
 
@@ -5466,10 +5536,10 @@ async function applyJointLimits(child, lowerNat, upperNat) {
 // (continuous/prismatic) collapse to fixed; fixed becomes revolute.
 function toggleJointFixed() {
   let rec = null;
-  if (selectedLink) {
-    rec = [...rows.values()].find(r => r.child === selectedLink);
-  } else if (hoveredAxis) {
-    rec = rows.get(hoveredAxis);
+  if (selectionState.selectedLink) {
+    rec = [...rows.values()].find(r => r.child === selectionState.selectedLink);
+  } else if (selectionState.hoveredAxis) {
+    rec = rows.get(selectionState.hoveredAxis);
   } else {
     // "move" mode: target the joint whose slider/value field is focused
     const pr = document.activeElement?.closest?.('.prow');
@@ -5479,7 +5549,7 @@ function toggleJointFixed() {
   if (!rec) { log(t('jtype.noTarget'), 'wrn'); return; }
   const cur = rec.joint.jointType;
   const next = cur === 'fixed' ? 'revolute' : 'fixed';
-  reselectAfterLoad = rec.child;        // keep selection/panel after the rebuild
+  selectionState.reselectAfterLoad = rec.child;        // keep selection/panel after the rebuild
   log(t('jtype.toggle', { joint: rec.joint.name, from: cur, to: next }));
   applyTypeChanges([{ name: rec.joint.name, parent: rec.parent,
                       child: rec.child, type: next }]);
@@ -5491,7 +5561,7 @@ function toggleJointFixed() {
 // export reads it as-is.  Target = the selected link's joint, else the hovered
 // axis (mirrors `t`).
 async function applyAxisFlip(jointName, child) {
-  if (!currentInfo) { return; }
+  if (!packageState.currentInfo) { return; }
   log(t('flip.applying', { joint: jointName }));
   try {
     const resp = await fetch('/api/set_axis', {
@@ -5501,8 +5571,8 @@ async function applyAxisFlip(jointName, child) {
     if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
     if (!r.applied?.length) { log(t('flip.noneMatched'), 'err'); return; }
     log(t('flip.done', { joint: jointName }), 'ok');
-    reselectAfterLoad = child;            // keep selection/panel after reload
-    loadRobot(currentInfo, { keepPose: true });
+    selectionState.reselectAfterLoad = child;            // keep selection/panel after reload
+    loadRobot(packageState.currentInfo, { keepPose: true });
   } catch (e) {
     log(t('flip.fail', { e: e.message ?? e }), 'err');
   }
@@ -5510,10 +5580,10 @@ async function applyAxisFlip(jointName, child) {
 
 function flipTargetJointAxis() {
   let rec = null;
-  if (selectedLink) {
-    rec = [...rows.values()].find(r => r.child === selectedLink);
-  } else if (hoveredAxis) {
-    rec = rows.get(hoveredAxis);
+  if (selectionState.selectedLink) {
+    rec = [...rows.values()].find(r => r.child === selectionState.selectedLink);
+  } else if (selectionState.hoveredAxis) {
+    rec = rows.get(selectionState.hoveredAxis);
   }
   if (!rec) { log(t('flip.noTarget'), 'wrn'); return; }
   if (rec.joint.jointType === 'fixed') { log(t('flip.notMovable'), 'wrn'); return; }
@@ -5523,7 +5593,7 @@ function flipTargetJointAxis() {
 // ---- 🛠 auto joint limits via the self-collision sweep -------------------
 const autolimitsBtn = document.getElementById('autolimits');
 autolimitsBtn.addEventListener('click', async () => {
-  if (!currentInfo || dropMode) {
+  if (!packageState.currentInfo || packageState.dropMode) {
     log(t('auto.needPkg'), 'wrn');
     return;
   }
@@ -5573,7 +5643,7 @@ autolimitsBtn.addEventListener('click', async () => {
       log(t('auto.notMatched', { list: r.missed.join(', ') }), 'wrn');
     }
     log(t('auto.applied', { n: r.applied.length }), 'ok');
-    loadRobot(currentInfo, { keepPose: true });
+    loadRobot(packageState.currentInfo, { keepPose: true });
     refreshHistory();
   } catch (e) {
     hideLoadbar();
@@ -5597,7 +5667,7 @@ const expColFmt = document.getElementById('expcolfmt');
 function exportDefaultName() {
   // mirror the server: sanitise the assembly name to a valid ROS package name
   // ('Assem1' -> 'assem1_description') so the placeholder matches what ships
-  const n = currentInfo?.name;
+  const n = packageState.currentInfo?.name;
   if (!n) { return 'robot_description'; }
   let base = n.toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/^_+|_+$/g, '');
   if (!base || !/[a-z]/.test(base[0])) { base = base ? 'robot_' + base : 'robot'; }
@@ -5658,7 +5728,7 @@ collModeSel?.addEventListener('change', () => {
   // it: nothing is shown until a preview is made for the newly-selected type
   // (copy has none; hull/coacd must be (re)generated).
   collPreviewClearOverlay();
-  collPreviewFinalized = false;
+  collisionState.collPreviewFinalized = false;
   setCollisionShown(false);
 });
 updateCollUI();
@@ -5698,7 +5768,6 @@ function collPreviewSetBlink(links) {
 }
 const collPreviewGroups = {};        // link name -> THREE.Object3D attached to the link
 let collPreviewPoll = null;
-let collPreviewFinalized = false;    // ran the post-generation hookup (export + collision)
 let collPreviewLastCurrent = null;   // last link the server reported as in-progress
 const collPreviewLogged = new Set(); // links already logged as ready (avoid repeats)
 
@@ -5809,8 +5878,8 @@ async function collPreviewTick() {
       collPreviewProg.textContent = t('coacd.done', { n: produced });
       log(t('coacd.done', { n: produced }), 'ok');
     }
-    if (produced > 0 && !collPreviewFinalized) {
-      collPreviewFinalized = true;
+    if (produced > 0 && !collisionState.collPreviewFinalized) {
+      collisionState.collPreviewFinalized = true;
       // 1) the URDF/ROS export should now ship these parts as <collision>:
       //    point the mode selector at whatever we just generated
       if (collModeSel && s.mode) { collModeSel.value = s.mode; updateCollUI(); }
@@ -5842,7 +5911,7 @@ collPreviewGenBtn?.addEventListener('click', async () => {
   if (collPreviewPoll) { return; }
   collPreviewClearOverlay();
   collPreviewLogged.clear(); collPreviewLastCurrent = null;
-  collPreviewFinalized = false;
+  collisionState.collPreviewFinalized = false;
   setCollisionShown(true);                       // watch it build by default
   collPreviewGenBtn.disabled = true;
   collPreviewProg.textContent = t('coacd.start');
@@ -5881,7 +5950,7 @@ function setCollisionShown(on) {
   collPreviewSetShown(on);
   // hiding the overlay shouldn't hide a CURRENT collision -- keep colliding
   // links' meshes visible
-  if (!on) { collPreviewRevealColliding(collisionLinks); }
+  if (!on) { collPreviewRevealColliding(collisionState.collisionLinks); }
 }
 collPreviewShow?.addEventListener('change', () => setCollisionShown(collPreviewShow.checked));
 collViewBtn?.addEventListener('click',
@@ -5891,10 +5960,10 @@ collViewBtn?.addEventListener('click',
 // (?merged=1).  Reuses the normal load path, keeping the current pose.
 const mergeViewBtn = document.getElementById('mergeview');
 mergeViewBtn?.addEventListener('click', () => {
-  if (!currentInfo) { return; }
-  mergedView = mergeViewBtn.classList.toggle('active');
-  log(t(mergedView ? 'merge.on' : 'merge.off'));
-  loadRobot(currentInfo, { keepPose: true });
+  if (!packageState.currentInfo) { return; }
+  viewState.mergedView = mergeViewBtn.classList.toggle('active');
+  log(t(viewState.mergedView ? 'merge.on' : 'merge.off'));
+  loadRobot(packageState.currentInfo, { keepPose: true });
 });
 expLinks.forEach(a => a.addEventListener('click', async ev => {
   ev.preventDefault();
@@ -6059,7 +6128,7 @@ document.querySelectorAll('#views button[data-v]').forEach(b =>
 // ---- re-root: shared by the tree's ⌂ buttons and the 3D hover R key -----
 async function reRoot(link) {
   op('reRoot', { link });
-  if (!currentInfo) {
+  if (!packageState.currentInfo) {
     log(t('reroot.needPkg'), 'wrn');
     return;
   }
@@ -6073,7 +6142,7 @@ async function reRoot(link) {
     const r = await resp.json();
     if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
     log(t('reroot.ok', { base: r.base, flipped: r.flipped }), 'ok');
-    loadRobot(currentInfo, { keepPose: true, followCamera: true });
+    loadRobot(packageState.currentInfo, { keepPose: true, followCamera: true });
     refreshHistory();
   } catch (e) {
     log(t('reroot.fail', { e: e.message ?? e }), 'err');
@@ -6081,7 +6150,7 @@ async function reRoot(link) {
 }
 
 async function redetectMimic() {
-  if (!currentInfo) { log(t('reroot.needPkg'), 'wrn'); return; }
+  if (!packageState.currentInfo) { log(t('reroot.needPkg'), 'wrn'); return; }
   log(t('redetect.start'));
   try {
     const resp = await fetch('/api/redetect_couplings', { method: 'POST' });
@@ -6089,7 +6158,7 @@ async function redetectMimic() {
     if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
     if (!r.applied || !r.applied.length) { log(t('redetect.none'), 'wrn'); return; }
     log(t('redetect.ok', { n: r.applied.length }), 'ok');
-    loadRobot(currentInfo, { keepPose: true, followCamera: true });
+    loadRobot(packageState.currentInfo, { keepPose: true, followCamera: true });
     refreshHistory();
   } catch (e) {
     log(t('redetect.fail', { e: e.message ?? e }), 'err');
@@ -6129,8 +6198,6 @@ document.getElementById('redetectmimic')
 // double-click = jump to its row in the tree -------------------------------
 const hovertip = document.getElementById('hovertip');
 const raycaster = new THREE.Raycaster();
-let hoveredLink = null;
-let hoveredAxis = null;            // joint name whose axis the cursor is near
 
 function pickHit(ev) {
   if (!viewer.robot) { return null; }
@@ -6628,7 +6695,7 @@ function fitFaceCircle(hit) {
 
 async function alignRootTo(hit) {
   op('align');
-  if (!currentInfo) {
+  if (!packageState.currentInfo) {
     log(t('align.needPkg'), 'wrn');
     return;
   }
@@ -6692,7 +6759,7 @@ async function alignRootTo(hit) {
 
 async function removePort(name) {
   op('remove_port');
-  if (!currentInfo) { return; }
+  if (!packageState.currentInfo) { return; }
   log(t('port.removing', { name }));
   statusEl.textContent = t('port.removeStatus');
   try {
@@ -6703,7 +6770,7 @@ async function removePort(name) {
     const r = await resp.json();
     if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
     log(t('port.removed', { name }), 'ok');
-    loadRobot(currentInfo, { keepPose: true });
+    loadRobot(packageState.currentInfo, { keepPose: true });
     refreshHistory();
   } catch (e) {
     log(t('port.removeFail', { e: e.message ?? e }), 'err');
@@ -6798,7 +6865,7 @@ async function commitEndcoords() {
     log(t('ec.placed', { name: r.name || r.parent }), 'ok');
     cancelEndcoords();
     portBtn.classList.remove('active');
-    loadRobot(currentInfo, { keepPose: true });
+    loadRobot(packageState.currentInfo, { keepPose: true });
     refreshHistory();
   } catch (e) {
     log(t('ec.placeFail', { e: e.message ?? e }), 'err');
@@ -6979,7 +7046,7 @@ viewer.addEventListener('pointerup', ev => {
   const moved = Math.hypot(ev.clientX - downAt[0], ev.clientY - downAt[1]);
   downAt = null;
   if (moved > 8 || ev.button !== 0) { return; }    // it was a drag/orbit
-  if (mimicMode) { mimicPick(ev); return; }        // click = toggle a follower
+  if (mimicState.mimicMode) { mimicPick(ev); return; }        // click = toggle a follower
   if (alignOn()) {
     const ph = pickHit(ev);
     alignBtn.classList.remove('active');
@@ -7063,12 +7130,12 @@ viewer.addEventListener('pointermove', ev => {
   // so the always-on-top axis line reads as an affordance (clears on move-away)
   const ax = pickAxis(ev);
   if (ax) {
-    if (hoveredAxis !== ax.joint) {
-      if (hoveredAxis) { highlightJoint(hoveredAxis, false); }
-      hoveredAxis = ax.joint;
+    if (selectionState.hoveredAxis !== ax.joint) {
+      if (selectionState.hoveredAxis) { highlightJoint(selectionState.hoveredAxis, false); }
+      selectionState.hoveredAxis = ax.joint;
       highlightJoint(ax.joint, true);
     }
-    if (hoveredLink) { hoveredLink = null; }
+    if (selectionState.hoveredLink) { selectionState.hoveredLink = null; }
     viewer.style.cursor = 'pointer';
     const rect = viewer.getBoundingClientRect();
     hovertip.innerHTML = t('hov.axis', { joint: ax.joint });
@@ -7077,15 +7144,15 @@ viewer.addEventListener('pointermove', ev => {
     hovertip.style.display = 'block';
     return;
   }
-  if (hoveredAxis) { highlightJoint(hoveredAxis, false); hoveredAxis = null;
+  if (selectionState.hoveredAxis) { highlightJoint(selectionState.hoveredAxis, false); selectionState.hoveredAxis = null;
                      viewer.style.cursor = ''; }
   // 3D hover highlighting is the ELEMENT's job (its drag-hover tints the
   // movable subtree); we only track the link name for the tooltip / R key
   const link = pickLink(ev);
-  hoveredLink = link;
+  selectionState.hoveredLink = link;
   if (link) {
     const rect = viewer.getBoundingClientRect();
-    hovertip.innerHTML = link === selectedLink
+    hovertip.innerHTML = link === selectionState.selectedLink
       ? t('hov.selected', { link })
       : t('hov.link', { link });
     hovertip.style.left = (ev.clientX - rect.left + 14) + 'px';
@@ -7096,8 +7163,8 @@ viewer.addEventListener('pointermove', ev => {
   }
 });
 viewer.addEventListener('pointerleave', () => {
-  if (hoveredLink) { highlightLink(hoveredLink, false); hoveredLink = null; }
-  if (hoveredAxis) { highlightJoint(hoveredAxis, false); hoveredAxis = null;
+  if (selectionState.hoveredLink) { highlightLink(selectionState.hoveredLink, false); selectionState.hoveredLink = null; }
+  if (selectionState.hoveredAxis) { highlightJoint(selectionState.hoveredAxis, false); selectionState.hoveredAxis = null;
                      viewer.style.cursor = ''; }
   hovertip.style.display = 'none';
 });
@@ -7198,7 +7265,7 @@ function refreshBulkbar() {
 // then bulk-set their joint type together.
 function toggleBoxLink(name) {
   if (!name) { return; }
-  if (!boxSelected.size && selectedLink) { selectLink(null); }  // box replaces single
+  if (!boxSelected.size && selectionState.selectedLink) { selectLink(null); }  // box replaces single
   if (boxSelected.has(name)) {
     boxSelected.delete(name);
     _tintLink(name, baseTint(name));
@@ -7216,7 +7283,7 @@ function clearBoxSelection() {
   const prev = boxSelected;
   boxSelected = new Set();
   for (const n of prev) {
-    if (n !== selectedLink) { _tintLink(n, baseTint(n)); }
+    if (n !== selectionState.selectedLink) { _tintLink(n, baseTint(n)); }
   }
   bulkbarEl.style.display = 'none';
 }
@@ -7226,10 +7293,10 @@ document.getElementById('bulkclose').addEventListener('click', clearBoxSelection
 // sidebar 🗑 bulk delete, but over the 3D box selection.  Ctrl+Z restores.
 document.getElementById('bulkbardel').addEventListener('click', () => {
   const sel = [...boxSelected];
-  if (!sel.length || !currentInfo) { return; }
+  if (!sel.length || !packageState.currentInfo) { return; }
   const links = new Set();
   for (const c of sel) { for (const n of linkSubtree(c)) { links.add(n); } }
-  const comps = [...new Set([...links].map(n => compMeta[n]?.name ?? n))];
+  const comps = [...new Set([...links].map(n => packageState.compMeta[n]?.name ?? n))];
   if (!confirm(t('bulk.delConfirm', { n: sel.length }))) { return; }
   clearBoxSelection();
   selectLink(null);
@@ -7245,28 +7312,28 @@ function jointRecForLink(child) {
 }
 function updateMimicBar() {
   document.getElementById('mimicbartext').innerHTML =
-    t('mimic.bar', { master: mimicMaster, n: mimicFollowers.size });
+    t('mimic.bar', { master: mimicState.mimicMaster, n: mimicFollowers.size });
 }
 function enterMimicMode() {
-  const rec = selectedLink && jointRecForLink(selectedLink);
+  const rec = selectionState.selectedLink && jointRecForLink(selectionState.selectedLink);
   if (!rec || rec.joint.jointType === 'fixed') {
     log(t('mimic.needMaster'), 'wrn');
     return;
   }
-  mimicMode = true;
-  mimicMaster = rec.joint.name;
-  mimicMasterChild = rec.child;
+  mimicState.mimicMode = true;
+  mimicState.mimicMaster = rec.joint.name;
+  mimicState.mimicMasterChild = rec.child;
   mimicFollowers.clear();
   _tintLink(rec.child, 'mas');          // master = green
   mimicBar.style.display = 'flex';
   updateMimicBar();
-  log(t('mimic.start', { master: mimicMaster }));
+  log(t('mimic.start', { master: mimicState.mimicMaster }));
 }
 // click a joint while in mimic mode: toggle it as a follower of the master
 function mimicPick(ev) {
   const ax = pickAxis(ev);
   const child = ax ? ax.child : pickLink(ev);
-  if (!child || child === mimicMasterChild) { return; }
+  if (!child || child === mimicState.mimicMasterChild) { return; }
   const rec = jointRecForLink(child);
   if (!rec || rec.joint.jointType === 'fixed') {
     log(t('mimic.followerFixed'), 'wrn');
@@ -7283,9 +7350,9 @@ function mimicPick(ev) {
 }
 function exitMimicMode() {
   // drop session tints (a rebuild repaints from the URDF on apply anyway)
-  const mc = mimicMasterChild, fol = [...mimicFollowers];
-  mimicMode = false;
-  mimicMaster = mimicMasterChild = null;
+  const mc = mimicState.mimicMasterChild, fol = [...mimicFollowers];
+  mimicState.mimicMode = false;
+  mimicState.mimicMaster = mimicState.mimicMasterChild = null;
   mimicFollowers.clear();
   if (mc) { _tintLink(mc, baseTint(mc)); }
   for (const c of fol) { _tintLink(c, baseTint(c)); }
@@ -7294,12 +7361,12 @@ function exitMimicMode() {
 function cancelMimic() { log(t('mimic.cancel'), 'wrn'); exitMimicMode(); }
 async function applyMimic() {
   if (!mimicFollowers.size) { cancelMimic(); return; }
-  const master = mimicMaster, followers = [...mimicFollowers];
+  const master = mimicState.mimicMaster, followers = [...mimicFollowers];
   const changes = followers.map(child => ({
     child, master, multiplier: 1.0, offset: 0.0 }));
   op('setMimic', { master, n: changes.length });
   exitMimicMode();
-  reselectAfterLoad = followers[0];     // keep a follower's panel open after
+  selectionState.reselectAfterLoad = followers[0];     // keep a follower's panel open after
   log(t('mimic.applying', { n: changes.length, master }));
   statusEl.textContent = t('status.rebuilding');
   try {
@@ -7312,7 +7379,7 @@ async function applyMimic() {
       log(t('mimic.missed', { list: r.missed.join(', ') }), 'wrn');
     }
     log(t('mimic.done', { n: r.applied?.length ?? 0 }), 'ok');
-    loadRobot(currentInfo, { keepPose: true });
+    loadRobot(packageState.currentInfo, { keepPose: true });
     refreshHistory();
   } catch (e) {
     log(t('mimic.fail', { e: e.message ?? e }), 'err');
@@ -7321,7 +7388,7 @@ async function applyMimic() {
 // unlink one follower (called from the joint panel of a mimic joint)
 async function clearMimic(child) {
   op('clearMimic', { child });
-  reselectAfterLoad = child;
+  selectionState.reselectAfterLoad = child;
   log(t('mimic.unlinking', { child }));
   statusEl.textContent = t('status.rebuilding');
   try {
@@ -7331,7 +7398,7 @@ async function clearMimic(child) {
     const r = await resp.json();
     if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
     log(t('mimic.unlinked'), 'ok');
-    loadRobot(currentInfo, { keepPose: true });
+    loadRobot(packageState.currentInfo, { keepPose: true });
     refreshHistory();
   } catch (e) {
     log(t('mimic.fail', { e: e.message ?? e }), 'err');
@@ -7339,7 +7406,7 @@ async function clearMimic(child) {
 }
 // change an existing mimic's multiplier/offset (from the joint panel)
 async function updateMimic(child, master, multiplier, offset) {
-  reselectAfterLoad = child;
+  selectionState.reselectAfterLoad = child;
   try {
     const resp = await fetch('/api/set_mimic', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -7347,7 +7414,7 @@ async function updateMimic(child, master, multiplier, offset) {
     const r = await resp.json();
     if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
     log(t('mimic.done', { n: 1 }), 'ok');
-    loadRobot(currentInfo, { keepPose: true });
+    loadRobot(packageState.currentInfo, { keepPose: true });
     refreshHistory();
   } catch (e) {
     log(t('mimic.fail', { e: e.message ?? e }), 'err');
@@ -7359,7 +7426,7 @@ mimicBar.querySelector('#mimiccancel').addEventListener('click', cancelMimic);
 // apply one joint type to every box-selected link's controlling joint
 function bulkSetType(type) {
   const links = [...boxSelected];
-  if (!links.length || !currentInfo) { return; }
+  if (!links.length || !packageState.currentInfo) { return; }
   // route the 3D box-selection through the SAME optimistic path as the sidebar
   // checkbox bulk: map each selected child link to its joint, apply instantly,
   // persist in the background.  Root / unmatched links carry no joint -> skipped;
@@ -7371,7 +7438,7 @@ function bulkSetType(type) {
     if (!rec) { continue; }
     // compare against the DISPLAYED type so a mass-only link reads as 'mass_only'
     // (its joint is fixed) -- lets us skip no-ops and still clear it for a real type
-    const cur = massOnlyLinks.has(rec.child) ? 'mass_only' : rec.joint.jointType;
+    const cur = packageState.massOnlyLinks.has(rec.child) ? 'mass_only' : rec.joint.jointType;
     if (cur !== type) {
       changes.push({ name: rec.joint.name, parent: rec.parent,
                      child: rec.child, type });
@@ -7412,7 +7479,7 @@ async function bulkSetColor(hex) {       // colour every selected link (no rebui
         body: JSON.stringify({ link: n, color: hex }) });
       const r = await resp.json();
       if (resp.ok && !r.error) {
-        linkColors[n] = r.color; if (compMeta[n]) { compMeta[n].color = r.color; }
+        packageState.linkColors[n] = r.color; if (packageState.compMeta[n]) { packageState.compMeta[n].color = r.color; }
       }
     } catch (_e) { /* per-link failure is non-fatal */ }
   }
@@ -7431,7 +7498,7 @@ async function bulkResetColor() {        // clear the colour override on selecti
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ link: n, color: null }) });
     } catch (_e) { /* non-fatal */ }
-    delete linkColors[n]; if (compMeta[n]) { compMeta[n].color = null; }
+    delete packageState.linkColors[n]; if (packageState.compMeta[n]) { packageState.compMeta[n].color = null; }
   }
   for (const n of boxSelected) { _tintLink(n, 'sel'); }
   log(t('bulk.colorReset', { n: links.length }), 'ok');
@@ -7439,7 +7506,7 @@ async function bulkResetColor() {        // clear the colour override on selecti
 
 async function bulkSetDensity(d) {       // set material density on all (rebuilds)
   const links = [...boxSelected];
-  if (!links.length || !currentInfo) { return; }
+  if (!links.length || !packageState.currentInfo) { return; }
   const ctrls = bulkbarEl.querySelectorAll('button, select, input');
   ctrls.forEach(e => { e.disabled = true; });
   log(t('bulk.densitySet', { n: links.length,
@@ -7455,7 +7522,7 @@ async function bulkSetDensity(d) {       // set material density on all (rebuild
     }
     log(t('bulk.densityOk', { n: links.length }), 'ok');
     clearBoxSelection();
-    loadRobot(currentInfo, { keepPose: true });
+    loadRobot(packageState.currentInfo, { keepPose: true });
     refreshHistory();
   } catch (e) {
     log(t('bulk.densityFail', { e: e.message ?? e }), 'err');
@@ -7512,15 +7579,15 @@ window.addEventListener('keydown', ev => {
     else if (ev.key === 'r' || ev.key === 'R') { ecSetMode('rotate'); }
     return;
   }
-  if (mimicMode) {                // a mimic-linking session owns the shortcuts
+  if (mimicState.mimicMode) {                // a mimic-linking session owns the shortcuts
     if (ev.key === 'Escape') { cancelMimic(); }
     else if (ev.key === 'Enter' || ev.key === 'm' || ev.key === 'M') {
       applyMimic();
     }
     return;
   }
-  const target = selectedLink ?? hoveredLink;
-  if ((ev.key === 'Delete' || ev.key === 'Backspace') && selectedLink) {
+  const target = selectionState.selectedLink ?? selectionState.hoveredLink;
+  if ((ev.key === 'Delete' || ev.key === 'Backspace') && selectionState.selectedLink) {
     ev.preventDefault();                // Backspace must not navigate back
     deleteSelectedSubtree();            // remove the link + its whole subtree
   } else if ((ev.key === 't' || ev.key === 'T')) {
@@ -7547,8 +7614,8 @@ window.addEventListener('keydown', ev => {
   }
 });
 viewer.addEventListener('dblclick', () => {
-  if (!hoveredLink) { return; }
-  const rec = [...rows.values()].find(r => r.child === hoveredLink);
+  if (!selectionState.hoveredLink) { return; }
+  const rec = [...rows.values()].find(r => r.child === selectionState.hoveredLink);
   if (rec) {
     rec.row.scrollIntoView({ block: 'center' });
     rec.row.style.outline = '2px solid #ffe93d';
@@ -7557,19 +7624,15 @@ viewer.addEventListener('dblclick', () => {
   // Double-click sets the orbit BASE to this link's frame origin. Right-drag pan
   // then accumulates on top; V snaps back here. setOrbitCenter translates the rig
   // (no rotation) so the link lands dead-centre.
-  if (viewer.robot?.links?.[hoveredLink]) {
-    orbitBaseLink = hoveredLink;
+  if (viewer.robot?.links?.[selectionState.hoveredLink]) {
+    viewState.orbitBaseLink = selectionState.hoveredLink;
     setOrbitCenter(orbitBasePoint());
-    log(t('pivot.focused', { link: hoveredLink }));
+    log(t('pivot.focused', { link: selectionState.hoveredLink }));
   }
 });
 
-// The orbit BASE: null = robot bbox centre (default / after C); otherwise a link
-// whose frame origin we orbit. Set by double-click, cleared by C. Right-drag pan
-// rides on top of this (controls.target = base + pan); V removes the pan.
-let orbitBaseLink = null;
 function orbitBasePoint() {
-  const link = orbitBaseLink && viewer.robot?.links?.[orbitBaseLink];
+  const link = viewState.orbitBaseLink && viewer.robot?.links?.[viewState.orbitBaseLink];
   if (link) { return link.getWorldPosition(new THREE.Vector3()); }
   const box = robotBox();                    // fallback: robot centre
   return box ? box.getCenter(new THREE.Vector3()) : new THREE.Vector3();
@@ -7594,7 +7657,7 @@ function setOrbitCenter(p) {
 function recenterPan() {
   if (!viewer.robot) { log(t('fit.emptyBox'), 'err'); return; }
   setOrbitCenter(orbitBasePoint());
-  log(orbitBaseLink ? t('pivot.focused', { link: orbitBaseLink })
+  log(viewState.orbitBaseLink ? t('pivot.focused', { link: viewState.orbitBaseLink })
                     : t('pivot.recentered'), 'ok');
 }
 
@@ -7680,17 +7743,14 @@ gridBtn.addEventListener('click', () => {
 });
 
 viewer.addEventListener('urdf-processed', () => {
-  if (pendingRobotViewMode) {
-    robotViewMode = pendingRobotViewMode;
-    pendingRobotViewMode = null;
+  if (treeState.pendingRobotViewMode) {
+    treeState.robotViewMode = treeState.pendingRobotViewMode;
+    treeState.pendingRobotViewMode = null;
   }
   const n = buildJointRows(viewer.robot);
-  if (playMode) { buildPlayRows(viewer.robot); }   // keep the move panel in sync
+  if (treeState.playMode) { buildPlayRows(viewer.robot); }   // keep the move panel in sync
   log(t('urdf.parsed', { n: Object.keys(viewer.robot.links).length, m: n }), 'ok');
 });
-let pendingRestore = null;   // {angles} saved across an edit-rebuild reload
-let loadCover = null;        // visual clone shown while the URDF reloads,
-                             // so re-root / type edits never flash blank
 
 function captureJointAngles(robot) {
   const angles = {};
@@ -7703,9 +7763,9 @@ function captureJointAngles(robot) {
 }
 
 function removeLoadCover() {
-  if (loadCover) {
-    loadCover.removeFromParent();
-    loadCover = null;
+  if (loadState.loadCover) {
+    loadState.loadCover.removeFromParent();
+    loadState.loadCover = null;
     viewer.redraw();
   }
 }
@@ -7715,8 +7775,8 @@ viewer.addEventListener('geometry-loaded', () => {
   document.getElementById('loadbackdrop').style.display = 'none';  // new model in
   log(t('mesh.allLoaded'), 'ok');
   _cancelTweens();               // a replay ease must not keep driving the NEW robot
-  const restore = pendingRestore;
-  pendingRestore = null;
+  const restore = loadState.pendingRestore;
+  loadState.pendingRestore = null;
   requestAnimationFrame(() => {
     addAxisMarkers(viewer.robot);
     addOriginTriad(viewer.robot);
@@ -7724,10 +7784,10 @@ viewer.addEventListener('geometry-loaded', () => {
     applyPoseDrag();               // keep orbit/pose mode across reloads
     buildGrid();
     hiddenLinks.forEach(n => applyLinkVisibility(n));
-    tfNodes = [];                  // old robot's TF nodes died with it
+    viewState.tfNodes = [];                  // old robot's TF nodes died with it
     undimAll();                    // restore shared (cached) materials!
     applyPersistedColors();        // re-paint server-saved colour overrides
-    collisionLinks = new Set();    // fresh meshes wear no stale red
+    collisionState.collisionLinks = new Set();    // fresh meshes wear no stale red
     initCollision();
     if (tfOn()) { setTF(true); }
     if (restore) {
@@ -7772,8 +7832,8 @@ viewer.addEventListener('geometry-loaded', () => {
       removeLoadCover();
       fitView();
     }
-    if (reselectAfterLoad) {
-      const rl = reselectAfterLoad; reselectAfterLoad = null;
+    if (selectionState.reselectAfterLoad) {
+      const rl = selectionState.reselectAfterLoad; selectionState.reselectAfterLoad = null;
       if (viewer.robot.links[rl]) { selectLink(rl); }   // keep the panel open
     }
   });
@@ -7785,7 +7845,7 @@ viewer.addEventListener('geometry-loaded', () => {
                          : t('status.summaryOk') });
 });
 viewer.addEventListener('urdf-error', e => {
-  pendingRobotViewMode = null;
+  treeState.pendingRobotViewMode = null;
   removeLoadCover();
   hideLoadbar();
   document.getElementById('loadbackdrop').style.display = 'none';
@@ -7811,7 +7871,7 @@ document.getElementById('reset').addEventListener('click', resetPose);
 // joint TYPE/limit edits persist (they live in the URDF); only the live view
 // state is cleared.
 function resetView() {
-  if (mimicMode) { cancelMimic(); }
+  if (mimicState.mimicMode) { cancelMimic(); }
   if (ecTool) { cancelEndcoords(); }
   resetPose();
   selectLink(null);
@@ -7819,7 +7879,7 @@ function resetView() {
   alignBtn.classList.remove('active');
   portBtn.classList.remove('active');
   clearFaceOverlay();
-  orbitBaseLink = null;          // orbit base back to the robot centre
+  viewState.orbitBaseLink = null;          // orbit base back to the robot centre
   setView('iso');
   log(t('view.reset'), 'ok');
 }
@@ -7834,7 +7894,7 @@ function clearViewer() {
   if (extracting) { cancelExtraction(); return; }  // interrupt a running extract
   if (!viewer.robot) { return; }                 // already empty
   op('clearViewer', {});
-  if (mimicMode) { cancelMimic(); }
+  if (mimicState.mimicMode) { cancelMimic(); }
   if (ecTool) { cancelEndcoords(); }
   selectLink(null);
   clearBoxSelection();
@@ -7844,24 +7904,24 @@ function clearViewer() {
   portBtn.classList.remove('active');
   undimAll();                                    // restore TF-dimmed materials
   tfBtn.classList.remove('active');
-  tfNodes = [];                                  // gone with the robot tree
+  viewState.tfNodes = [];                                  // gone with the robot tree
   axisMarkers.clear();                           // gone with the robot tree
   axisGlyphs.clear();                            // gone with the robot tree
-  clearTimeout(colPoll); colPoll = 0;            // stop self-collision polling
-  colReady = false; colBusy = false; colQueued = false;
+  clearTimeout(collisionState.colPoll); collisionState.colPoll = 0;            // stop self-collision polling
+  collisionState.colReady = false; collisionState.colBusy = false; collisionState.colQueued = false;
   removeLoadCover();
   const r = viewer.robot;
   if (r && r.parent) { r.parent.remove(r); }
   viewer.robot = null;
-  robotViewMode = 'normal';
-  pendingRobotViewMode = null;
+  treeState.robotViewMode = 'normal';
+  treeState.pendingRobotViewMode = null;
   jointsEl.innerHTML = '';
   rows.clear();
   document.getElementById('selbar').style.display = 'none';
   document.getElementById('linkinfo').style.display = 'none';
   hideLoadbar();
   document.getElementById('emptyprompt').style.display = '';
-  currentInfo = null;
+  packageState.currentInfo = null;
   syncSubassemblyAccessButton();
   syncSw2urdfButton();
   document.getElementById('title').textContent = t('ui.title');
@@ -7881,7 +7941,7 @@ function loadRobot(info, { drop = false, keepPose = false,
   // fresh package -> drop the old actions/camera so they can't replay onto it
   if (!keepPose) { _resetSessionLogs(); }
   op('loadRobot', { name: info?.name, keepPose, drop, previewOnly });
-  pendingRobotViewMode = previewOnly ? 'collapsed_preview' : 'normal';
+  treeState.pendingRobotViewMode = previewOnly ? 'collapsed_preview' : 'normal';
   cancelEndcoords();        // a rebuild invalidates any open placement session
   document.getElementById('emptyprompt').style.display = 'none';
   if (((keepPose || followCamera) && viewer.robot) || restoreAngles) {
@@ -7894,16 +7954,16 @@ function loadRobot(info, { drop = false, keepPose = false,
         linkWorlds.set(n, l.matrixWorld.clone());
       }
     }
-    pendingRestore = { angles, linkWorlds };
+    loadState.pendingRestore = { angles, linkWorlds };
   }
-  dropMode = drop;
+  packageState.dropMode = drop;
   if (drop) {
-    currentInfo = null;
+    packageState.currentInfo = null;
     viewer.urlModifierFunc = null;
   } else {
     viewer.urlModifierFunc = null;
     if (!previewOnly) {
-      currentInfo = info;
+      packageState.currentInfo = info;
     }
   }
   syncSubassemblyAccessButton();
@@ -7915,20 +7975,20 @@ function loadRobot(info, { drop = false, keepPose = false,
   // are shared so this costs milliseconds
   removeLoadCover();
   if (!drop && viewer.robot?.parent && keepPose) {
-    loadCover = viewer.robot.clone(true);
-    loadCover.traverse(c => { c.raycast = () => {}; });
-    viewer.robot.parent.add(loadCover);
+    loadState.loadCover = viewer.robot.clone(true);
+    loadState.loadCover.traverse(c => { c.raycast = () => {}; });
+    viewer.robot.parent.add(loadState.loadCover);
   }
   meshStats.want = meshStats.done = meshStats.fail = 0;
   jointsEl.innerHTML = '';
   rows.clear();
   savedMats.clear();              // old robot's meshes are discarded anyway
-  selectedLink = null;
-  jpSync = null;                  // the old #linkinfo panel died with robot
-  selVis = null;                  // died with the old robot
-  selAxisJoint = null;            // markers are rebuilt by addAxisMarkers
-  if (mimicMode) {                // a reload ends any open mimic session
-    mimicMode = false; mimicMaster = mimicMasterChild = null;
+  selectionState.selectedLink = null;
+  selectionState.jpSync = null;                  // the old #linkinfo panel died with robot
+  selectionState.selVis = null;                  // died with the old robot
+  selectionState.selAxisJoint = null;            // markers are rebuilt by addAxisMarkers
+  if (mimicState.mimicMode) {                // a reload ends any open mimic session
+    mimicState.mimicMode = false; mimicState.mimicMaster = mimicState.mimicMasterChild = null;
     mimicFollowers.clear(); mimicBar.style.display = 'none';
   }
   clearFaceOverlay();
@@ -7947,7 +8007,7 @@ function loadRobot(info, { drop = false, keepPose = false,
   showLoadbar(t('urdf.loadingBar', { name: info.name }), { indet: true, delay: 300 });
   // cache-bust so a rebuilt URDF is never served stale by the browser
   viewer.urdf = drop ? info.urdf
-    : info.urdf + '?v=' + Date.now() + (mergedView ? '&merged=1' : '');
+    : info.urdf + '?v=' + Date.now() + (viewState.mergedView ? '&merged=1' : '');
 }
 
 // ---- root frame box: +-90 deg buttons + numeric rpy(deg)/xyz(mm) --------
@@ -7984,10 +8044,10 @@ async function refreshRootBox({ resetBaseline = false } = {}) {
     const r = await (await fetch('/api/root_pose')).json();
     if (r.error) { return; }
     setRootFields(r.rpy, r.xyz);
-    rootBaseName = r.base ?? null;
+    packageState.rootBaseName = r.base ?? null;
     const rc = document.querySelector('.joint.root .rootcomp');
     if (rc) {
-      rc.textContent = rootBaseName ? `= ${rootBaseName}` : '';
+      rc.textContent = packageState.rootBaseName ? `= ${packageState.rootBaseName}` : '';
     }
     if (resetBaseline) {
       rootAtLoad = rootMat(r.rpy, r.xyz);
@@ -8011,7 +8071,7 @@ function applyRootPose(rpy, xyz) {
 
 async function postRootPose(body, what) {
   op('rootPose', { what });
-  if (!currentInfo) {
+  if (!packageState.currentInfo) {
     log(t('root.needPkg'), 'wrn');
     return;
   }
@@ -8069,7 +8129,7 @@ async function refreshHistory() {
 
 async function doHistory(which) {
   op(which);
-  if (!currentInfo) { return; }
+  if (!packageState.currentInfo) { return; }
   // a type flip persists its yaml+rebuild in the BACKGROUND; let it finish
   // before undo/redo rebuilds, or the server runs two builds at once
   await typePersistChain.catch(() => {});
@@ -8078,7 +8138,7 @@ async function doHistory(which) {
     const r = await resp.json();
     if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
     log(t('hist.done', { which, label: r.label }), 'ok');
-    loadRobot(currentInfo, { keepPose: true });
+    loadRobot(packageState.currentInfo, { keepPose: true });
     refreshRootBox();
     refreshHistory();
   } catch (e) {
@@ -8564,13 +8624,13 @@ function sw2robotDump() {
   });
   return {
     when: new Date().toISOString(),
-    package: currentInfo?.name ?? null,
-    selected: selectedLink,
+    package: packageState.currentInfo?.name ?? null,
+    selected: selectionState.selectedLink,
     hidden: [...hiddenLinks],
     controlsEnabled: v.controls?.enabled,
     dragManipulating: v.dragControls?.manipulating?.name ?? null,
     dragHovered: v.dragControls?.hovered?.name ?? null,
-    coverPresent: !!loadCover,
+    coverPresent: !!loadState.loadCover,
     savedMats: savedMats.size,
     elementHoverMeshes: elementHover,
     links: Object.keys(v.robot?.links ?? {}).length,
@@ -8584,7 +8644,7 @@ function sw2robotDump() {
 
 window.sw2robot = {
   dump: sw2robotDump,
-  collision: () => ({ ready: colReady, links: [...collisionLinks] }),
+  collision: () => ({ ready: collisionState.colReady, links: [...collisionState.collisionLinks] }),
   extractFlow: (p, c) => extractFlow(p, c),   // for E2E (fetch is mocked there)
   boxSelect: rect => selectLinksInBox(rect ??
     { l: -1e9, t: -1e9, r: 1e9, b: 1e9 }),   // no rect => everything on screen
@@ -8625,7 +8685,7 @@ document.getElementById('bug').addEventListener('click',
 document.getElementById('savelog').addEventListener('click',
   e => downloadActionLog(e.shiftKey ? 'json' : 'txt'));
 document.getElementById('replay').addEventListener('click', e => {
-  if (_replaying) { replayCancel(); return; }          // click again = stop
+  if (replayState._replaying) { replayCancel(); return; }          // click again = stop
   if (e.shiftKey) { replayLog(fullTimeline()); return; } // replay live session
   document.getElementById('replayfile').click();        // else load a saved .json
 });
@@ -8645,7 +8705,7 @@ document.getElementById('record').addEventListener('click', async e => {
   // Shift = auto-record a replay -- but only when one isn't already running,
   // else replayLog() would return immediately (re-entrancy guard) and we'd
   // stop the capture at once, saving an empty video
-  const wantReplay = e.shiftKey && !_replaying && (oplog.length || camlog.length);
+  const wantReplay = e.shiftKey && !replayState._replaying && (oplog.length || camlog.length);
   const started = await startScreenRecording();          // asks to share the tab
   if (started && wantReplay) {                            // Shift = record a replay
     await replayLog(fullTimeline());
@@ -8663,13 +8723,13 @@ window.onLangChange = () => {
   // #title shows the package name when one is open (language-neutral); only
   // the empty placeholder needs re-localizing.  #status is transient -- just
   // refresh the no-package case.
-  if (!currentInfo) {
+  if (!packageState.currentInfo) {
     document.getElementById('title').textContent = t('ui.title');
     if (!viewer.robot) { statusEl.textContent = t('start.pick'); }
   }
   if (viewer.robot) {
     buildJointRows(viewer.robot);
-    if (selectedLink) { fillLinkInfo(selectedLink); }
+    if (selectionState.selectedLink) { fillLinkInfo(selectionState.selectedLink); }
   }
 };
 document.querySelectorAll('#langbar button').forEach(b =>
