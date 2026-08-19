@@ -356,7 +356,7 @@ def main() -> int:
             invoke = f"./{exe_name}"
             sep = "/"
         print("Run it like the module:  "
-              f"{invoke} output{sep}<your_package> --port 8090")
+              f"{invoke} output{sep}<your_package>")
     if IS_WINDOWS:
         print("NOTE: the target machine still needs SolidWorks installed for "
               "the extract step; view/edit/build/export work without it.")
