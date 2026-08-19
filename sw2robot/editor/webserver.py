@@ -1,6 +1,6 @@
 """Serve sw2robot.exporter module packages to the urdf-loaders web viewer.
 
-    uv run python -m sw2robot.editor.webserver [package_dir] [--root output] [--port 8090]
+    uv run python -m sw2robot.editor.webserver [package_dir] [--root output] [--port N]
 
 Prototype of the sw2robot.editor web View: a static gkjohnson/urdf-loaders page
 (``sw2robot/editor/web/``) + this tiny stdlib server.
@@ -41,6 +41,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 PACKAGE_ROOT = os.path.dirname(HERE)
 PROJECT_ROOT = os.path.dirname(PACKAGE_ROOT)
 WEB_DIR = os.path.join(HERE, "web")
+
+DEFAULT_PORT = 8090
 
 # The port the running server bound (set in serve()).  The self-update relaunch
 # reads this (sw2robot.editor.update._current_bound_port) to reclaim the SAME
@@ -7458,9 +7460,44 @@ def _bind_free_port(handler, port, tries=20, wait_first=0.0):
     raise OSError(f"no free port in {port}..{port + tries - 1}: {last}")
 
 
-def serve(package_dir=None, root_dir=None, port=8090, open_browser=True,
+class PortInUse(OSError):
+    """An explicitly requested port was taken, so nothing was served."""
+
+
+def _bind(handler, port, explicit, reclaim_port, wait_first=None):
+    """Bind the server socket.  Returns ``(httpd, bound_port)``.
+
+    Drifting to the next free port is what lets a SECOND instance come up
+    instead of dying on WinError 10048 -- but only when nobody named a port.
+    If one was named, drifting hands the caller a server on an address it never
+    asked for while whatever already owns the requested one keeps answering
+    there; a script that then talks to the port it asked for reaches the wrong
+    server and nothing says so.  So: named port, or PortInUse.
+
+    A self-update relaunch names the port it is reclaiming and must still
+    drift -- the instance it replaces is mid-exit, hence the wait."""
+    if explicit and not reclaim_port:
+        try:
+            return socketserver.ThreadingTCPServer(("", port), handler), port
+        except OSError as e:
+            raise PortInUse(
+                f"port {port} is already in use ({e}); nothing was served. "
+                f"Something else is answering there -- stop it, pick another "
+                f"--port, or omit --port to take the next free one."
+            ) from e
+    if wait_first is None:
+        wait_first = 8.0 if reclaim_port else 0.0
+    return _bind_free_port(handler, port, wait_first=wait_first)
+
+
+def serve(package_dir=None, root_dir=None, port=None, open_browser=True,
           reclaim_port=False):
+    """Serve the editor.  ``port=None`` means "pick one": DEFAULT_PORT, walking
+    forward if it is busy.  A number means THAT port, or PortInUse."""
     global BOUND_PORT
+    explicit_port = port is not None
+    if not explicit_port:
+        port = DEFAULT_PORT
     import atexit
     import signal
     # reap any private SolidWorks instance a PREVIOUS run spawned and leaked
@@ -7492,10 +7529,7 @@ def serve(package_dir=None, root_dir=None, port=8090, open_browser=True,
     else:
         print(f"[sw2robot.web] no package yet -- pick one in the browser "
               f"(root: {_Handler.root_dir})")
-    # a self-update relaunch reclaims the exact port the old instance had (it is
-    # mid-exit), so wait briefly for it instead of immediately drifting forward
-    httpd, bound = _bind_free_port(_Handler, port,
-                                   wait_first=8.0 if reclaim_port else 0.0)
+    httpd, bound = _bind(_Handler, port, explicit_port, reclaim_port)
     if bound != port:
         print(f"[sw2robot.web] port {port} busy -> using {bound}")
     port = bound
@@ -7667,7 +7701,12 @@ def main():
                          "extractions are written (default: ./output in a "
                          "source checkout, %%TEMP%%\\sw2robot\\output for the "
                          "frozen .exe)")
-    ap.add_argument("--port", type=int, default=8090)
+    ap.add_argument("--port", type=int, default=None,
+                    help=f"port to serve on.  Omitted, the server takes "
+                         f"{DEFAULT_PORT} or the next free port after it, so a "
+                         f"second instance still comes up.  Given, THAT port is "
+                         f"used or the server exits -- it never moves to one "
+                         f"you did not ask for")
     ap.add_argument("--no-browser", action="store_true",
                     help="do not open the editor in the default browser on "
                          "startup")
@@ -7679,8 +7718,11 @@ def main():
                     help=argparse.SUPPRESS)   # internal: set on the relaunch from
                     # the %LOCALAPPDATA% install copy so it doesn't re-relocate
     args = ap.parse_args()
-    serve(args.package_dir, root_dir=args.root, port=args.port,
-          open_browser=not args.no_browser, reclaim_port=args.reclaim_port)
+    try:
+        serve(args.package_dir, root_dir=args.root, port=args.port,
+              open_browser=not args.no_browser, reclaim_port=args.reclaim_port)
+    except PortInUse as e:
+        raise SystemExit(f"[sw2robot.web] {e}") from None
 
 
 if __name__ == "__main__":

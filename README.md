@@ -152,7 +152,7 @@ Python or clone this repo. Grab the prebuilt editor and run it:
    - Windows SmartScreen may warn that the publisher is unknown (the binary is
      unsigned). Click **More info → Run anyway**.
    - To pick a different port or skip auto-opening the browser, run it from a
-     terminal: `sw2robot-web-windows-x64-v<version>.exe --port 8090 --no-browser`.
+     terminal: `sw2robot-web-windows-x64-v<version>.exe --port 9000 --no-browser`.
 3. **Extract a robot.** Open your `.sldasm` assembly with the in-app file
    picker — the **🗄 file browser** (lists SolidWorks' recent files for
    one-click access) or **📋 paste a full path**. SolidWorks needs the real
@@ -194,14 +194,14 @@ browser at `http://localhost:8090`).
 # Gatekeeper blocks unsigned apps on first launch — clear the quarantine once,
 # then double-click, or run it from a terminal to see the server log / URL:
 xattr -dr com.apple.quarantine sw2robot-web.app
-./sw2robot-web.app/Contents/MacOS/sw2robot-web --port 8090
+./sw2robot-web.app/Contents/MacOS/sw2robot-web
 ```
 
 **Linux (x64)** — `sw2robot-web-linux-x64-v<version>` (a single binary):
 
 ```bash
 chmod +x sw2robot-web-linux-x64-v<version>          # mark it executable once
-./sw2robot-web-linux-x64-v<version> --port 8090     # opens http://localhost:8090
+./sw2robot-web-linux-x64-v<version>                 # opens http://localhost:8090
 ```
 
 The binary is frozen against GLIBC 2.35, so it runs on **Ubuntu 22.04 or newer**
@@ -214,7 +214,7 @@ below):
 ```bash
 pip install -e ".[ui]"
 # edit an already-extracted package, or open any URDF directly:
-python -m sw2robot.editor.webserver path/to/robot.urdf --port 8090
+python -m sw2robot.editor.webserver path/to/robot.urdf
 ```
 
 The editor opens in URDF-input mode when you point it at a `.urdf` file: re-root,
@@ -338,7 +338,7 @@ needs an assembly with mates.
 needed — a sample is included):
 
 ```bash
-python -m sw2robot.editor.webserver examples/fingertip --port 8090
+python -m sw2robot.editor.webserver examples/fingertip
 # then open http://localhost:8090
 ```
 
