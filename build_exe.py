@@ -215,7 +215,7 @@ def main() -> int:
                   f"from {module} import main\n\n"
                   f"if __name__ == '__main__':\n    main()\n")
 
-    web = os.path.join(ROOT, "sw2robot", "editor", "web", "index.html")
+    web = os.path.join(ROOT, "sw2robot", "editor", "web")
 
     # On macOS an embedded app icon only attaches to a windowed .app bundle, not
     # to a bare console executable (PyInstaller emits the .app only with
@@ -234,7 +234,8 @@ def main() -> int:
         "--onedir" if args.onedir else "--onefile",
         "--windowed" if windowed else "--console",
         "--paths", ROOT,                       # so `sw2robot` imports at build
-        # bundle the editor page at the path WEB_DIR expects (HERE/web)
+        # bundle the editor page at the path WEB_DIR expects (HERE/web).
+        # The whole directory, so style.css rides along with index.html.
         "--add-data", f"{web}{os.pathsep}sw2robot/editor/web",
         # grab lazily / dynamically imported package code (incl. _vendor.rc_config)
         "--collect-submodules", "sw2robot",
