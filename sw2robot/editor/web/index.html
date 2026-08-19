@@ -9084,6 +9084,13 @@ window.addEventListener('keydown', ev => {
   if (inField && !playTKey) {
     return;                       // typing in a field, not a command
   }
+  // Everything below is a bare-key command, so a Ctrl/Cmd chord used to run one
+  // as a side effect of the browser's own: Ctrl+C reset the camera on a copy,
+  // Ctrl+F EDITED the model.  Guard ctrl/meta only -- shift is deliberate input
+  // here ('t' || 'T', and Shift+drag is box-select), nothing binds alt, and
+  // Escape only ever cancels (the overlay branch above already takes it under
+  // any modifier).
+  if ((ev.ctrlKey || ev.metaKey) && ev.key !== 'Escape') { return; }
   if (ecTool) {                   // a placement session owns the shortcuts
     if (ev.key === 'Escape') { cancelEndcoords(); }
     else if (ev.key === 'g' || ev.key === 'G') { ecSetMode('translate'); }
