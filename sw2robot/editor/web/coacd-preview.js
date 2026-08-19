@@ -3,7 +3,7 @@ import {
 } from './capture-progress.js';
 import {
   collModeSel, cqualitySel, expColFmt, expLinks, expVisFmt, expmeshdir,
-  exppkg, expurdf, mergeFixedBox, viewer,
+  exppkg, exprobot, expurdf, mergeFixedBox, viewer,
 } from './dom.js';
 import { updateCollUI } from './export-names.js';
 import { highlightLink } from './frames.js';
@@ -253,6 +253,7 @@ expLinks.forEach(a => a.addEventListener('click', async ev => {
   const cfmt = expColFmt?.value || 'stl';
   const name = (exppkg?.value || '').trim();
   const urdf = (expurdf?.value || '').trim();
+  const robot = (exprobot?.value || '').trim();
   const meshdir = (expmeshdir?.value || '').trim().replace(/^\/+|\/+$/g, '');
   // collision mode + merge-fixed apply to every ROS package export (the
   // separate uniform-glb button is gone -- format is now a visual selector)
@@ -261,6 +262,7 @@ expLinks.forEach(a => a.addEventListener('click', async ev => {
   const query = `ros=${ros}&meshes=${vfmt}&colfmt=${cfmt}`
     + (name ? `&name=${encodeURIComponent(name)}` : '')
     + (urdf ? `&urdf=${encodeURIComponent(urdf)}` : '')
+    + (robot ? `&robotname=${encodeURIComponent(robot)}` : '')
     + (meshdir ? `&meshdir=${encodeURIComponent(meshdir)}` : '')
     + (collMode !== 'copy' ? `&collision=${collMode}` : '')
     + (collMode === 'coacd' ? `&cquality=${cqualitySel?.value || 'balanced'}` : '')

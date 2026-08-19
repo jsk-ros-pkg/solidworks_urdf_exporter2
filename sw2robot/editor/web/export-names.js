@@ -3,13 +3,14 @@ import {
   setCollisionShown,
 } from './coacd-preview.js';
 import {
-  collModeSel, cqualitySel, expmeshdir, exppkg, expurdf,
+  collModeSel, cqualitySel, expmeshdir, exppkg, exprobot, expurdf,
 } from './dom.js';
 import { collisionState, packageState } from './state.js';
-// ---- export names: thread the chosen package + URDF names into the ZIP links
-// the ROS1/ROS2/glb downloads are plain <a download> links; on click we rewrite
-// their ?name=&urdf= from these fields so the exported package (and zip) carry
-// them.  Empty URDF name -> the URDF inside is named after the package.
+// ---- export names: thread the chosen package + URDF + robot names into the
+// ZIP links.  The ROS1/ROS2/glb downloads are plain <a download> links; on click
+// we rewrite their ?name=&urdf=&robotname= from these fields so the exported
+// package (and zip) carry them.  The names cascade when left empty: URDF stem ->
+// package name, <robot name> -> URDF stem.
 function exportDefaultName() {
   // mirror the server: sanitise the assembly name to a valid ROS package name
   // ('Assem1' -> 'assem1_description') so the placeholder matches what ships
@@ -22,9 +23,18 @@ function exportDefaultName() {
 function effectivePkgName() {
   return (exppkg?.value || '').trim() || exportDefaultName();
 }
+// the URDF stem defaults to the package name, and the <robot name> inside the
+// URDF to that stem -- so renaming the package renames all three
+function effectiveUrdfName() {
+  return (expurdf?.value || '').trim() || effectivePkgName();
+}
+function refreshNamePlaceholders() {
+  if (expurdf) { expurdf.placeholder = effectivePkgName(); }  // urdf = pkg name
+  if (exprobot) { exprobot.placeholder = effectiveUrdfName(); }  // robot = urdf
+}
 export function refreshExportName() {
   if (exppkg) { exppkg.placeholder = exportDefaultName(); }
-  if (expurdf) { expurdf.placeholder = effectivePkgName(); }  // urdf = pkg name
+  refreshNamePlaceholders();
 }
 // keep the package field a valid ROS package name as the user types (lowercase,
 // digits, underscore; must start with a letter) -- matches the server check
@@ -32,13 +42,20 @@ exppkg?.addEventListener('input', () => {
   const clean = exppkg.value.toLowerCase()
     .replace(/[^a-z0-9_]/g, '_').replace(/^[^a-z]+/, '');
   if (exppkg.value !== clean) { exppkg.value = clean; }
-  if (expurdf) { expurdf.placeholder = effectivePkgName(); }
+  refreshNamePlaceholders();
 });
 // the URDF stem is a filename: letters/digits/_/-/. , starting alphanumeric
 expurdf?.addEventListener('input', () => {
   const clean = expurdf.value
     .replace(/[^A-Za-z0-9_.-]/g, '_').replace(/^[^A-Za-z0-9]+/, '');
   if (expurdf.value !== clean) { expurdf.value = clean; }
+  refreshNamePlaceholders();
+});
+// the <robot name> takes the same character set as the URDF stem
+exprobot?.addEventListener('input', () => {
+  const clean = exprobot.value
+    .replace(/[^A-Za-z0-9_.-]/g, '_').replace(/^[^A-Za-z0-9]+/, '');
+  if (exprobot.value !== clean) { exprobot.value = clean; }
 });
 // the mesh dir is a package-relative path: letters/digits/_/-/. segments joined
 // by '/'; drop other chars and any leading slash (must stay inside the package)

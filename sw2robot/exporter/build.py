@@ -24,6 +24,9 @@ def main():
                          "<name>_description); lowercase letters/digits/_ only")
     ap.add_argument("--ros-urdf-name", default=None,
                     help="stem for the URDF inside --ros-pkg (default: pkg name)")
+    ap.add_argument("--ros-robot-name", default=None,
+                    help="<robot name> inside the --ros-pkg URDF "
+                         "(default: the URDF stem)")
     ap.add_argument("--ros-mesh-dir", default=None,
                     help="package-relative mesh directory for --ros-pkg "
                          "(default: 'meshes'); e.g. 'urdf/mesh'")
@@ -32,7 +35,8 @@ def main():
     build(args.pkg_dir, config_path=args.config, base_hint=args.base,
           exclude=exclude, ros_pkg=args.ros_pkg or args.ros2,
           ros_version=2 if args.ros2 else 1, ros_pkg_name=args.ros_pkg_name,
-          ros_urdf_name=args.ros_urdf_name, ros_mesh_dir=args.ros_mesh_dir)
+          ros_urdf_name=args.ros_urdf_name, ros_robot_name=args.ros_robot_name,
+          ros_mesh_dir=args.ros_mesh_dir)
 
 
 if __name__ == "__main__":
