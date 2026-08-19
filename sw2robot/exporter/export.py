@@ -522,8 +522,8 @@ def _loop_closures_cfg(model, joint_overrides):
 # ---------------------------------------------------------------- build
 def build(pkg_dir, config_path=None, base_hint=None, exclude=None,
           ros_pkg=False, density=None, ros_version=1, ros_pkg_name=None,
-          ros_urdf_name=None, collision="copy", coacd_quality="balanced",
-          merge_fixed=False, ros_mesh_dir=None):
+          ros_urdf_name=None, ros_robot_name=None, collision="copy",
+          coacd_quality="balanced", merge_fixed=False, ros_mesh_dir=None):
     _tolerant_console()
     graph = GraphState.load(os.path.join(pkg_dir, GRAPH_FILE))
     robot_name = graph.robot_name
@@ -634,7 +634,7 @@ def build(pkg_dir, config_path=None, base_hint=None, exclude=None,
         desc_dir = write_ros_description_package(
             pkg_dir, robot_name, os.path.dirname(os.path.abspath(pkg_dir)),
             ros_version=ros_version, pkg_name=ros_pkg_name,
-            urdf_name=ros_urdf_name, colors=colors,
+            urdf_name=ros_urdf_name, robot_tag=ros_robot_name, colors=colors,
             collision=collision, coacd_quality=coacd_quality,
             merge_fixed=merge_fixed, mesh_dir=ros_mesh_dir,
             loop_closures=closures)
@@ -654,6 +654,7 @@ def build(pkg_dir, config_path=None, base_hint=None, exclude=None,
 def export(assembly_path, out_dir=None, robot_name=None, visible=False,
            config_path=None, base_hint=None, exclude=None, ros_pkg=False,
            ros_version=1, ros_pkg_name=None, ros_urdf_name=None,
+           ros_robot_name=None,
            collision="copy", coacd_quality="balanced", merge_fixed=False,
            ros_mesh_dir=None, configuration=None, attach=False):
     pkg_dir = extract(assembly_path, out_dir, robot_name, visible,
@@ -661,6 +662,7 @@ def export(assembly_path, out_dir=None, robot_name=None, visible=False,
     return build(pkg_dir, config_path=config_path, base_hint=base_hint,
                  exclude=exclude, ros_pkg=ros_pkg, ros_version=ros_version,
                  ros_pkg_name=ros_pkg_name, ros_urdf_name=ros_urdf_name,
+                 ros_robot_name=ros_robot_name,
                  collision=collision, coacd_quality=coacd_quality,
                  merge_fixed=merge_fixed, ros_mesh_dir=ros_mesh_dir)
 
@@ -705,6 +707,9 @@ def main():
     ap.add_argument("--ros-urdf-name", default=None,
                     help="stem for the URDF file inside the --ros-pkg package "
                          "(default: the package name)")
+    ap.add_argument("--ros-robot-name", default=None,
+                    help="name written into the exported URDF's "
+                         "<robot name=\"...\"> (default: the URDF stem)")
     ap.add_argument("--ros-mesh-dir", default=None,
                     help="package-relative directory the --ros-pkg meshes go in "
                          "and that the URDF's package:// refs point at (default: "
@@ -737,6 +742,7 @@ def main():
            ros_pkg=args.ros_pkg or args.ros2,
            ros_version=2 if args.ros2 else 1,
            ros_pkg_name=args.ros_pkg_name, ros_urdf_name=args.ros_urdf_name,
+           ros_robot_name=args.ros_robot_name,
            collision=args.collision, coacd_quality=args.coacd_quality,
            merge_fixed=args.merge_fixed, ros_mesh_dir=args.ros_mesh_dir)
 

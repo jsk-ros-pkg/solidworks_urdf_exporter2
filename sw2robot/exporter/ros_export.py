@@ -974,6 +974,26 @@ def ros_urdf_stem(pkg, urdf_name=None):
     return stem
 
 
+def ros_robot_tag(urdf_stem, robot_tag=None):
+    """The name the exported URDF's ``<robot name="...">`` carries: an explicit
+    ``robot_tag`` (validated) or, when blank, the URDF stem.
+
+    The on-disk URDF keeps whatever the CAD import produced (a SolidWorks
+    assembly like ``Assem1``), so an export that renames the package and the
+    URDF file used to leave that stale name inside the ``<robot>`` tag.  Tying
+    the default to the stem keeps the three names consistent, and the explicit
+    form covers the ROS convention of a ``fetch`` robot in
+    ``fetch_description/urdf/fetch.urdf``."""
+    if not robot_tag or not robot_tag.strip():
+        return urdf_stem
+    tag = robot_tag.strip()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", tag):
+        raise ValueError(
+            f"invalid robot name {robot_tag!r}: use letters, digits, '_', '-' "
+            "or '.' and start with a letter or digit (e.g. 'bambu_a1')")
+    return tag
+
+
 def ros_mesh_dir(mesh_dir=None):
     """The package-relative directory the exported meshes go in (and that the
     URDF's ``package://<pkg>/...`` refs point at): an explicit ``mesh_dir`` or the
@@ -1021,7 +1041,8 @@ class ExportCancelled(Exception):
 
 def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
                           ctx_fmt=_CTX_FMT, ros_version=1, pkg_name=None,
-                          urdf_name=None, colors=None, collision="copy",
+                          urdf_name=None, robot_tag=None, colors=None,
+                          collision="copy",
                           coacd_quality="balanced", merge_fixed=False,
                           mesh_dir=None, loop_closures=None,
                           zero_origins=True, progress=None, should_cancel=None):
@@ -1030,6 +1051,10 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
     ``pkg_name`` if given (validated, see :func:`ros_pkg_name`), else
     ``<robot_name>_description``.  The URDF inside is named ``urdf_name`` if
     given, else the package name (so ``<pkg>/urdf/<pkg>.urdf`` by default).
+
+    ``robot_tag`` is the name written into the URDF's ``<robot name="...">``: an
+    explicit value, else the URDF stem (see :func:`ros_robot_tag`), so renaming
+    the package no longer leaves the CAD assembly name inside the tag.
 
     ``mesh_dir`` is the package-relative directory the meshes go in and that the
     URDF's ``package://<pkg>/...`` refs point at (validated, see
@@ -1124,6 +1149,7 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
                 loop_closures = None
     pkg = ros_pkg_name(robot_name, pkg_name)
     urdf_stem = ros_urdf_stem(pkg, urdf_name)
+    robot_tag_name = ros_robot_tag(urdf_stem, robot_tag)
     mesh_rel = ros_mesh_dir(mesh_dir)
     # the opened package's own name(s) -- only package:// refs to one of these
     # are vendored/repointed; refs to other ROS packages are left untouched
@@ -1136,6 +1162,9 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
     # findall()/iter() traversals below ignore them.
     _parser = ET.XMLParser(target=ET.TreeBuilder(insert_comments=True))
     root = ET.parse(urdf_path, parser=_parser).getroot()
+    # the parsed <robot name> is the CAD assembly name; the export renames it so
+    # the package, the .urdf file and the robot inside agree
+    root.set("name", robot_tag_name)
     if should_cancel and should_cancel():     # cancelled before any heavy work
         raise ExportCancelled()
     # Mass-only links (weight kept, geometry dropped) are folded into their fixed
@@ -1501,14 +1530,16 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
 
 def write_ros_description_package(pkg_dir, robot_name, dest_dir,
                                   email="auto@example.com", ros_version=1,
-                                  pkg_name=None, urdf_name=None, colors=None,
+                                  pkg_name=None, urdf_name=None, robot_tag=None,
+                                  colors=None,
                                   collision="copy",
                                   coacd_quality="balanced",
                                   merge_fixed=False, mesh_dir=None,
                                   loop_closures=None, zero_origins=True):
     """Write the ROS package under ``dest_dir`` and return its directory path.
     The package is named ``pkg_name`` if given, else ``<robot_name>_description``;
-    the URDF inside is named ``urdf_name`` if given, else the package name.
+    the URDF inside is named ``urdf_name`` if given, else the package name, and
+    its ``<robot name>`` is ``robot_tag`` if given, else the URDF stem.
     ``ros_version`` (1 = catkin, 2 = ament_cmake), ``colors`` (per-link colour
     overrides), ``collision`` / ``coacd_quality`` (CoACD collision-mesh
     decomposition), ``merge_fixed`` (lump fixed-joint children into parents),
@@ -1518,7 +1549,8 @@ def write_ros_description_package(pkg_dir, robot_name, dest_dir,
     pkg = ros_pkg_name(robot_name, pkg_name)
     files = build_ros_description(pkg_dir, robot_name, email=email,
                                   ros_version=ros_version, pkg_name=pkg,
-                                  urdf_name=urdf_name, colors=colors,
+                                  urdf_name=urdf_name, robot_tag=robot_tag,
+                                  colors=colors,
                                   collision=collision,
                                   coacd_quality=coacd_quality,
                                   merge_fixed=merge_fixed, mesh_dir=mesh_dir,

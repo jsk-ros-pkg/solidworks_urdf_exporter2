@@ -751,13 +751,15 @@ exec ros2 launch "$PKG" display.launch.py
 
 
 def _export_zip(pkg_dir, robot_name, visual_fmt="dae", collision_fmt="stl",
-                ros_version=1, pkg_name=None, urdf_name=None, colors=None,
+                ros_version=1, pkg_name=None, urdf_name=None, robot_tag=None,
+                colors=None,
                 collision="copy", coacd_quality="balanced",
                 merge_fixed=False, mesh_dir=None, progress=None,
                 should_cancel=None):
     """ZIP a portable ROS package (package:// URLs), named ``pkg_name`` if given
     else ``<robot_name>_description``; the URDF inside is named ``urdf_name`` if
-    given, else the package name.
+    given, else the package name, and its ``<robot name>`` is ``robot_tag`` if
+    given, else the URDF stem.
 
     ``visual_fmt`` (``dae`` default / ``stl`` / ``glb``) and ``collision_fmt``
     (``stl`` default / ``glb``) pick the mesh format per context, independently.
@@ -788,6 +790,7 @@ def _export_zip(pkg_dir, robot_name, visual_fmt="dae", collision_fmt="stl",
                                   ros_version=ros_version,
                                   pkg_name=pkg,
                                   urdf_name=urdf_name,
+                                  robot_tag=robot_tag,
                                   colors=colors,
                                   collision=collision,
                                   coacd_quality=coacd_quality,
@@ -873,6 +876,7 @@ def _parse_export_query(cls, query):
         "merge_fixed": (query.get("mergefixed") or ["0"])[0] == "1",
         "pkg_name": (query.get("name") or [""])[0].strip() or None,
         "urdf_name": (query.get("urdf") or [""])[0].strip() or None,
+        "robot_tag": (query.get("robotname") or [""])[0].strip() or None,
         "mesh_dir": (query.get("meshdir") or [""])[0].strip() or None,
     }, None
 

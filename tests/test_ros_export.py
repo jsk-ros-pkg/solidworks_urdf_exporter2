@@ -1024,6 +1024,53 @@ def test_invalid_pkg_name_rejected():
             ros_urdf_stem("my_pkg", bad)
 
 
+def test_robot_tag_follows_the_exported_names(tmp_path):
+    """The exported ``<robot name>`` must not keep the CAD assembly name: it
+    follows the urdf stem (hence the package name) unless set explicitly."""
+    import xml.etree.ElementTree as ET
+
+    from sw2robot.exporter.ros_export import build_ros_description
+
+    pkg_dir = _make_pkg(tmp_path, robot="Assem1")
+    # renaming the package renames the robot too (urdf stem = pkg by default)
+    files = dict(build_ros_description(pkg_dir, "Assem1",
+                                       pkg_name="bambu_a1_description"))
+    urdf = files["bambu_a1_description/urdf/bambu_a1_description.urdf"].decode()
+    assert ET.fromstring(urdf).get("name") == "bambu_a1_description"
+
+    # an explicit urdf name wins over the package name ...
+    files = dict(build_ros_description(pkg_dir, "Assem1",
+                                       pkg_name="bambu_a1_description",
+                                       urdf_name="bambu_a1"))
+    urdf = files["bambu_a1_description/urdf/bambu_a1.urdf"].decode()
+    assert ET.fromstring(urdf).get("name") == "bambu_a1"
+
+    # ... and an explicit robot_tag wins over both, without moving the file
+    files = dict(build_ros_description(pkg_dir, "Assem1",
+                                       pkg_name="bambu_a1_description",
+                                       urdf_name="bambu_a1", robot_tag="A1"))
+    urdf = files["bambu_a1_description/urdf/bambu_a1.urdf"].decode()
+    assert ET.fromstring(urdf).get("name") == "A1"
+
+    # no names at all: the default package name, not 'Assem1'
+    files = dict(build_ros_description(pkg_dir, "Assem1"))
+    urdf = files["assem1_description/urdf/assem1_description.urdf"].decode()
+    assert ET.fromstring(urdf).get("name") == "assem1_description"
+
+
+def test_invalid_robot_tag_rejected():
+    import pytest
+
+    from sw2robot.exporter.ros_export import ros_robot_tag
+
+    assert ros_robot_tag("my_pkg") == "my_pkg"            # default = urdf stem
+    assert ros_robot_tag("my_pkg", "  ") == "my_pkg"      # blank = default
+    assert ros_robot_tag("my_pkg", "Bambu_A1-v2") == "Bambu_A1-v2"
+    for bad in ("has space", "/etc/passwd", "-x", ".hidden"):
+        with pytest.raises(ValueError, match="invalid robot name"):
+            ros_robot_tag("my_pkg", bad)
+
+
 def test_write_pkg_with_custom_name_returns_that_dir(tmp_path):
     from sw2robot.exporter.ros_export import write_ros_description_package
 

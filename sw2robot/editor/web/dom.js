@@ -18,6 +18,7 @@ export const portBtn = document.getElementById('portmode');
 // controls the CoACD preview shares with them
 export const exppkg = document.getElementById('exppkg');
 export const expurdf = document.getElementById('expurdf');
+export const exprobot = document.getElementById('exprobot');
 export const expmeshdir = document.getElementById('expmeshdir');
 export const expLinks = ['expdae', 'expros2']
   .map(id => document.getElementById(id)).filter(Boolean);
