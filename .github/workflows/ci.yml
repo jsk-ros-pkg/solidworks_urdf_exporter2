@@ -172,6 +172,29 @@ jobs:
           E2E_SMOKE: '1'
         run: node run.mjs http://localhost:8090
 
+      # run.mjs does not touch the op-log / replay / recording / frame-only
+      # paths.  Those live in focused scripts next to it that nothing ever
+      # ran, so they have been guarding nothing on pull requests.  They need
+      # no extra setup: same server, same Chrome, same flags.
+      #
+      # The other three scripts in that directory stay out for now:
+      # verify_bulk_types, verify_shiftclick and verify_type_optimistic
+      # hard-code their Chrome args instead of reading CHROME_ARGS (so they
+      # cannot launch on a headless runner), need a fixture with more than one
+      # movable joint, and verify_type_optimistic edits the tracked
+      # examples/fingertip/fingertip.joints.yaml without restoring it.
+      - name: Run the focused e2e scripts run.mjs does not cover
+        working-directory: tests/e2e
+        env:
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+          CHROME_ARGS: '--no-sandbox,--disable-setuid-sandbox,--enable-unsafe-swiftshader,--use-gl=angle,--use-angle=swiftshader'
+        run: |
+          node verify_frameonly.mjs http://localhost:8090
+          node verify_logexport.mjs http://localhost:8090
+          node verify_record.mjs    http://localhost:8090
+          node verify_replay.mjs    http://localhost:8090
+          node verify_jointrec.mjs  http://localhost:8090
+
       - name: Server log (on failure)
         if: failure()
         run: cat server.log
