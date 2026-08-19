@@ -590,145 +590,20 @@ the config and does NOT re-detect). Needs graph.json (CAD mode).">🔗 re-detect
 <script src="boot.js"></script>
 
 <script type="module">
-// ---- cross-module shared state ------------------------------------------
-// Every module-top-level `let` that is ASSIGNED from more than one `// ----`
-// section below lives here.  Section banners are the finest structural unit in
-// this block and every planned module boundary lands on one, so "assigned from
-// two sections" is a superset of "assigned from two modules" under any split
-// that respects them.
-//
-// Why it matters: once this block becomes ES modules, such a `let` has to be
-// `export let`, and an import binding is READ-ONLY -- modules are always strict,
-// so a cross-module assignment throws "TypeError: Assignment to constant
-// variable".  Reads stay live either way; only writes break.  Collecting them
-// into named `const` objects makes the write legal, and makes a use site read as
-// "this is state that outlives the module".
-//
-// Field names are deliberately IDENTICAL to the old top-level `let` names, so
-// this commit is one mechanical rewrite (`x` -> `group.x`) that can be checked
-// line by line.  Renaming (e.g. mimicState.mimicMode -> mimicState.active) is a
-// readability change and belongs in its own commit.
-//
-// Variables assigned from only ONE section stay plain `let`: they will end up
-// module-private, and `export let` is fine for the read-only cross-module reads
-// (THREE, poseDrag, ecTool, boxSelected, faceOverlay, ...).
+import {
+  collisionState, loadState, mimicState, packageState, replayState,
+  selectionState, treeState, viewState,
+} from './state.js';
+import {
+  alignBtn, bulkbarEl, collModeSel, cqualitySel, expColFmt, expLinks,
+  expVisFmt, expmeshdir, exppkg, expurdf, hovertip, jointsEl, mergeFixedBox,
+  mimicBar, originBtn, portBtn, tfBtn, viewer,
+} from './dom.js';
+import {
+  ColladaLoader, GLTFLoader, OBJLoader, STLLoader, THREE, TransformControls,
+  mergeGeometries,
+} from './three-setup.js';
 
-// The package currently open in the editor plus the sidecar metadata that came
-// with it.  Written by the loader / the extractor; read by nearly every panel.
-const packageState = {
-  dropMode: false,          // meshes come from dropped blobs, not /pkg/
-  currentInfo: null,        // {name, urdf} of the open server package
-  compMeta: {},             // link -> {material, density, name, override}
-  linkColors: {},           // URDF/viewer link name -> '#rrggbb' override
-  excludedList: [],         // component names excluded from the URDF
-  massOnlyLinks: new Set(), // links flagged mass-only (weight kept, no mesh)
-  rootBaseName: null,       // which COMPONENT is base_link right now
-                            // (the URDF rename hides it)
-};
-
-// What the 3D view is currently showing.
-const viewState = {
-  mergedView: false,        // viewer shows the fixed-joint-lumped URDF
-  tfNodes: [],              // per-link TF triads + parent->child lines
-  // The orbit BASE: null = robot bbox centre (default / after C); otherwise a link
-  // whose frame origin we orbit. Set by double-click, cleared by C. Right-drag pan
-  // rides on top of this (controls.target = base + pan); V removes the pan.
-  orbitBaseLink: null,
-};
-
-// The sidebar tree / joint-list view controls.
-const treeState = {
-  // when on, the joint list shows ONLY the joints the classifier flagged as
-  // guesses (compMeta[...].joint_attention) -- the review worklist
-  jointCheckOnly: false,
-  jointFilter: '',          // substring filter: when set, the tree collapses
-                            // to a FLAT list of joints whose link/joint name
-                            // matches -- so select-all / Set / Delete scope
-                            // to exactly the matches (see buildJointRows)
-  treeViewMode: 'expanded', // expanded = editable URDF tree; subassembly =
-                            // read-only collapse_preview tree
-  robotViewMode: 'normal',  // normal | collapsed_preview
-  pendingRobotViewMode: null,
-  subasmTreeRequest: 0,     // discard stale async preview responses
-  playMode: false,          // movable-joints-only panel active
-};
-
-// What the user has selected / hovered, and the UI hooks that follow it.
-const selectionState = {
-  selectedLink: null,
-  hoveredLink: null,
-  hoveredAxis: null,        // joint name whose axis the cursor is near
-  selVis: null,             // selection visuals: link frame triad + CoM marker
-  selAxisJoint: null,       // joint whose axis is force-shown while its
-                            // child link is selected (incl. fixed joints)
-  // while the colour picker for a link is open we suppress that link's tint
-  // (selection cyan etc.) so the user judges the TRUE colour, not the overlay
-  colorPreviewLink: null,
-  // the in-viewer joint editor's live-sync hook, set while #linkinfo shows a
-  // movable joint: {name, set(nativeVal)} so the sidebar slider and the overlay
-  // slider always show the same angle.
-  jpSync: null,
-  // link to re-select after the next edit-rebuild reload, so the joint panel
-  // stays open on the same link after an immediate type change
-  reselectAfterLoad: null,
-};
-
-// Live self-collision query, plus the CoACD collision-preview handshake that
-// hands its results to the same tinting path.
-const collisionState = {
-  collisionLinks: new Set(),   // links in a NEW (non-rest) self-collision
-  colReady: false,
-  colBusy: false,
-  colQueued: false,
-  colPoll: 0,
-  collPreviewFinalized: false, // ran the post-generation hookup (export + collision)
-};
-
-// The mimic-linking session (master joint + follower joints).
-const mimicState = {
-  mimicMode: false,
-  mimicMaster: null,        // master joint name (the driver)
-  mimicMasterChild: null,   // master's child link (can't follow itself)
-};
-
-// The edit-rebuild reload handshake: the viewer is torn down and reloaded, so
-// what has to survive that gap lives here.
-const loadState = {
-  pendingRestore: null,     // {angles} saved across an edit-rebuild reload
-  loadCover: null,          // visual clone shown while the URDF reloads,
-                            // so re-root / type edits never flash blank
-};
-
-// Replay (②) re-performs a recorded op() stream; the camera-track sampler and
-// the recorders must not record the playback itself.
-const replayState = {
-  _replaying: false,        // true while replayLog() re-performs a session
-};
-let THREE, GLTFLoader, STLLoader, ColladaLoader, OBJLoader, mergeGeometries,
-    TransformControls;
-try {
-  THREE = await import('three');
-  ({ GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js'));
-  ({ STLLoader } = await import('three/examples/jsm/loaders/STLLoader.js'));
-  ({ ColladaLoader } =
-      await import('three/examples/jsm/loaders/ColladaLoader.js'));
-  ({ OBJLoader } = await import('three/examples/jsm/loaders/OBJLoader.js'));
-  ({ mergeGeometries } =
-      await import('three/examples/jsm/utils/BufferGeometryUtils.js'));
-  ({ TransformControls } =
-      await import('three/examples/jsm/controls/TransformControls.js'));
-  const { default: URDFManipulator } = await import(
-    'https://unpkg.com/urdf-loader@0.12.7/src/urdf-manipulator-element.js');
-  log(t('load.ok'), 'ok');
-  customElements.define('urdf-manipulator', URDFManipulator);
-} catch (e) {
-  log(t('load.fail', { e: e.message ?? e }), 'err');
-  log(t('load.failHint'), 'wrn');
-  throw e;
-}
-
-const viewer = document.getElementById('viewer');
-const jointsEl = document.getElementById('joints');
 
 // suppress the browser's native right-click menu ("copy/save image", ...) on
 // the viewport -- it hijacks the right-drag pan gesture mid-motion
@@ -790,27 +665,13 @@ viewer._updateEnvironment = function () {
 // restores the true originals itself on mouseout (__origMaterial).
 viewer.highlightMaterial = new THREE.MeshBasicMaterial({
   color: 0xffb340, side: THREE.DoubleSide, toneMapped: false });
-viewer.addEventListener('joint-mouseover', e => {
-  // the element just swapped every hovered mesh to its flat highlightMaterial
-  // and stashed the real one in __origMaterial.  pose mode: replace it with an
-  // emissive amber CLONE (glow + keep colours).  orbit mode (default): restore
-  // the original outright, so a plain hover never lights the part up.  Walk the
-  // whole robot by __origMaterial so it works regardless of e.detail.
-  viewer.robot?.traverse(c => {
-    if (c.isMesh && !c.userData.sw2robotMarker && c.__origMaterial) {
-      c.material = poseDrag ? _tintedClone(c.__origMaterial, 'hov')
-                            : c.__origMaterial;
-    }
-  });
-  viewer.redraw();
-});
 // a directly-opened URDF has no graph.json behind it, so the CAD-only per-link
 // controls (frame-only, mass source, ...) do not apply
-const urdfInputMode = () => packageState.currentInfo?.mode === 'urdf';
+function urdfInputMode() { return packageState.currentInfo?.mode === 'urdf'; }
 // HTML-attribute escape for text that goes into a title="" (classifier notes
 // carry quotes and angle brackets)
-const escAttr = v => String(v ?? '').replace(/[&<>"]/g,
-  c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+function escAttr(v) { return String(v ?? '').replace(/[&<>"]/g,
+  c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 
 // ---- operation log + diagnostic dump: every user action is recorded, and
 // window.sw2robot.report() ships the session state to the server, so a "now
@@ -1383,7 +1244,7 @@ viewer.loadMeshFunc = (path, manager, done) => {
 };
 
 // ---- joint rows: slider (movable) + type select + bulk checkbox ---------
-const fmt = v => (Math.abs(v) < 1e-10 ? 0 : v).toFixed(2);
+function fmt(v) { return (Math.abs(v) < 1e-10 ? 0 : v).toFixed(2); }
 const rows = new Map();        // joint name -> row record
 const playRows = new Map();    // joint name -> "move" mode slider record
 
@@ -2699,7 +2560,7 @@ async function openMassList() {
 // one per-link edit -> POST -> (optionally) rebuild the robot -> refresh the
 // metadata and repaint both the mass popup and the joint tree.  Shared by the
 // mass panel and the joint rows' frame-only checkbox.
-const applyLinkEdit = async (fetchArgs, { rebuild, okMsg } = {}) => {
+async function applyLinkEdit(fetchArgs, { rebuild, okMsg } = {}) {
   try {
     const resp = await fetch(...fetchArgs);
     const r = await resp.json();
@@ -2717,10 +2578,10 @@ const applyLinkEdit = async (fetchArgs, { rebuild, okMsg } = {}) => {
     log(t('mass.fail', { e: e.message ?? e }), 'err');
     return false;
   }
-};
-const postArgs = (path, body) => [path, {
+}
+function postArgs(path, body) { return [path, {
   method: 'POST', headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify(body) }];
+  body: JSON.stringify(body) }]; }
 
 
 function _renderMassList(data) {
@@ -3805,10 +3666,9 @@ function addAxisMarkers(robot) {
 
 const axesBtn = document.getElementById('axes');
 const dirsBtn = document.getElementById('dirs');
-const originBtn = document.getElementById('origin');
-const axesOn = () => axesBtn.classList.contains('active');
-const dirsOn = () => dirsBtn.classList.contains('active');
-const originOn = () => originBtn.classList.contains('active');
+function axesOn() { return axesBtn.classList.contains('active'); }
+function dirsOn() { return dirsBtn.classList.contains('active'); }
+function originOn() { return originBtn.classList.contains('active'); }
 
 function setAxesVisible(on) {
   // keep the selected link's joint axis shown even with the global toggle off
@@ -3837,7 +3697,10 @@ axesBtn.addEventListener('click', () => {
 // the in-viewer joint panel's sliders/snap buttons drive joints, so the
 // element's drag-to-articulate (which steals left-drag from OrbitControls and
 // amber-highlights links) is OFF by default -- left-drag just rotates the view.
-let poseDrag = false;
+// The flag itself lives in viewState (see state.js): it is READ at evaluation
+// time by the material-restore hover handler, and keeping it in this section
+// would make the viewer wiring import it back from here -- a cycle, and a
+// binding that is not initialised yet when the cycle is traversed.
 const poseBtn = document.getElementById('posedrag');
 let _origOnHover, _origOnUnhover;     // the element's hover-highlight callbacks
 let _origDragControls = null;
@@ -3845,7 +3708,7 @@ const _noopHover = () => {};
 function applyPoseDrag() {
   const dc = viewer.dragControls;
   if (!dc) { return; }
-  dc.enabled = poseDrag;
+  dc.enabled = viewState.poseDrag;
   if (dc !== _origDragControls) {
     _origDragControls = dc;
     _origOnHover = dc.onHover; _origOnUnhover = dc.onUnhover;
@@ -3882,9 +3745,9 @@ function applyPoseDrag() {
   // the element highlights the hovered link on EVERY pointermove (re-applying
   // it), so a one-shot handler can't undo it -- no-op the hover callbacks in
   // orbit mode instead, so a plain hover/click never lights the part up
-  dc.onHover = poseDrag ? _origOnHover : _noopHover;
-  dc.onUnhover = poseDrag ? _origOnUnhover : _noopHover;
-  if (!poseDrag) {                            // clear anything left highlighted
+  dc.onHover = viewState.poseDrag ? _origOnHover : _noopHover;
+  dc.onUnhover = viewState.poseDrag ? _origOnUnhover : _noopHover;
+  if (!viewState.poseDrag) {                  // clear anything left highlighted
     viewer.robot?.traverse(c => {
       if (c.isMesh && c.__origMaterial !== undefined) {
         c.material = c.__origMaterial;
@@ -3895,9 +3758,9 @@ function applyPoseDrag() {
   }
 }
 poseBtn.addEventListener('click', () => {
-  poseDrag = poseBtn.classList.toggle('active');
+  viewState.poseDrag = poseBtn.classList.toggle('active');
   applyPoseDrag();
-  log(poseDrag ? t('pose.on') : t('pose.off'), 'ok');
+  log(viewState.poseDrag ? t('pose.on') : t('pose.off'), 'ok');
 });
 
 // ---- RGB triads (red=X green=Y blue=Z) -----------------------------------
@@ -3999,8 +3862,7 @@ function pickPort(ev) {
 
 // ---- TF view: a small triad on EVERY link + parent->child lines, with the
 // meshes dimmed (rviz-style) so the frame tree is point-at-able ------------
-const tfBtn = document.getElementById('tf');
-const tfOn = () => tfBtn.classList.contains('active');
+function tfOn() { return tfBtn.classList.contains('active'); }
 const dimmedMats = new Map();   // material -> original {transparent,opacity}
 
 function buildTF(robot) {
@@ -4120,6 +3982,27 @@ function _tintedClone(orig, kind) {
   }
   return entry[kind];
 }
+
+// One of TWO top-level 'joint-mouseover' listeners on the viewer; the other
+// (joint-axis markers) emphasises the hovered joint's axis.  Registration order
+// is whatever the import graph produces once this block is split, and it does
+// not decide anything because the two touch DISJOINT objects: this one walks
+// the robot's LINK meshes and skips `userData.sw2robotMarker`, the other
+// touches only marker meshes + the sidebar row.  That skip is the invariant.
+viewer.addEventListener('joint-mouseover', e => {
+  // the element just swapped every hovered mesh to its flat highlightMaterial
+  // and stashed the real one in __origMaterial.  pose mode: replace it with an
+  // emissive amber CLONE (glow + keep colours).  orbit mode (default): restore
+  // the original outright, so a plain hover never lights the part up.  Walk the
+  // whole robot by __origMaterial so it works regardless of e.detail.
+  viewer.robot?.traverse(c => {
+    if (c.isMesh && !c.userData.sw2robotMarker && c.__origMaterial) {
+      c.material = viewState.poseDrag ? _tintedClone(c.__origMaterial, 'hov')
+                            : c.__origMaterial;
+    }
+  });
+  viewer.redraw();
+});
 
 // the tint a link should wear when neither hovered nor freshly (de)selected:
 // collision red wins over the selection blue
@@ -4503,9 +4386,9 @@ const JTYPES = ['revolute', 'continuous', 'prismatic', 'fixed'];
 // keeps its weight but drops its geometry (value 'mass_only', shown 'mass-only')
 const JTYPES_SEL = [...JTYPES, 'mass_only'];
 const typeLabel = t => (t === 'mass_only' ? 'mass-only' : t);
-const typeOptionsHtml = cur => JTYPES_SEL.map(t =>
+function typeOptionsHtml(cur) { return JTYPES_SEL.map(t =>
   `<option value="${t}" ${t === cur ? 'selected' : ''}>${typeLabel(t)}</option>`)
-  .join('');
+  .join(''); }
 
 function _jointUnit(jtype) {
   const pris = jtype === 'prismatic';
@@ -5288,10 +5171,10 @@ function highlightJoint(name, on) {
 // orbit mode: skip that affordance, but still reveal the informational
 // +direction glyph (arrow + arc) so hovering a joint reads its positive sense.
 viewer.addEventListener('joint-mouseover',
-  e => { if (poseDrag) { highlightJoint(e.detail, true); }
+  e => { if (viewState.poseDrag) { highlightJoint(e.detail, true); }
          else { showJointGlyph(e.detail, true); viewer.redraw(); } });
 viewer.addEventListener('joint-mouseout',
-  e => { if (poseDrag) { highlightJoint(e.detail, false); }
+  e => { if (viewState.poseDrag) { highlightJoint(e.detail, false); }
          else { showJointGlyph(e.detail, false); viewer.redraw(); } });
 
 // joint filter: narrow the tree to a flat list of name-matching joints, so the
@@ -5657,13 +5540,6 @@ autolimitsBtn.addEventListener('click', async () => {
 // the ROS1/ROS2/glb downloads are plain <a download> links; on click we rewrite
 // their ?name=&urdf= from these fields so the exported package (and zip) carry
 // them.  Empty URDF name -> the URDF inside is named after the package.
-const exppkg = document.getElementById('exppkg');
-const expurdf = document.getElementById('expurdf');
-const expmeshdir = document.getElementById('expmeshdir');
-const expLinks = ['expdae', 'expros2']
-  .map(id => document.getElementById(id)).filter(Boolean);
-const expVisFmt = document.getElementById('expvisfmt');
-const expColFmt = document.getElementById('expcolfmt');
 function exportDefaultName() {
   // mirror the server: sanitise the assembly name to a valid ROS package name
   // ('Assem1' -> 'assem1_description') so the placeholder matches what ships
@@ -5707,10 +5583,7 @@ expmeshdir?.addEventListener('input', () => {
 // blob to a throwaway download link.
 // Collision geometry for the ROS packages: 'copy' (visual mesh), 'hull'  or '
 // coacd' (convex decomposition into many parts).
-const collModeSel = document.getElementById('collmode');
 const collGenRow = document.getElementById('collgenrow');
-const cqualitySel = document.getElementById('cquality');
-const mergeFixedBox = document.getElementById('mergefixed');
 
 // quality only applies to CoACD; the Generate/preview row only to hull+coacd
 function updateCollUI() {
@@ -6196,7 +6069,6 @@ document.getElementById('redetectmimic')
 
 // ---- 3D hover: name the link under the cursor, R = make it root,
 // double-click = jump to its row in the tree -------------------------------
-const hovertip = document.getElementById('hovertip');
 const raycaster = new THREE.Raycaster();
 
 function pickHit(ev) {
@@ -6263,8 +6135,7 @@ function pickAxis(ev) {
 // (triangles with the same normal on the same plane -- a B-rep-less
 // approximation of SolidWorks face picking); click puts the root origin
 // at the FACE CENTROID with +Z along the face normal ---------------------
-const alignBtn = document.getElementById('alignmode');
-const alignOn = () => alignBtn.classList.contains('active');
+function alignOn() { return alignBtn.classList.contains('active'); }
 const faceMat = new THREE.MeshBasicMaterial({
   color: 0xffe93d, transparent: true, opacity: 0.55,
   depthTest: false, side: THREE.DoubleSide });
@@ -6338,8 +6209,7 @@ alignBtn.addEventListener('click', () => {
 // ---- ⊕ port mode: same face-pick as align, but click drops a coordinate-only
 // link (robot-compiler dummy_link) on the clicked LINK at the face center,
 // +Z along its normal.  Clicking an existing port marker removes it. ---------
-const portBtn = document.getElementById('portmode');
-const portOn = () => portBtn.classList.contains('active');
+function portOn() { return portBtn.classList.contains('active'); }
 
 portBtn.addEventListener('click', () => {
   const on = portBtn.classList.toggle('active');
@@ -7172,7 +7042,6 @@ viewer.addEventListener('pointerleave', () => {
 // ---- Shift+drag box-select -> bulk joint-type change (Blender-style) -------
 // The plain drag is orbit / joint-manipulation, so box-select is Shift+drag.
 const boxselEl = document.getElementById('boxsel');
-const bulkbarEl = document.getElementById('bulkbar');
 let boxing = null;                 // {x0, y0} while dragging the rectangle
 let boxSelected = new Set();       // link names picked by the box
 let boxSelectMode = false;         // toolbar toggle: plain left-drag box-selects
@@ -7306,7 +7175,6 @@ document.getElementById('bulkbardel').addEventListener('click', () => {
 // ---- mimic linking: select a MASTER joint, press m, then click other joints
 // to make them follow it; one URDF rebuild on apply.  For fingers: one driven
 // joint + several coupled phalanges. ----------------------------------------
-const mimicBar = document.getElementById('mimicbar');
 function jointRecForLink(child) {
   return [...rows.values()].find(r => r.child === child) || null;
 }
