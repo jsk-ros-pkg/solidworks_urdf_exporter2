@@ -10,6 +10,7 @@ closed afterwards.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -28,6 +29,15 @@ from .swcom import (
 )
 
 _SAVE_OPTS = SW_SAVEAS_SILENT | SW_SAVEAS_COPY  # 3
+# Windows MAX_PATH.  SolidWorks enforces it too: SaveAs to a longer path returns
+# swFileSaveError_e 2048 (swFileSaveAsNameExceedsMaxPathLength) and writes
+# NOTHING.  That looked like flaky mesh export -- on one humanoid, 97 of 287
+# meshes "randomly" failed, and which ones changed between runs -- but it is
+# exactly deterministic: every file written was <=245 chars and every file
+# refused was >=257, and the set moved only because two output directories
+# differed by a character.  Since the masses of hull-derived links come from the
+# meshes, dropping some of them also made the exported mass irreproducible.
+_MAX_PATH = 259
 # a 3DXML below this is just the empty-document envelope (no tessellation);
 # lightweight sub-assemblies produce ~850 B files that LOOK successful
 _MIN_MESH_BYTES = 2000
@@ -43,6 +53,27 @@ _recent_opens = []
 # composing a sub-assembly (so two parts that sanitize to the same name never
 # clobber each other across the several compose passes in one extract)
 _persisted = {}
+
+
+def mesh_out_path(meshes_dir, base, ext=".3dxml"):
+    """``meshes_dir/<base><ext>``, with ``base`` shortened if the result would
+    breach :data:`_MAX_PATH`.
+
+    The names are generated (``<sub-assembly>__<link>``), so they get long
+    exactly where assemblies nest deeply -- and the output directory the user
+    picked eats into the same budget.  Truncating with a hash of the full name
+    keeps them unique and, crucially, STABLE across runs, so the mesh cache
+    still recognises its own files.  A name that already fits is returned
+    untouched, so ordinary exports keep the names they have always had."""
+    keep = _MAX_PATH - len(os.path.abspath(meshes_dir)) - 1 - len(ext)
+    if len(base) <= keep:
+        return os.path.join(meshes_dir, base + ext)
+    digest = hashlib.md5(base.encode("utf-8")).hexdigest()[:8]
+    if keep < 10:                     # the directory alone is already hopeless
+        print(f"      WARN: {meshes_dir} is too deep for mesh names; "
+              f"exports may fail -- use a shorter -o path")
+        keep = 10
+    return os.path.join(meshes_dir, base[:keep - 9] + "_" + digest + ext)
 
 
 def _open_doc(app, path):
@@ -137,7 +168,7 @@ def _unique_part_names(path):
         print(f"    could not inspect {os.path.basename(path)}: {e!r}")
         return 0
 
-    tmp = path + ".uniq"
+    tmp = os.path.join(os.path.dirname(path), "~sw2robot.uniq")
     try:
         with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as out:
             for info, data in items:
@@ -272,7 +303,7 @@ def _save_3dxml(model_doc, out_path):
     # write to a temp name and os.replace on success: a SolidWorks crash
     # mid-SaveAs must not leave a partial file that later passes the
     # size-based reuse checks
-    tmp = out_path + ".part.3dxml"
+    tmp = os.path.join(os.path.dirname(out_path), "~sw2robot.3dxml")
     ext = as_iface(model_doc.Extension, "IModelDocExtension")
     try:
         res = ext.SaveAs(tmp, 0, _SAVE_OPTS, None, 0, 0)
@@ -458,11 +489,11 @@ def export_meshes(app, doc, comps, meshes_dir, progress=None, by_path=None):
             continue
         if progress:
             progress(len(by_path) + 1, total, comp.link_name)
-        out = os.path.join(meshes_dir, comp.link_name + ".3dxml")
+        out = mesh_out_path(meshes_dir, comp.link_name)
         reused = False
         # a cached file cannot say WHICH configuration it holds -- the
         # manifest can, so reuse only a mesh recorded as THIS config's
-        for cand in (out, os.path.join(meshes_dir, comp.link_name + ".glb")):
+        for cand in (out, mesh_out_path(meshes_dir, comp.link_name, ".glb")):
             if _cache_is_fresh(cand, path) \
                     and _cache_holds_config(meshes_dir, cand, cfg):
                 rel = os.path.join("meshes", os.path.basename(cand))
@@ -500,7 +531,7 @@ def export_meshes(app, doc, comps, meshes_dir, progress=None, by_path=None):
             # 3DXML of a sub-assembly doc reliably comes out EMPTY however it
             # is opened; compose the mesh from its child PARTS instead (parts
             # always export) into a single .glb in sub-assembly coordinates
-            out = os.path.join(meshes_dir, comp.link_name + ".glb")
+            out = mesh_out_path(meshes_dir, comp.link_name, ".glb")
             print(f"  composing {comp.link_name}.glb from child parts ...")
             ok = _compose_from_parts(app, md, path, out,
                                      meshes_dir=meshes_dir, by_path=by_path)
@@ -530,7 +561,7 @@ def export_part_mesh(md, comp, meshes_dir):
     frame, the same frame its inertial is in), so no re-open is needed.  A fresh
     cache of real geometry is reused when present (see :func:`_cache_is_fresh`)."""
     os.makedirs(meshes_dir, exist_ok=True)
-    out = os.path.join(meshes_dir, comp.link_name + ".3dxml")
+    out = mesh_out_path(meshes_dir, comp.link_name)
     # the part may have been re-saved on another configuration since; the
     # manifest is what tells the cached mesh's config apart (see _CACHE_MANIFEST)
     cfg = getattr(comp, "configuration", None) or active_config(md)
@@ -589,11 +620,11 @@ def export_subgraph_meshes(app, subgraphs, meshes_dir, by_path=None):
                 n += 1
                 continue
             base = f"{prefix}__{sc.link_name}"
-            out = os.path.join(meshes_dir, base + ".3dxml")
+            out = mesh_out_path(meshes_dir, base)
             ok = False
             reused = False
             # only a mesh the manifest records as THIS config may be reused
-            for cand in (out, os.path.join(meshes_dir, base + ".glb")):
+            for cand in (out, mesh_out_path(meshes_dir, base, ".glb")):
                 if _cache_is_fresh(cand, p) \
                         and _cache_holds_config(meshes_dir, cand, cfg):
                     out, ok, reused = cand, True, True
@@ -601,7 +632,7 @@ def export_subgraph_meshes(app, subgraphs, meshes_dir, by_path=None):
             if not ok:
                 ok = _export_by_opening(app, p, out, config=cfg)
             if not ok and p.lower().endswith(".sldasm"):
-                out = os.path.join(meshes_dir, base + ".glb")
+                out = mesh_out_path(meshes_dir, base, ".glb")
                 print(f"  composing {base}.glb from child parts ...")
                 ok = _compose_from_parts(app, None, p, out,
                                          meshes_dir=meshes_dir, by_path=by_path)
@@ -657,13 +688,13 @@ def _compose_from_parts(app, md, path, out_glb, meshes_dir=None, by_path=None):
         if meshes_dir is None or by_path is None or key in by_path:
             return
         stem = safe_name(os.path.splitext(os.path.basename(cpath))[0])
-        dst = os.path.join(meshes_dir, stem + ".glb")
+        dst = mesh_out_path(meshes_dir, stem, ".glb")
         # different part files (or config variants of one file) may sanitize
         # to the same stem -- never clobber
         i = 1
         while dst in _persisted and _persisted[dst] != key:
             i += 1
-            dst = os.path.join(meshes_dir, f"{stem}_{i}.glb")
+            dst = mesh_out_path(meshes_dir, f"{stem}_{i}", ".glb")
         try:
             tmp = dst + ".part.glb"
             m_local.export(tmp, file_type="glb")
