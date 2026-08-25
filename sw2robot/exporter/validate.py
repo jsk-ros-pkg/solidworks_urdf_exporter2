@@ -15,6 +15,12 @@ import xml.etree.ElementTree as ET
 
 import numpy as np
 
+# Below this many meshes a pool costs more to start than it saves, and past
+# this many workers the vertex arrays coming back cost more than the extra
+# core earns (a humanoid ships a few hundred MB of them through the pipe).
+_PREFETCH_MIN = 8
+_PREFETCH_MAX_WORKERS = 8
+
 
 def _load_glb_verts(path):
     """Vertices of the mesh at ``path`` (or its .glb sibling), or None.
@@ -72,6 +78,37 @@ def warn_dropped_geometry(pkg_dir, urdf_path, graph, tol_mm=3.0, min_frac=0.15,
             _seen[path] = _load_glb_verts(path)
         return _seen[path]
 
+    def _prefetch(paths):
+        """Decode many meshes into the memo at once, in parallel where we can.
+
+        Decoding is pure Python and never touches SolidWorks, so it is one of
+        the few stages that can use more than one core.  It has to be PROCESSES
+        (the loader is Python-bound and threads only contend on the GIL), and
+        the win survives shipping the vertex arrays back: measured on a
+        humanoid's meshes, 75s serial against 28s over eight workers, with
+        identical arrays.  Best-effort throughout -- anything that goes wrong
+        just leaves the memo empty and ``_verts`` loads on demand as before."""
+        want = [p for p in dict.fromkeys(paths) if p and p not in _seen]
+        if len(want) < _PREFETCH_MIN:
+            return
+        workers = min(os.cpu_count() or 1, _PREFETCH_MAX_WORKERS)
+        if workers < 2:
+            return
+        try:
+            # biggest first: one whole-assembly mesh dwarfs the rest, and left
+            # to last it would be a straggler no other worker can help with
+            want.sort(key=lambda p: -os.path.getsize(p)
+                      if os.path.exists(p) else 0)
+            from concurrent.futures import ProcessPoolExecutor
+            with ProcessPoolExecutor(max_workers=workers) as pool:
+                for path, verts in zip(want, pool.map(_load_glb_verts, want)):
+                    if verts is not None:
+                        # pickling drops the read-only flag _load_glb_verts set
+                        verts.setflags(write=False)
+                    _seen[path] = verts
+        except Exception as e:
+            print(f"      note: mesh decode fell back to one core ({e!r})")
+
     # --- assembled scene point cloud, in the URDF root frame ---------------
     try:
         from skrobot.models.urdf import RobotModelFromURDF
@@ -80,6 +117,10 @@ def warn_dropped_geometry(pkg_dir, urdf_path, graph, tol_mm=3.0, min_frac=0.15,
     # strip visuals so skrobot loads even with .3dxml refs, then FK link frames
     tree = ET.parse(urdf_path)
     root = tree.getroot()
+    _prefetch(os.path.join(meshes_dir, os.path.basename(me.get("filename") or ""))
+              for link in root.findall("link")
+              for vis in link.findall("visual")
+              for me in [vis.find("geometry/mesh")] if me is not None)
     link_mesh = {}                      # link name -> [(glb_verts, visual_origin)]
     for link in root.findall("link"):
         items = []
@@ -152,6 +193,9 @@ def warn_dropped_geometry(pkg_dir, urdf_path, graph, tol_mm=3.0, min_frac=0.15,
         if c.get("mesh_file") and not c.get("is_subassembly"):
             mesh_of[c["name"]] = c["mesh_file"]
 
+    _prefetch(os.path.join(pkg_dir, mf.replace("\\", "/"))
+              for k in (graph.get("deep_worlds") or {})
+              for mf in [mesh_of.get(k.split("/")[-1])] if mf)
     rng = np.random.RandomState(0)
     dropped = []
     for key, wl in (graph.get("deep_worlds") or {}).items():
