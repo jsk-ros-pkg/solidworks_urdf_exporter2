@@ -259,14 +259,68 @@ def verify_mesh(path):
     return None
 
 
+def _verify_one(path):
+    """``(path, complaint or None)`` -- never raises, so one bad mesh cannot
+    take down a pool worker (or the export)."""
+    try:
+        return path, verify_mesh(path)
+    except Exception as e:
+        return path, f"{os.path.basename(path)}: verification raised {e!r}"
+
+
+# Below this many meshes a pool costs more to start than it saves.
+_VERIFY_POOL_MIN = 6
+# More workers stop paying: the wall clock floors at the single biggest mesh
+# (measured, one whole-assembly 3DXML was 8s of a 20.7s total), so past this the
+# extra interpreter startups are pure loss.
+_VERIFY_POOL_MAX_WORKERS = 8
+
+
+def _verify_parallel(paths):
+    """``{path: complaint or None}``, or None when a pool is not usable here.
+
+    Reading the meshes back is the one stage of an export that never touches
+    SolidWorks, so it is the only one that can use more than one core.  It has
+    to be PROCESSES: measured over 69 meshes, threads made it **7x slower**
+    (20.7 s -> 149 s at 12 threads) because the 3DXML loader is pure Python and
+    the workers only fight over the GIL, while 12 processes gave 1.96x.  The
+    biggest file is submitted first so it is not left as a lone straggler.
+
+    Returns None (caller falls back to serial) rather than raising: a machine
+    that cannot spawn -- sandbox, exhausted handles, a frozen build whose
+    launcher lacks ``multiprocessing.freeze_support()`` -- must still export.
+    """
+    if len(paths) < _VERIFY_POOL_MIN:
+        return None
+    workers = min(os.cpu_count() or 1, _VERIFY_POOL_MAX_WORKERS)
+    if workers < 2:
+        return None
+    try:
+        # longest first: with one 8s mesh among 69, scheduling order decides
+        # whether the run ends at 8s or at 8s + everything else
+        ordered = sorted(paths, key=lambda p: -os.path.getsize(p))
+    except OSError:
+        ordered = list(paths)
+    try:
+        from concurrent.futures import ProcessPoolExecutor
+        with ProcessPoolExecutor(max_workers=workers) as pool:
+            return dict(pool.map(_verify_one, ordered))
+    except Exception as e:
+        print(f"      note: mesh verification fell back to one core ({e!r})")
+        return None
+
+
 def verify_meshes(paths, say=None):
     """Check every written mesh reads back whole; return the complaints."""
+    paths = list(paths)
+    done = _verify_parallel(paths)
     bad = []
+    # report in the caller's order, not the order the pool happened to finish
     for p in paths:
-        try:
-            problem = verify_mesh(p)
-        except Exception as e:                     # never fail an export here
-            problem = f"{os.path.basename(p)}: verification raised {e!r}"
+        if done is not None:
+            problem = done.get(p)
+        else:
+            _, problem = _verify_one(p)
         if problem:
             bad.append(problem)
             print(f"      MESH FIDELITY: {problem}")

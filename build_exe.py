@@ -211,9 +211,16 @@ def main() -> int:
     exe_name = args.name or exe_name
 
     build_dir = os.path.join(ROOT, "build", "_pyi")
+    # freeze_support() FIRST and before anything heavy: mesh verification runs
+    # in a ProcessPoolExecutor, and a one-file build spawns workers by
+    # re-executing this very exe.  Without it each worker would re-run main()
+    # instead of serving the pool -- i.e. the exe forks itself repeatedly.
     shim = _write(os.path.join(build_dir, f"_entry_{args.target}.py"),
+                  "import multiprocessing\n\n"
                   f"from {module} import main\n\n"
-                  f"if __name__ == '__main__':\n    main()\n")
+                  "if __name__ == '__main__':\n"
+                  "    multiprocessing.freeze_support()\n"
+                  "    main()\n")
 
     web = os.path.join(ROOT, "sw2robot", "editor", "web")
 
