@@ -220,16 +220,30 @@ def _sw_mass_overridden(mp):
         "OverrideMass", "OverrideCenterOfMass", "OverrideMomentsOfInertia"))
 
 
-def _read_part_props(md):
-    """``(material, density, sw_dict|None)`` read straight from a PART's model doc.
+def _read_part_props(md, is_assembly=False):
+    """``(material, density, sw_dict|None)`` read straight from a component's doc.
 
-    ``md`` is an ``IModelDoc2`` of a ``.SLDPRT`` (either a component's
-    ``GetModelDoc2`` or a standalone part opened on its own).  ``sw_dict`` is
-    ``{"mass","com","inertia"}`` in the part-local frame (SI) or None when the
-    SolidWorks-native mass properties are unavailable.  All lookups are
-    best-effort: any failure just leaves that field None."""
+    ``md`` is an ``IModelDoc2`` of the component -- a ``.SLDPRT``, or a
+    ``.SLDASM`` when the link is a sub-assembly (``is_assembly``).  ``sw_dict``
+    is ``{"mass","com","inertia"}`` in that document's own frame (SI, the frame
+    its mesh is exported in) or None when the SolidWorks-native mass properties
+    are unavailable.  All lookups are best-effort: any failure just leaves that
+    field None."""
     material = density = None
-    sw = None
+    if not is_assembly:
+        material, density = _part_material(md)
+    return material, density, _sw_props_of(md)
+
+
+def _part_material(md):
+    """``(material name, density)`` of a PART, or ``(None, None)``.
+
+    Assemblies are deliberately excluded: an assembly's ``Density`` is just its
+    total mass over its total volume -- 123 kg/m3 for one real torso, because a
+    zero-density envelope body inflates the volume -- which is meaningless as a
+    material and actively harmful if it ever reached the mesh-estimate fallback.
+    The MASS of an assembly is read all the same; only this is part-only."""
+    material = density = None
     try:
         pd = as_iface(md, "IPartDoc")
         res = pd.GetMaterialPropertyName2("", "")
@@ -239,17 +253,39 @@ def _read_part_props(md):
     except Exception:
         pass
     try:
-        mdoc = as_iface(md, "IModelDoc2")
-        ext = as_iface(mdoc.Extension, "IModelDocExtension")
-        mp = ext.CreateMassProperty
-        if callable(mp):
-            mp = mp()
+        mp = _mass_property(md)
         d = getattr(mp, "Density", None)
         if d and d > 1.0:               # kg/m^3
             density = float(d)
-        # SolidWorks-native mass/COM/inertia (exact CAD geometry +
-        # material/override) -- preferred over the mesh estimate
+    except Exception:
+        pass
+    return material, density
+
+
+def _mass_property(md):
+    """``IMassProperty`` of a document (part OR assembly)."""
+    mdoc = as_iface(md, "IModelDoc2")
+    ext = as_iface(mdoc.Extension, "IModelDocExtension")
+    mp = ext.CreateMassProperty
+    return mp() if callable(mp) else mp
+
+
+def _sw_props_of(md):
+    """``{"mass","com","inertia"[, "overridden"]}`` in the DOCUMENT's own frame,
+    or None.
+
+    ``CreateMassProperty`` works the same on an assembly document as on a part,
+    and returns the assembly's totals in ITS own coordinate system -- which is
+    the frame that sub-assembly's mesh is exported in, exactly as for a part.
+    That matters because a link is very often a sub-assembly: on one humanoid
+    every one of its 21 links was, so skipping them left every link with no
+    SolidWorks mass at all and the whole robot fell back to convex-hull
+    estimates (one 12.36 kg torso came out as 37.51 kg, and drifted between runs
+    with the meshes it was derived from)."""
+    try:
+        mp = _mass_property(md)
         mass, com, inertia6 = _sw_mass_props(mp)
+        sw = None
         if mass is not None:
             sw = {"mass": mass, "com": com, "inertia": inertia6}
         # a manual SW mass-properties override means the mass is a deliberate
@@ -258,9 +294,9 @@ def _read_part_props(md):
         if _sw_mass_overridden(mp):
             sw = (sw or {})
             sw["overridden"] = True
+        return sw
     except Exception:
-        pass
-    return material, density, sw
+        return None
 
 
 @dataclass
@@ -759,7 +795,7 @@ def extract_components(doc, exclude=None, progress=None,
     # opens on the file's saved-active config, not this instance's.
     matcache = {}
 
-    def _material_of(ct, path, config):
+    def _material_of(ct, path, config, is_asm=False):
         from .mesh import _show_config  # lazy: mesh imports model back
 
         key = (path.lower(), config or None)
@@ -773,7 +809,7 @@ def extract_components(doc, exclude=None, progress=None,
                 # read on the config this INSTANCE references, not on whatever
                 # the shared doc happens to show
                 _show_config(md, config)
-                props = _read_part_props(md)
+                props = _read_part_props(md, is_assembly=is_asm)
         except Exception:
             pass
         # Walking a part's feature tree is by far the most expensive thing in an
@@ -782,7 +818,8 @@ def extract_components(doc, exclude=None, progress=None,
         # GetTypeName2), and it found zero coordinate systems.  So do it at most
         # once per part FILE -- see part_frames_scanned on why the results dict
         # is not a sufficient already-done marker.
-        if md is not None and part_coordinate_systems_out is not None:
+        if (md is not None and not is_asm
+                and part_coordinate_systems_out is not None):
             scan_key = (path or "").lower()
             done = (scan_key in part_frames_scanned
                     if part_frames_scanned is not None
@@ -838,8 +875,10 @@ def extract_components(doc, exclude=None, progress=None,
         cfg = safe_prop(ct, "ReferencedConfiguration") or None
         material = density = None
         sw = None
-        if path and not is_asm:
-            material, density, sw = _material_of(ct, path, cfg)
+        # A LINK IS OFTEN A SUB-ASSEMBLY, so read its mass too -- see
+        # _sw_props_of.  Only the material/density lookup stays part-only.
+        if path:
+            material, density, sw = _material_of(ct, path, cfg, is_asm)
         sw = sw or {}
         comps.append(Component(name=name, link_name=ln, part_path=path,
                                is_subassembly=is_asm, world=world,
