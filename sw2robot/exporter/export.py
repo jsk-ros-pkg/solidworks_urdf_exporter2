@@ -421,14 +421,17 @@ def extract(assembly_path, out_dir=None, robot_name=None, visible=False,
     meshes_dir = os.path.join(pkg_dir, "meshes")
     os.makedirs(meshes_dir, exist_ok=True)
 
+    # CommandInProgress for the whole extraction: 19x on every COM call, see
+    # SolidWorks._begin_api_batch.  Scoped so the user's session never keeps it.
     if sw is not None:
-        _extract_into(sw, assembly_path, pkg_dir, meshes_dir, robot_name, _say,
-                      _part, configuration=configuration,
-                      scan_part_frames=scan_part_frames)
+        with sw.api_batch():
+            _extract_into(sw, assembly_path, pkg_dir, meshes_dir, robot_name,
+                          _say, _part, configuration=configuration,
+                          scan_part_frames=scan_part_frames)
     else:
         sw_ctx = (SolidWorks(attach=True) if attach
                   else SolidWorks(visible=visible))
-        with sw_ctx as sw_own:
+        with sw_ctx as sw_own, sw_own.api_batch():
             _extract_into(sw_own, assembly_path, pkg_dir, meshes_dir,
                           robot_name, _say, _part,
                           configuration=configuration,

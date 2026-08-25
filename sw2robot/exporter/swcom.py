@@ -17,6 +17,7 @@ KEY FACTS about this machine (discovered empirically):
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import sys
@@ -829,6 +830,7 @@ class SolidWorks:
 
         In attach mode the application belongs to the USER: never close
         documents or exit -- just drop our reference."""
+        self._end_api_batch()
         self._restore_search_folders()
         if getattr(self, "_attached", False):
             self.app = None
@@ -847,6 +849,55 @@ class SolidWorks:
         for d in self._tempdirs:
             shutil.rmtree(d, ignore_errors=True)
         self._tempdirs = []
+
+    def _begin_api_batch(self):
+        """Tell SolidWorks an API command is running, for the whole extraction.
+
+        This is the single biggest speed-up available to an out-of-process
+        client.  MEASURED on this machine, reading one trivial property
+        (``IComponent2::Name2``) across an open assembly::
+
+            baseline                     3.478 ms/call
+            CommandInProgress=True       0.184 ms/call   ->  18.9x
+            UserControl=False            4.003 ms/call   ->   0.9x  (no help)
+            EnableFeatureTree=False      3.390 ms/call   ->   1.0x  (no help)
+
+        and the cost comes straight back on restore (3.950 ms), so the flag is
+        the cause and not drift.  Between API calls an otherwise-idle SolidWorks
+        does per-call UI/idle work on its message loop; this flag suppresses it.
+        Only ``CommandInProgress`` matters -- notably NOT ``UserControl``, which
+        would lock the user out of their own SolidWorks for no gain.
+
+        Restored by :meth:`_end_api_batch`, which ``shutdown`` also calls: in
+        attach mode the application belongs to the USER and must not be left
+        flagged busy."""
+        if self.app is None or getattr(self, "_api_batch_saved", None) is not None:
+            return
+        try:
+            self._api_batch_saved = bool(self.app.CommandInProgress)
+            self.app.CommandInProgress = True
+        except Exception:
+            self._api_batch_saved = None    # not settable here: just go slow
+
+    def _end_api_batch(self):
+        saved = getattr(self, "_api_batch_saved", None)
+        if saved is None or self.app is None:
+            return
+        try:
+            self.app.CommandInProgress = saved
+        except Exception:
+            pass
+        finally:
+            self._api_batch_saved = None
+
+    @contextlib.contextmanager
+    def api_batch(self):
+        """Scope the ``CommandInProgress`` flag to a block, always restoring it."""
+        self._begin_api_batch()
+        try:
+            yield self
+        finally:
+            self._end_api_batch()
 
     def __enter__(self):
         return self
