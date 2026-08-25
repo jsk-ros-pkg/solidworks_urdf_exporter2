@@ -20,6 +20,7 @@ prop / environment object / single rigid body in a simulator.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 
@@ -46,7 +47,7 @@ from .model import (
     safe_name,
     to_graph_state,
 )
-from .state import GraphState
+from .state import CoordinateSystemState, GraphState
 from .swcom import (
     SW_DOC_PART,
     SolidWorks,
@@ -137,8 +138,72 @@ def _extract_part_into(sw, part_path, pkg_dir, meshes_dir, robot_name, _say):
     return pkg_dir
 
 
+PART_FRAMES_CACHE = "part_frames_cache.json"
+
+
+def _part_frames_cache_load(pkg_dir):
+    """``(frames, scanned)`` remembered from an earlier extraction here.
+
+    Walking a part's feature tree looking for ``CoordSys`` features is the
+    single most expensive step of an extraction -- 121 s of a measured 410 s run
+    on a 62-part assembly, which found zero coordinate systems -- and its answer
+    changes only when the part FILE changes.  So cache it across runs keyed on
+    (mtime, size), the same rule the mesh cache uses.  ``scanned`` maps
+    ``lower-cased path -> path`` and deliberately INCLUDES the parts that have
+    no coordinate system: those are the ones worth not walking again.
+    """
+    frames, scanned = {}, {}
+    try:
+        with open(os.path.join(pkg_dir, PART_FRAMES_CACHE), encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return frames, scanned          # no cache / unreadable: just re-scan
+    for key, rec in (data.get("parts") or {}).items():
+        src = rec.get("path") or key
+        try:
+            st = os.stat(src)
+        except OSError:
+            continue                    # moved or deleted -> re-scan
+        if st.st_size != rec.get("size") or st.st_mtime != rec.get("mtime"):
+            continue                    # edited -> re-scan
+        scanned[key] = src
+        try:
+            got = [CoordinateSystemState(**d) for d in (rec.get("frames") or [])]
+        except (TypeError, ValueError):
+            continue                    # stale schema -> re-scan
+        if got:
+            frames[src] = got
+    return frames, scanned
+
+
+def _part_frames_cache_save(pkg_dir, frames, scanned):
+    """Persist what this run learned so the next extraction can skip the walk.
+
+    Never fails the export: a cache that cannot be written just means the next
+    run pays the walk again.
+    """
+    parts = {}
+    for key, src in scanned.items():
+        try:
+            st = os.stat(src)
+        except OSError:
+            continue                    # a temp copy that is already gone
+        parts[key] = {
+            "path": src,
+            "mtime": st.st_mtime,
+            "size": st.st_size,
+            "frames": [cs.model_dump() for cs in (frames.get(src) or [])],
+        }
+    try:
+        with open(os.path.join(pkg_dir, PART_FRAMES_CACHE), "w",
+                  encoding="utf-8") as f:
+            json.dump({"version": 1, "parts": parts}, f, indent=1)
+    except OSError as e:
+        print(f"      note: part-frame cache not written ({e!r})")
+
+
 def _extract_into(sw, assembly_path, pkg_dir, meshes_dir, robot_name, _say,
-                  _part=None, configuration=None):
+                  _part=None, configuration=None, scan_part_frames=False):
     """Extraction body against an already-running SolidWorks session.  ``_part``
     (optional) reports the part currently being read, for the load indicator.
     ``configuration`` -- extract THIS assembly configuration instead of the
@@ -176,11 +241,31 @@ def _extract_into(sw, assembly_path, pkg_dir, meshes_dir, robot_name, _say,
 
     _say("reading components + mates ...")
     # frames authored INSIDE part files, collected during the per-part
-    # mass-property read (no extra document loads)
-    part_coordinate_systems = {}
+    # mass-property read (no extra document loads).  Seeded from the disk cache
+    # so an unchanged part file is never walked twice; `scanned` is shared with
+    # extract_subgraphs so one part appearing in several sub-assemblies -- or
+    # under two referenced configurations -- is walked ONCE.
+    part_coordinate_systems, part_frames_scanned = \
+        _part_frames_cache_load(pkg_dir)
+    if part_frames_scanned:
+        _say(f"part frames: {len(part_frames_scanned)} unchanged part file(s) "
+             f"reused from cache")
+    if not scan_part_frames:
+        # Loud on purpose.  Skipping this is a real (if usually empty)
+        # reduction in what gets extracted, so never let it look like the
+        # frames simply were not there -- name the recovery command.
+        _say("part frames: NOT scanning .SLDPRT files for coordinate "
+             "systems (the default -- it is the slowest step of an extract "
+             "and most parts have none).  ASSEMBLY-level frames and "
+             "reference axes are still read, and cached part frames are "
+             "kept.  If a PART authors its own frame, get it with "
+             "--part-frames, or without a full re-extract: "
+             "sw2urdf-extract <pkg_dir> --refresh frames --attach")
+    frames_out = part_coordinate_systems if scan_part_frames else None
     comps, adjacency, ground = extract_graph(
         doc, robot_name, assembly_path, progress=_part,
-        part_coordinate_systems_out=part_coordinate_systems)
+        part_coordinate_systems_out=frames_out,
+        part_frames_scanned=part_frames_scanned)
     (coordinate_systems,
      reference_axes,
      sw2urdf_marker,
@@ -208,7 +293,8 @@ def _extract_into(sw, assembly_path, pkg_dir, meshes_dir, robot_name, _say,
     subgraphs = extract_subgraphs(
         doc, comps, sw=sw, progress=_part,
         coordinate_systems_out=subassembly_coordinate_systems,
-        part_coordinate_systems_out=part_coordinate_systems)
+        part_coordinate_systems_out=frames_out,
+        part_frames_scanned=part_frames_scanned)
     deep_worlds, hidden = capture_deep_worlds(doc)
 
     by_path = {}
@@ -272,12 +358,15 @@ def _extract_into(sw, assembly_path, pkg_dir, meshes_dir, robot_name, _say,
                            part_coordinate_systems=part_coordinate_systems,
                            configuration=used_cfg, configurations=cfgs)
     graph.save(os.path.join(pkg_dir, GRAPH_FILE))
+    _part_frames_cache_save(pkg_dir, part_coordinate_systems,
+                            part_frames_scanned)
     sw.close_doc(doc)
     return pkg_dir
 
 
 def extract(assembly_path, out_dir=None, robot_name=None, visible=False,
-            progress=None, sw=None, configuration=None, attach=False):
+            progress=None, sw=None, configuration=None, attach=False,
+            scan_part_frames=False):
     """SolidWorks -> graph.json (+ per-link 3DXML).  ``progress(msg)`` -- if
     given -- receives short human-readable status strings at each stage and once
     per exported mesh, so a UI can show how far along the (multi-minute) extract
@@ -286,7 +375,19 @@ def extract(assembly_path, out_dir=None, robot_name=None, visible=False,
     ``attach=True`` connects to the USER'S already-running SolidWorks instead
     (their documents are left untouched); if the assembly is already open
     there, the multi-minute reopen is skipped entirely.  No fallback: with no
-    running SolidWorks to attach to this raises ``SolidWorksUnavailable``."""
+    running SolidWorks to attach to this raises ``SolidWorksUnavailable``.
+
+    ``scan_part_frames`` -- walk every PART file's feature tree looking for
+    coordinate systems.  OFF by default: it is the single most expensive step of
+    an extract (measured 90-121 s of a 410 s run on a 62-part assembly, which
+    found zero frames) because it costs a COM round trip per feature, whereas
+    frames authored in the ASSEMBLY -- the usual place -- are read either way
+    and cost one document walk.  When a .SLDPRT does carry its own named frame,
+    either pass True or add them afterwards with :func:`refresh_frames`, which
+    needs no full re-extract; the skip is announced through ``progress`` so it
+    is never a silent loss.  Either way results are cached per part file in
+    ``part_frames_cache.json`` (mtime+size keyed), so a repeat extract into the
+    same output dir never re-walks an unchanged part."""
     _tolerant_console()
     import time as _time
     t_state = {"last": _time.time()}
@@ -322,14 +423,16 @@ def extract(assembly_path, out_dir=None, robot_name=None, visible=False,
 
     if sw is not None:
         _extract_into(sw, assembly_path, pkg_dir, meshes_dir, robot_name, _say,
-                      _part, configuration=configuration)
+                      _part, configuration=configuration,
+                      scan_part_frames=scan_part_frames)
     else:
         sw_ctx = (SolidWorks(attach=True) if attach
                   else SolidWorks(visible=visible))
         with sw_ctx as sw_own:
             _extract_into(sw_own, assembly_path, pkg_dir, meshes_dir,
                           robot_name, _say, _part,
-                          configuration=configuration)
+                          configuration=configuration,
+                          scan_part_frames=scan_part_frames)
 
     print(f"  graph: {os.path.join(pkg_dir, GRAPH_FILE)}")
     return pkg_dir
@@ -656,9 +759,11 @@ def export(assembly_path, out_dir=None, robot_name=None, visible=False,
            ros_version=1, ros_pkg_name=None, ros_urdf_name=None,
            ros_robot_name=None,
            collision="copy", coacd_quality="balanced", merge_fixed=False,
-           ros_mesh_dir=None, configuration=None, attach=False):
+           ros_mesh_dir=None, configuration=None, attach=False,
+           scan_part_frames=False):
     pkg_dir = extract(assembly_path, out_dir, robot_name, visible,
-                      configuration=configuration, attach=attach)
+                      configuration=configuration, attach=attach,
+                      scan_part_frames=scan_part_frames)
     return build(pkg_dir, config_path=config_path, base_hint=base_hint,
                  exclude=exclude, ros_pkg=ros_pkg, ros_version=ros_version,
                  ros_pkg_name=ros_pkg_name, ros_urdf_name=ros_urdf_name,
@@ -689,6 +794,17 @@ def main():
                     help="extract this ASSEMBLY configuration instead of the "
                          "file's saved-active one (configs can suppress whole "
                          "components, e.g. a bench-mount frame)")
+    ap.add_argument("--part-frames", action="store_true",
+                    help="also scan every PART file for coordinate-system "
+                         "features.  OFF by default: that scan walks every "
+                         "feature of every unique part over COM and is the "
+                         "single biggest cost of an extract (measured 90-121s "
+                         "of a 410s run, finding zero frames), while "
+                         "ASSEMBLY-level frames -- the usual place to author "
+                         "them -- are read either way.  Needed only when a "
+                         ".SLDPRT itself carries a named coordinate system; "
+                         "'sw2urdf-extract <pkg_dir> --refresh frames' adds "
+                         "them later without a full re-extract")
     ap.add_argument("--config", default=None)
     ap.add_argument("--base", default=None)
     ap.add_argument("--exclude", default=None)
@@ -744,7 +860,8 @@ def main():
            ros_pkg_name=args.ros_pkg_name, ros_urdf_name=args.ros_urdf_name,
            ros_robot_name=args.ros_robot_name,
            collision=args.collision, coacd_quality=args.coacd_quality,
-           merge_fixed=args.merge_fixed, ros_mesh_dir=args.ros_mesh_dir)
+           merge_fixed=args.merge_fixed, ros_mesh_dir=args.ros_mesh_dir,
+           scan_part_frames=args.part_frames)
 
 
 if __name__ == "__main__":

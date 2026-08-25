@@ -725,7 +725,8 @@ def coordinate_system_ports(graph, comps, joints, anchors, base,
 
 
 def extract_components(doc, exclude=None, progress=None,
-                       part_coordinate_systems_out=None):
+                       part_coordinate_systems_out=None,
+                       part_frames_scanned=None):
     """``progress(link_name)`` -- if given -- is called as each component is
     about to be read (its material/mass-property lookup is the per-part cost),
     so a UI can show WHICH part the (multi-minute) load is on, not just a stage.
@@ -734,7 +735,17 @@ def extract_components(doc, exclude=None, progress=None,
     ``{part_path: [CoordinateSystemState, ...]}`` for the parts that define a
     coordinate system.  It rides along with the mass-property read, which
     already opens each unique part document once, so it costs one extra feature
-    walk per part file and no extra document loads."""
+    walk per part file and no extra document loads.
+
+    ``part_frames_scanned`` -- if given -- maps ``lower-cased part path -> the
+    path as SolidWorks reported it`` for every part whose feature tree has
+    already been walked, SHARED across every document of one extraction (the
+    caller may also pre-seed it from a disk cache).  Pass it whenever
+    ``part_coordinate_systems_out`` is passed: without it the already-done test
+    falls back to ``path in part_coordinate_systems_out``, which only records
+    parts that HAVE a coordinate system, so every part without one -- almost all
+    of them -- is re-walked in each document and each referenced configuration
+    it appears in."""
     exclude = [e.lower() for e in (exclude or [])]
     raw = list(safe_call(doc, "GetComponents", True) or [])
     comps = []
@@ -765,16 +776,28 @@ def extract_components(doc, exclude=None, progress=None,
                 props = _read_part_props(md)
         except Exception:
             pass
-        if md is not None and part_coordinate_systems_out is not None \
-                and path not in part_coordinate_systems_out:
-            try:
-                frames = extract_coordinate_systems(md)
-            except Exception as e:
-                print(f"      WARN: coordinate systems of "
-                      f"{os.path.basename(path)} could not be read: {e!r}")
-                frames = []
-            if frames:
-                part_coordinate_systems_out[path] = frames
+        # Walking a part's feature tree is by far the most expensive thing in an
+        # extraction: measured 121 s of a 410 s run on a 62-part assembly (4514
+        # features, ~1.25 s per FeatureManager.GetFeatures plus ~10 ms per
+        # GetTypeName2), and it found zero coordinate systems.  So do it at most
+        # once per part FILE -- see part_frames_scanned on why the results dict
+        # is not a sufficient already-done marker.
+        if md is not None and part_coordinate_systems_out is not None:
+            scan_key = (path or "").lower()
+            done = (scan_key in part_frames_scanned
+                    if part_frames_scanned is not None
+                    else path in part_coordinate_systems_out)
+            if not done:
+                if part_frames_scanned is not None:
+                    part_frames_scanned[scan_key] = path
+                try:
+                    frames = extract_coordinate_systems(md)
+                except Exception as e:
+                    print(f"      WARN: coordinate systems of "
+                          f"{os.path.basename(path)} could not be read: {e!r}")
+                    frames = []
+                if frames:
+                    part_coordinate_systems_out[path] = frames
         matcache[key] = props
         return props
     for c in raw:
@@ -3005,17 +3028,20 @@ def build_tree(comps, adjacency, base, directed=None, root_rpy=None,
 # ====================================================================
 
 def extract_graph(doc, robot_name, source_assembly, progress=None,
-                  part_coordinate_systems_out=None):
+                  part_coordinate_systems_out=None,
+                  part_frames_scanned=None):
     """SolidWorks -> internal (comps, adjacency, ground).
 
     Extracts ALL (non-suppressed) components and their mate graph.  Exclusion
     of parts is a BUILD-time decision, so nothing is excluded here.  Mesh files
     are filled in later (by mesh.export_meshes) before serializing.
     ``progress(link_name)`` is forwarded per component (see
-    :func:`extract_components`), as is ``part_coordinate_systems_out``."""
+    :func:`extract_components`), as are ``part_coordinate_systems_out`` and
+    ``part_frames_scanned``."""
     comps = extract_components(
         doc, progress=progress,
-        part_coordinate_systems_out=part_coordinate_systems_out)
+        part_coordinate_systems_out=part_coordinate_systems_out,
+        part_frames_scanned=part_frames_scanned)
     # DOF-folder mode: if the top assembly marks its real joints in a 'dof' mate
     # folder, switch on the whitelist for this whole extraction (top + subgraphs).
     global _DOF_ACTIVE
@@ -3542,7 +3568,8 @@ def capture_deep_worlds(doc):
 
 def extract_subgraphs(doc, comps, sw=None, progress=None,
                       coordinate_systems_out=None,
-                      part_coordinate_systems_out=None):
+                      part_coordinate_systems_out=None,
+                      part_frames_scanned=None):
     """{part_path: (comps, adjacency, ground)} for every unique sub-assembly
     appearing in ``comps``, RECURSIVELY (each sub-assembly's own internals in
     its own local frame).  Prefers the in-memory doc the parent resolved;
@@ -3600,7 +3627,8 @@ def extract_subgraphs(doc, comps, sw=None, progress=None,
                       f"{cfg!r}: {e!r}")
         subcomps = extract_components(
             md, progress=progress,
-            part_coordinate_systems_out=part_coordinate_systems_out)
+            part_coordinate_systems_out=part_coordinate_systems_out,
+            part_frames_scanned=part_frames_scanned)
         subadj, subground = build_mate_graph(md, subcomps)
         out[path] = (subcomps, subadj, subground)
         if coordinate_systems_out is not None:
