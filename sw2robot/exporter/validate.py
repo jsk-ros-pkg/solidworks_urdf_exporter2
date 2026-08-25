@@ -17,6 +17,11 @@ import numpy as np
 
 
 def _load_glb_verts(path):
+    """Vertices of the mesh at ``path`` (or its .glb sibling), or None.
+
+    Returned read-only: callers memoise this (see :func:`warn_dropped_geometry`)
+    so the array is shared, and a mutation would corrupt every other user."""
+    verts = None
     try:
         import trimesh
     except Exception:
@@ -27,10 +32,12 @@ def _load_glb_verts(path):
             try:
                 m = trimesh.load(cand, force="mesh")
                 if len(m.vertices):
-                    return np.asarray(m.vertices, float)
+                    verts = np.asarray(m.vertices, float)
+                    verts.setflags(write=False)
+                    break
             except Exception:
                 pass
-    return None
+    return verts
 
 
 def _origin_mat(el):
@@ -54,6 +61,16 @@ def warn_dropped_geometry(pkg_dir, urdf_path, graph, tol_mm=3.0, min_frac=0.15,
     except Exception:
         return []                       # scipy/trimesh optional -- skip silently
     meshes_dir = os.path.join(pkg_dir, "meshes")
+    # The URDF names the same mesh from every link instance that shares it, so
+    # loading on demand re-decodes the same files over and over: on a humanoid
+    # this check loaded 229 distinct meshes 1380 times, and that decoding was
+    # very nearly the whole build phase.  One dict for the duration of the check.
+    _seen = {}
+
+    def _verts(path):
+        if path not in _seen:
+            _seen[path] = _load_glb_verts(path)
+        return _seen[path]
 
     # --- assembled scene point cloud, in the URDF root frame ---------------
     try:
@@ -71,7 +88,7 @@ def warn_dropped_geometry(pkg_dir, urdf_path, graph, tol_mm=3.0, min_frac=0.15,
             if me is None:
                 continue
             fn = os.path.basename(me.get("filename") or "")
-            verts = _load_glb_verts(os.path.join(meshes_dir, fn))
+            verts = _verts(os.path.join(meshes_dir, fn))
             if verts is not None:
                 items.append((verts, _origin_mat(vis.find("origin"))))
         if items:
@@ -144,7 +161,7 @@ def warn_dropped_geometry(pkg_dir, urdf_path, graph, tol_mm=3.0, min_frac=0.15,
             continue
         if nm2 in skip_components or key in skip_components:
             continue        # geometry-free on purpose (frame-only / mass-only)
-        verts = _load_glb_verts(os.path.join(pkg_dir, mf.replace("\\", "/")))
+        verts = _verts(os.path.join(pkg_dir, mf.replace("\\", "/")))
         if verts is None:
             continue
         W = T_align @ np.array(wl, float).reshape(4, 4)
