@@ -39,6 +39,12 @@ class ComponentState(BaseModel):
     # "Override Mass Properties" dialog): sw_mass is then a deliberate value, not
     # the material/geometry default. False on older extracts.
     sw_mass_overridden: bool = False
+    # basename(s) of the part file these mass properties were inherited from
+    # because this component is a SolidWorks mirror copy whose per-body
+    # materials / mass override did not come across (see exporter.mirror).
+    # Provenance for the editor; None on older extracts and on every component
+    # whose weight is its own.
+    mass_inherited_from: str | None = None
     # per-link target mass (kg): the inertial is rescaled to this exact weight
     # (config `masses:` / the web editor). Mutually exclusive with a density
     # override. None on older extracts / when no target is set.

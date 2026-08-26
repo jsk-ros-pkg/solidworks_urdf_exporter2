@@ -151,7 +151,14 @@ function _renderMassList(data) {
     const m = data.links[ln] ?? {};
     const resolved = m.name != null;        // maps to a graph component
     const warn = m.default_mass && !m.reviewed;
-    const matTxt = m.mass_overridden_in_sw ? t('mass.swOverride')
+    // a mirror copy's OWN material is usually unset -- what matters is that its
+    // weight came from the part it was mirrored from, so say that instead of
+    // flagging a default that is no longer in play
+    const matTxt = m.mass_inherited_from
+      ? `<span title="${esc(t('mass.mirrorInheritedTitle',
+                              { src: m.mass_inherited_from }))}">`
+        + `${t('mass.mirrorInherited', { src: m.mass_inherited_from })}</span>`
+      : m.mass_overridden_in_sw ? t('mass.swOverride')
       : m.material ? m.material
       : resolved ? `<span class="mass-flag">${t('li.swUnset')}</span>`
       : '<span class="mass-note">—</span>';

@@ -33,6 +33,7 @@ from .mesh import (
     export_subgraph_meshes,
     verify_meshes,
 )
+from .mirror import apply_mirror_mass_inheritance, print_mirror_report
 from .model import (
     build_model,
     capture_deep_worlds,
@@ -295,6 +296,18 @@ def _extract_into(sw, assembly_path, pkg_dir, meshes_dir, robot_name, _say,
         coordinate_systems_out=subassembly_coordinate_systems,
         part_coordinate_systems_out=frames_out,
         part_frames_scanned=part_frames_scanned)
+
+    # A SolidWorks mirror copy inherits geometry but not per-body materials or
+    # an Override Mass Properties value, so its weight silently falls back to
+    # the 1000 kg/m^3 default.  Take the source part's mass properties back --
+    # only where the copy's own were never set (see exporter.mirror).  This runs
+    # AFTER extract_subgraphs so the sub-assembly internals are corrected too:
+    # a movable sub-assembly is expanded at build time and ITS children become
+    # the links, while a rigid one keeps a document total that SolidWorks summed
+    # from the wrong child density -- both need the fix, from the same plans.
+    print_mirror_report(
+        apply_mirror_mass_inheritance(sw.app, comps, subgraphs))
+
     deep_worlds, hidden = capture_deep_worlds(doc)
 
     by_path = {}

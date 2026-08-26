@@ -1095,7 +1095,10 @@ def _default_mass_links(pkg_dir, urdf_rel):
     density is the SW default, UNLESS the user has resolved it: a per-link mass
     (`masses:`) or density (`densities:`) override, a manual SolidWorks mass
     override (``sw_mass_overridden``), or an explicit acknowledgement
-    (`mass_reviewed:`).  Returns an empty set for a non-CAD / missing package."""
+    (`mass_reviewed:`).  A mirror copy that already took its source part's mass
+    properties (``mass_inherited_from``) is resolved too -- its material really
+    is unset, but the weight it carries is the source's real one, not a
+    default.  Returns an empty set for a non-CAD / missing package."""
     if not pkg_dir or not urdf_rel:
         return set()
     gj = os.path.join(pkg_dir, "graph.json")
@@ -1124,6 +1127,8 @@ def _default_mass_links(pkg_dir, urdf_rel):
         for k in (c.link_name, c.name):
             if k in densities or k in masses or k in reviewed:
                 return True
+        if getattr(c, "mass_inherited_from", None):
+            return True
         return bool(getattr(c, "sw_mass_overridden", False))
 
     flagged = set()
@@ -5157,6 +5162,10 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                         "mass": mass_overrides.get(c.link_name) if c else None,
                         "mass_overridden_in_sw": bool(
                             getattr(c, "sw_mass_overridden", False)) if c else False,
+                        # set when this link is a SolidWorks mirror copy whose
+                        # weight was taken from the part it was mirrored from
+                        "mass_inherited_from": (
+                            getattr(c, "mass_inherited_from", None) if c else None),
                         "default_mass": (c.link_name in default_links) if c else False,
                         "reviewed": bool(c and (c.link_name in reviewed
                                                 or c.name in reviewed)),

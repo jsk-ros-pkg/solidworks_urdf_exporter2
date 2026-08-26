@@ -328,6 +328,11 @@ class Component:
     # "Override Mass Properties" dialog: the sw_mass is then a deliberate value,
     # not the material/geometry default -- so the mass editor must not flag it.
     sw_mass_overridden: bool = False
+    # basename(s) of the part file this component's mass properties were taken
+    # from because it is a SolidWorks MIRROR COPY that lost its source's
+    # per-body materials / mass override -- see exporter.mirror.  Provenance
+    # only: the values themselves are already in sw_mass/sw_com/sw_inertia.
+    mass_inherited_from: str | None = None
     # set when a per-link density override (config / web editor) should drive
     # the inertial from the mesh, overriding the SolidWorks-native values
     density_override: bool = False
@@ -3524,6 +3529,7 @@ def _component_states(comps):
             material=c.material, density=c.density,
             sw_mass=c.sw_mass, sw_com=c.sw_com, sw_inertia=c.sw_inertia,
             sw_mass_overridden=c.sw_mass_overridden,
+            mass_inherited_from=getattr(c, "mass_inherited_from", None),
             mass_target=c.mass_target,
             configuration=getattr(c, "configuration", None))
             for c in comps]
@@ -3936,6 +3942,7 @@ def from_graph(graph, exclude=None, expand=None, no_expand=None,
             material=cs.material, density=cs.density,
             sw_mass=cs.sw_mass, sw_com=cs.sw_com, sw_inertia=cs.sw_inertia,
             sw_mass_overridden=getattr(cs, "sw_mass_overridden", False),
+            mass_inherited_from=getattr(cs, "mass_inherited_from", None),
             mass_target=getattr(cs, "mass_target", None),
             mass_only=getattr(cs, "mass_only", False),
             configuration=getattr(cs, "configuration", None)))
@@ -4053,6 +4060,7 @@ def _expand_one(inst, sub, comps, adjacency, ground, deep=None, hidden=None):
             material=cs.material, density=cs.density,
             sw_mass=cs.sw_mass, sw_com=cs.sw_com, sw_inertia=cs.sw_inertia,
             sw_mass_overridden=getattr(cs, "sw_mass_overridden", False),
+            mass_inherited_from=getattr(cs, "mass_inherited_from", None),
             mass_target=getattr(cs, "mass_target", None)))
         name_map[cs.name] = gname
         local_of[cs.name] = local

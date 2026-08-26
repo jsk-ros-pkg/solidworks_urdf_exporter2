@@ -307,6 +307,13 @@
     'mass.setOk': { en: 'updated ✓ (mass/inertia rebuilt)', ja: '更新しました ✓（質量・慣性を再計算）' },
     'mass.fail': { en: a => `mass edit failed: ${a.e}`, ja: a => `質量編集に失敗: ${a.e}` },
     'mass.swOverride': { en: 'set in SW', ja: 'SWで設定済' },
+    'mass.mirrorInherited': { en: a => `mirrored from ${a.src}`,
+                              ja: a => `${a.src} のミラー元から継承` },
+    'mass.mirrorInheritedTitle': {
+      en: a => `a SolidWorks mirror copy does not inherit per-body materials or an `
+        + `Override Mass Properties value, so this link took its mass properties from ${a.src}`,
+      ja: a => `SolidWorksのミラーコピーはボディ単位の材質や質量オーバーライドを引き継がないため、`
+        + `このリンクの質量特性は ${a.src} から継承しました` },
     'mass.thByMass': { en: 'by mass?', ja: '質量指定?' },
     'mass.thValue': { en: 'material / mass', ja: '材質 / 質量' },
     'mass.byMass': { en: 'set by target mass', ja: '目標質量で指定' },
