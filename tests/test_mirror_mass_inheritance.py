@@ -381,13 +381,13 @@ class _NoApp:
 def test_driver_fixes_a_mirrored_part_link(monkeypatch):
     from sw2robot.exporter.mirror import apply_mirror_mass_inheritance
 
-    plan = {"source": r"C:\cad\src.SLDPRT", "reason": "no material on the copy",
+    plan = {"source": "/cad/src.SLDPRT", "reason": "no material on the copy",
             "wrong": {"mass": 38.188, "com": [0.0, 0.0, 0.05],
                       "inertia": (1.0, 0.0, 0.0, 1.0, 0.0, 1.0)},
             "mass": 0.245, "com": [0.0, 0.0, -0.05],
             "inertia": (0.01, 0.0, 0.0, 0.01, 0.0, 0.01)}
-    _stub_plans(monkeypatch, {r"C:\cad\mir.SLDPRT": plan})
-    comp = _component("foot", r"C:\cad\mir.SLDPRT", mass=38.188)
+    _stub_plans(monkeypatch, {"/cad/mir.SLDPRT": plan})
+    comp = _component("foot", "/cad/mir.SLDPRT", mass=38.188)
     reports = apply_mirror_mass_inheritance(_NoApp(), [comp])
 
     assert comp.sw_mass == pytest.approx(0.245)
@@ -402,18 +402,18 @@ def test_driver_fixes_the_sub_assembly_that_contains_the_copy(monkeypatch):
     leave the LINK at 38.480 kg."""
     from sw2robot.exporter.mirror import apply_mirror_mass_inheritance
 
-    plan = {"source": r"C:\cad\src.SLDPRT", "reason": "no material on the copy",
+    plan = {"source": "/cad/src.SLDPRT", "reason": "no material on the copy",
             "wrong": {"mass": 38.188, "com": [0.0, 0.0, 0.0],
                       "inertia": (1.0, 0.0, 0.0, 1.0, 0.0, 1.0)},
             "mass": 0.245, "com": [0.0, 0.0, 0.0],
             "inertia": (0.01, 0.0, 0.0, 0.01, 0.0, 0.01)}
-    _stub_plans(monkeypatch, {r"C:\cad\mir.SLDPRT": plan})
+    _stub_plans(monkeypatch, {"/cad/mir.SLDPRT": plan})
 
-    child = _component("mir", r"C:\cad\mir.SLDPRT", mass=38.188,
+    child = _component("mir", "/cad/mir.SLDPRT", mass=38.188,
                        inertia=[1.0, 0.0, 0.0, 1.0, 0.0, 1.0])
-    link = _component("foot_link", r"C:\cad\foot.SLDASM", is_sub=True,
+    link = _component("foot_link", "/cad/foot.SLDASM", is_sub=True,
                       mass=38.480, inertia=[1.02, 0.0, 0.0, 1.02, 0.0, 1.02])
-    subs = {r"C:\cad\foot.SLDASM": ([child], {}, set())}
+    subs = {"/cad/foot.SLDASM": ([child], {}, set())}
     apply_mirror_mass_inheritance(_NoApp(), [link], subs)
 
     assert link.sw_mass == pytest.approx(38.480 - 38.188 + 0.245)
@@ -430,21 +430,21 @@ def test_driver_repairs_a_nested_sub_assembly_bottom_up(monkeypatch):
     subtracted once and added back."""
     from sw2robot.exporter.mirror import apply_mirror_mass_inheritance
 
-    plan = {"source": r"C:\cad\src.SLDPRT", "reason": "no material on the copy",
+    plan = {"source": "/cad/src.SLDPRT", "reason": "no material on the copy",
             "wrong": {"mass": 38.188, "com": [0.0, 0.0, 0.0],
                       "inertia": (1.0, 0.0, 0.0, 1.0, 0.0, 1.0)},
             "mass": 0.245, "com": [0.0, 0.0, 0.0],
             "inertia": (0.01, 0.0, 0.0, 0.01, 0.0, 0.01)}
-    _stub_plans(monkeypatch, {r"C:\cad\mir.SLDPRT": plan})
+    _stub_plans(monkeypatch, {"/cad/mir.SLDPRT": plan})
 
-    child = _component("mir", r"C:\cad\mir.SLDPRT", mass=38.188,
+    child = _component("mir", "/cad/mir.SLDPRT", mass=38.188,
                        inertia=[1.0, 0.0, 0.0, 1.0, 0.0, 1.0])
-    foot = _component("foot_link", r"C:\cad\foot.SLDASM", is_sub=True,
+    foot = _component("foot_link", "/cad/foot.SLDASM", is_sub=True,
                       mass=38.480, inertia=[1.02, 0.0, 0.0, 1.02, 0.0, 1.02])
-    shin = _component("shin_link", r"C:\cad\shin.SLDASM", is_sub=True,
+    shin = _component("shin_link", "/cad/shin.SLDASM", is_sub=True,
                       mass=44.9, inertia=[2.0, 0.0, 0.0, 2.0, 0.0, 2.0])
-    subs = {r"C:\cad\foot.SLDASM": ([child], {}, set()),
-            r"C:\cad\shin.SLDASM": ([foot], {}, set())}
+    subs = {"/cad/foot.SLDASM": ([child], {}, set()),
+            "/cad/shin.SLDASM": ([foot], {}, set())}
     apply_mirror_mass_inheritance(_NoApp(), [shin], subs)
 
     assert foot.sw_mass == pytest.approx(38.480 - 38.188 + 0.245)
@@ -455,7 +455,7 @@ def test_driver_leaves_an_ordinary_part_untouched(monkeypatch):
     from sw2robot.exporter.mirror import apply_mirror_mass_inheritance
 
     _stub_plans(monkeypatch, {})
-    comp = _component("plain", r"C:\cad\plain.SLDPRT", mass=1.5)
+    comp = _component("plain", "/cad/plain.SLDPRT", mass=1.5)
     assert apply_mirror_mass_inheritance(_NoApp(), [comp]) == []
     assert comp.sw_mass == 1.5
     assert comp.mass_inherited_from is None
@@ -467,14 +467,14 @@ def test_driver_reports_a_skip_without_changing_anything(monkeypatch):
     avoid."""
     from sw2robot.exporter.mirror import apply_mirror_mass_inheritance
 
-    _stub_plans(monkeypatch, {r"C:\cad\mir.SLDPRT": {
-        "source": r"C:\cad\src.SLDPRT", "skip": "no reflection maps it"}})
-    comp = _component("odd", r"C:\cad\mir.SLDPRT", mass=9.0)
+    _stub_plans(monkeypatch, {"/cad/mir.SLDPRT": {
+        "source": "/cad/src.SLDPRT", "skip": "no reflection maps it"}})
+    comp = _component("odd", "/cad/mir.SLDPRT", mass=9.0)
     reports = apply_mirror_mass_inheritance(_NoApp(), [comp])
 
     assert comp.sw_mass == 9.0
     assert comp.mass_inherited_from is None
-    assert reports == [{"link": "odd", "source": r"C:\cad\src.SLDPRT",
+    assert reports == [{"link": "odd", "source": "/cad/src.SLDPRT",
                         "skip": "no reflection maps it"}]
 
 
@@ -515,7 +515,7 @@ def test_identical_materials_do_not_produce_a_not_inherited_line(monkeypatch):
     from sw2robot.exporter import mirror
 
     monkeypatch.setattr(mirror, "mirror_source_path",
-                        lambda app, path: r"C:\cad\src.SLDPRT")
+                        lambda app, path: "/cad/src.SLDPRT")
     monkeypatch.setattr(mirror, "has_mirror_feature", lambda doc: True)
     monkeypatch.setattr(mirror, "_read_props", lambda doc: {
         "material": "steel", "density": 7850.0,
@@ -523,7 +523,7 @@ def test_identical_materials_do_not_produce_a_not_inherited_line(monkeypatch):
         "com": [0, 0, 0], "inertia": (1, 0, 0, 1, 0, 1), "overridden": False})
 
     plan = mirror._plan_for_part(
-        None, r"C:\cad\mir.SLDPRT",
+        None, "/cad/mir.SLDPRT",
         lambda p: "mirror" if p.endswith("mir.SLDPRT") else "source")
     assert plan is None
 
@@ -534,7 +534,7 @@ def test_a_different_material_still_gets_reported(monkeypatch):
     from sw2robot.exporter import mirror
 
     monkeypatch.setattr(mirror, "mirror_source_path",
-                        lambda app, path: r"C:\cad\src.SLDPRT")
+                        lambda app, path: "/cad/src.SLDPRT")
     monkeypatch.setattr(mirror, "has_mirror_feature", lambda doc: True)
     monkeypatch.setattr(mirror, "_read_props", lambda doc: {
         "material": "alloy A" if doc == "mirror" else "alloy B",
@@ -543,6 +543,6 @@ def test_a_different_material_still_gets_reported(monkeypatch):
         "com": [0, 0, 0], "inertia": (1, 0, 0, 1, 0, 1), "overridden": False})
 
     plan = mirror._plan_for_part(
-        None, r"C:\cad\mir.SLDPRT",
+        None, "/cad/mir.SLDPRT",
         lambda p: "mirror" if p.endswith("mir.SLDPRT") else "source")
     assert plan and "sets its own material" in plan["skip"]
