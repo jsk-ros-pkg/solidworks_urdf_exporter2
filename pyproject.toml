@@ -11,6 +11,22 @@ requires-python = ">=3.12"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 authors = [{ name = "Iori Yanokura", email = "ab.ioryz@gmail.com" }]
+keywords = ["solidworks", "urdf", "robotics", "cad", "ros", "exporter"]
+# NOTE: no "License :: OSI Approved :: ..." classifier on purpose -- PEP 639
+# forbids pairing one with the SPDX `license = "Apache-2.0"` above, and both
+# twine --strict and PyPI reject the upload if you do.
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Multimedia :: Graphics :: 3D Modeling",
+]
 dependencies = [
     "numpy>=2",
     # trimesh core + the backends its [easy] extra pulls, listed EXPLICITLY
@@ -77,10 +93,31 @@ test = [
     "packaging",
 ]
 
+[project.urls]
+Homepage = "https://github.com/jsk-ros-pkg/solidworks_urdf_exporter2"
+Repository = "https://github.com/jsk-ros-pkg/solidworks_urdf_exporter2"
+Issues = "https://github.com/jsk-ros-pkg/solidworks_urdf_exporter2/issues"
+Releases = "https://github.com/jsk-ros-pkg/solidworks_urdf_exporter2/releases"
+
 [project.scripts]
 sw2urdf = "sw2robot.exporter.export:main"     # extract + build (needs SolidWorks)
 sw2robot = "sw2robot.editor.cli:main"        # headless build/edit/export CLI
 sw2robot-web = "sw2robot.editor.webserver:main"  # the browser editor server
+
+# hatchling's default sdist sweeps in every non-gitignored path in the repo --
+# INCLUDING untracked scratch directories.  A local docs/ tree took the sdist
+# from ~0.5 MB to 65 MB, so the file list is explicit here instead: an allowlist
+# never grows behind our back.  assets/ (the 5 MB demo gif + the PyInstaller
+# icons) is deliberately out; the README links it by absolute URL.
+[tool.hatch.build.targets.sdist]
+include = [
+    "/sw2robot",
+    "/tests",
+    "/examples",
+    "/README.md",
+    "/CONTRIBUTING.md",
+    "/LICENSE",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["sw2robot"]

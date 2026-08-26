@@ -1,9 +1,10 @@
 name: Build & Release
 
-# Tag-driven release: push a vX.Y.Z tag and this builds a PyInstaller binary
-# per OS and attaches them all to a GitHub Release.  workflow_dispatch builds
-# the binaries WITHOUT releasing (handy for smoke-testing the freeze; grab them
-# from the run's artifacts).
+# Tag-driven release: push a vX.Y.Z tag and this (a) builds a PyInstaller binary
+# per OS and attaches them all to a GitHub Release, and (b) publishes the
+# sdist + wheel to PyPI (`pip install sw2robot`).  workflow_dispatch builds
+# the binaries WITHOUT releasing or publishing (handy for smoke-testing the
+# freeze; grab them from the run's artifacts).
 #
 #   after the bump-version PR is merged:
 #     git switch main && git pull
@@ -167,3 +168,62 @@ jobs:
           fail_on_unmatched_files: true
           # one binary per OS: *.exe (Windows) + extensionless macOS/Linux ones
           files: artifacts/sw2robot-web-*
+
+  pypi:
+    name: Publish to PyPI
+    # Deliberately NOT `needs: build`.  The distribution is pure Python
+    # (py3-none-any -- every platform difference is a PEP 508 marker on a
+    # dependency, see pyproject.toml), so it shares nothing with the frozen
+    # binaries: a PyInstaller failure on one OS must not hold the wheel back,
+    # and a PyPI hiccup must not hold the binaries back.
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: ubuntu-latest
+    # The `pypi` environment does NOT have to be created by hand -- referencing an
+    # environment that does not exist creates it on the first run.  That matters
+    # here: configuring an environment in an org repo needs `admin`, which the
+    # release maintainer does not have on jsk-ros-pkg (only `maintain`).  The
+    # auto-created environment carries no protection rules, and the real gate is
+    # PyPI's side: it only trusts an OIDC token minted by THIS repo + THIS
+    # workflow file + THIS environment name.
+    environment:
+      name: pypi
+      url: https://pypi.org/p/sw2robot
+    permissions:
+      # OIDC token for PyPI Trusted Publishing.  No API token is stored anywhere;
+      # PyPI is configured to trust (this repo, this workflow, the `pypi`
+      # environment) instead.  `contents` is dropped to none -- this job only reads
+      # the checkout, and job-level permissions replace the workflow-level block.
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # PyPI versions are immutable and the tag is the only thing a human types,
+      # so catch a tag/pyproject mismatch HERE rather than burning the version
+      # on a wrong upload.
+      - name: Check the tag matches pyproject.toml
+        run: |
+          V=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          if [ "v$V" != "${GITHUB_REF_NAME}" ]; then
+            echo "tag ${GITHUB_REF_NAME} != pyproject version v$V" >&2
+            exit 1
+          fi
+          echo "version v$V matches the tag"
+
+      - name: Build sdist + wheel
+        run: |
+          python -m pip install --upgrade pip build twine
+          python -m build
+
+      # --strict so a README that renders badly on PyPI fails the run instead of
+      # landing as an unreadable project page on an immutable version.
+      - name: Check the built metadata
+        run: twine check --strict dist/*
+
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1

@@ -3,7 +3,7 @@
 [![CI](https://github.com/jsk-ros-pkg/solidworks_urdf_exporter2/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/jsk-ros-pkg/solidworks_urdf_exporter2/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/jsk-ros-pkg/solidworks_urdf_exporter2)](https://github.com/jsk-ros-pkg/solidworks_urdf_exporter2/releases/latest)
 ![Python](https://img.shields.io/badge/python-3.12+-blue.svg)
-[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/jsk-ros-pkg/solidworks_urdf_exporter2/blob/main/LICENSE)
 
 [![Windows](https://img.shields.io/badge/Windows-download-0078D6?logo=windows&logoColor=white)](https://github.com/jsk-ros-pkg/solidworks_urdf_exporter2/releases/latest)
 [![macOS](https://img.shields.io/badge/macOS_(Apple_Silicon)-download-000000?logo=apple&logoColor=white)](https://github.com/jsk-ros-pkg/solidworks_urdf_exporter2/releases/latest)
@@ -17,7 +17,7 @@
 URDF, then clean it up in the browser.
 
 <p align="center">
-  <img src="assets/solidworks-to-robot.gif" alt="SolidWorks → robot (URDF) editor demo">
+  <img src="https://raw.githubusercontent.com/jsk-ros-pkg/solidworks_urdf_exporter2/main/assets/solidworks-to-robot.gif" alt="SolidWorks → robot (URDF) editor demo">
 </p>
 
 One import package, with two subpackages:
@@ -387,10 +387,10 @@ absent.
 
 ## Contributing
 
-Please read [CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or pull
+Please read [CONTRIBUTING.md](https://github.com/jsk-ros-pkg/solidworks_urdf_exporter2/blob/main/CONTRIBUTING.md) before opening an issue or pull
 request. In short: discuss first via an issue, keep PRs small and focused,
 attach a demo video for UI changes, and disclose any AI usage.
 
 ## License
 
-[Apache License 2.0](LICENSE) © 2026 Iori Yanokura
+[Apache License 2.0](https://github.com/jsk-ros-pkg/solidworks_urdf_exporter2/blob/main/LICENSE) © 2026 Iori Yanokura
