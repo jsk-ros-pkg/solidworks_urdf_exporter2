@@ -87,7 +87,12 @@ def warn_dropped_geometry(pkg_dir, urdf_path, graph, tol_mm=3.0, min_frac=0.15,
         the win survives shipping the vertex arrays back: measured on a
         humanoid's meshes, 75s serial against 28s over eight workers, with
         identical arrays.  Best-effort throughout -- anything that goes wrong
-        just leaves the memo empty and ``_verts`` loads on demand as before."""
+        just leaves the memo empty and ``_verts`` loads on demand as before.
+
+        SPAWN, not the POSIX default of fork: a build also runs inside the web
+        editor's server, and forking a process that holds threads can hand the
+        child a lock no one will ever release.  Spawn costs a little startup and
+        cannot deadlock that way."""
         want = [p for p in dict.fromkeys(paths) if p and p not in _seen]
         if len(want) < _PREFETCH_MIN:
             return
@@ -99,8 +104,11 @@ def warn_dropped_geometry(pkg_dir, urdf_path, graph, tol_mm=3.0, min_frac=0.15,
             # to last it would be a straggler no other worker can help with
             want.sort(key=lambda p: -os.path.getsize(p)
                       if os.path.exists(p) else 0)
+            import multiprocessing
             from concurrent.futures import ProcessPoolExecutor
-            with ProcessPoolExecutor(max_workers=workers) as pool:
+            ctx = multiprocessing.get_context("spawn")
+            with ProcessPoolExecutor(max_workers=workers,
+                                     mp_context=ctx) as pool:
                 for path, verts in zip(want, pool.map(_load_glb_verts, want)):
                     if verts is not None:
                         # pickling drops the read-only flag _load_glb_verts set
