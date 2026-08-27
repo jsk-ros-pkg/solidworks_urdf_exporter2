@@ -3,6 +3,7 @@
 [![CI](https://github.com/jsk-ros-pkg/solidworks_urdf_exporter2/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/jsk-ros-pkg/solidworks_urdf_exporter2/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/jsk-ros-pkg/solidworks_urdf_exporter2)](https://github.com/jsk-ros-pkg/solidworks_urdf_exporter2/releases/latest)
 ![Python](https://img.shields.io/badge/python-3.12+-blue.svg)
+![PyPI](https://img.shields.io/pypi/v/sw2robot.svg)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/jsk-ros-pkg/solidworks_urdf_exporter2/blob/main/LICENSE)
 
 [![Windows](https://img.shields.io/badge/Windows-download-0078D6?logo=windows&logoColor=white)](https://github.com/jsk-ros-pkg/solidworks_urdf_exporter2/releases/latest)
