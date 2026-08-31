@@ -2,8 +2,8 @@ import {
   hideLoadbar, pollProgress, renderProgress, setProgressStop, showLoadbar,
 } from './capture-progress.js';
 import {
-  collModeSel, cqualitySel, expColFmt, expLinks, expVisFmt, expmeshdir,
-  exppkg, exprobot, expurdf, mergeFixedBox, viewer,
+  collModeSel, cqualitySel, expColFmt, expFixedBase, expLinks, expVisFmt,
+  expmeshdir, exppkg, exprobot, expurdf, mergeFixedBox, viewer,
 } from './dom.js';
 import { updateCollUI } from './export-names.js';
 import { highlightLink } from './frames.js';
@@ -248,6 +248,7 @@ expLinks.forEach(a => a.addEventListener('click', async ev => {
   ev.preventDefault();
   // mesh format is orthogonal to ROS version: the button picks the version,
   // the selectors pick visual + collision format independently
+  const mujoco = a.id === 'expmjcf';
   const ros = a.id === 'expros2' ? 2 : 1;
   const vfmt = expVisFmt?.value || 'dae';
   const cfmt = expColFmt?.value || 'stl';
@@ -259,15 +260,21 @@ expLinks.forEach(a => a.addEventListener('click', async ev => {
   // separate uniform-glb button is gone -- format is now a visual selector)
   const collMode = collModeSel?.value || 'copy';
   const mergeFixed = !!mergeFixedBox?.checked;
-  const query = `ros=${ros}&meshes=${vfmt}&colfmt=${cfmt}`
+  // MJCF assets are always binary STL and the package carries no ROS manifest,
+  // so the format/version/mesh-dir controls have nothing to say about it; the
+  // collision mode still does, and fixed links are always merged.
+  const query = (mujoco
+    ? 'target=mujoco'
+      + (expFixedBase?.checked ? '&fixedbase=1' : '')
+    : `ros=${ros}&meshes=${vfmt}&colfmt=${cfmt}`
+      + (robot ? `&robotname=${encodeURIComponent(robot)}` : '')
+      + (meshdir ? `&meshdir=${encodeURIComponent(meshdir)}` : '')
+      + (mergeFixed ? '&mergefixed=1' : ''))
     + (name ? `&name=${encodeURIComponent(name)}` : '')
     + (urdf ? `&urdf=${encodeURIComponent(urdf)}` : '')
-    + (robot ? `&robotname=${encodeURIComponent(robot)}` : '')
-    + (meshdir ? `&meshdir=${encodeURIComponent(meshdir)}` : '')
     + (collMode !== 'copy' ? `&collision=${collMode}` : '')
-    + (collMode === 'coacd' ? `&cquality=${cqualitySel?.value || 'balanced'}` : '')
-    + (mergeFixed ? '&mergefixed=1' : '');
-  const what = ros === 2 ? 'ROS 2' : 'ROS 1';
+    + (collMode === 'coacd' ? `&cquality=${cqualitySel?.value || 'balanced'}` : '');
+  const what = mujoco ? 'MuJoCo' : (ros === 2 ? 'ROS 2' : 'ROS 1');
   showLoadbar(t('export.bar', { what }), { indet: true });
   log(t('export.start', { what }));
   try {

@@ -656,7 +656,10 @@ def build(pkg_dir, config_path=None, base_hint=None, exclude=None,
           ros_pkg=False, density=None, ros_version=1, ros_pkg_name=None,
           ros_urdf_name=None, ros_robot_name=None, collision="copy",
           coacd_quality="balanced", merge_fixed=False, ros_mesh_dir=None,
-          check_geometry=True):
+          check_geometry=True, mujoco=False, mujoco_pkg_name=None,
+          mujoco_name=None, mujoco_fixed_base=False, mujoco_actuator="position",
+          mujoco_kp=50.0, mujoco_armature=0.0, mujoco_self_collision=False,
+          mujoco_backemf_damping=True):
     _tolerant_console()
     graph = GraphState.load(os.path.join(pkg_dir, GRAPH_FILE))
     robot_name = graph.robot_name
@@ -781,10 +784,30 @@ def build(pkg_dir, config_path=None, base_hint=None, exclude=None,
             merge_fixed=merge_fixed, mesh_dir=ros_mesh_dir,
             loop_closures=closures)
 
+    mjcf_dir = None
+    if mujoco:
+        # a standalone MuJoCo package next to pkg_dir (default <robot>_mjcf):
+        # MJCF + binary-STL assets, with fixed links merged whatever
+        # --merge-fixed says, since MuJoCo has no use for one body per screw.
+        from .mjcf_export import write_mjcf_package
+        colors = config.get("colors") if isinstance(config, dict) else None
+        mjcf_dir = write_mjcf_package(
+            pkg_dir, robot_name, os.path.dirname(os.path.abspath(pkg_dir)),
+            pkg_name=mujoco_pkg_name, mjcf_name=mujoco_name, colors=colors,
+            collision=collision, coacd_quality=coacd_quality,
+            loop_closures=closures,
+            floating_base=not mujoco_fixed_base, actuator=mujoco_actuator,
+            actuator_kp=mujoco_kp, armature=mujoco_armature,
+            self_collision=mujoco_self_collision,
+            backemf_damping=mujoco_backemf_damping,
+            progress=lambda stage, detail: print(f"[mujoco] {detail}"))
+
     print(f"\nDONE. Package: {pkg_dir}")
     print(f"  URDF:   {urdf_path}")
     if desc_dir:
         print(f"  ROS pkg: {desc_dir}  (ROS {ros_version}, package:// + .dae)")
+    if mjcf_dir:
+        print(f"  MuJoCo: {mjcf_dir}  (MJCF + .stl assets)")
     if not config_path:
         print(f"  Config: {tmpl}  (edit, re-run: "
               "python -m sw2robot.exporter.build with --config)")
@@ -799,7 +822,10 @@ def export(assembly_path, out_dir=None, robot_name=None, visible=False,
            ros_robot_name=None,
            collision="copy", coacd_quality="balanced", merge_fixed=False,
            ros_mesh_dir=None, configuration=None, attach=False,
-           scan_part_frames=False):
+           scan_part_frames=False, mujoco=False, mujoco_pkg_name=None,
+           mujoco_name=None, mujoco_fixed_base=False,
+           mujoco_actuator="position", mujoco_kp=50.0, mujoco_armature=0.0,
+           mujoco_self_collision=False, mujoco_backemf_damping=True):
     pkg_dir = extract(assembly_path, out_dir, robot_name, visible,
                       configuration=configuration, attach=attach,
                       scan_part_frames=scan_part_frames)
@@ -808,7 +834,14 @@ def export(assembly_path, out_dir=None, robot_name=None, visible=False,
                  ros_pkg_name=ros_pkg_name, ros_urdf_name=ros_urdf_name,
                  ros_robot_name=ros_robot_name,
                  collision=collision, coacd_quality=coacd_quality,
-                 merge_fixed=merge_fixed, ros_mesh_dir=ros_mesh_dir)
+                 merge_fixed=merge_fixed, ros_mesh_dir=ros_mesh_dir,
+                 mujoco=mujoco, mujoco_pkg_name=mujoco_pkg_name,
+                 mujoco_name=mujoco_name,
+                 mujoco_fixed_base=mujoco_fixed_base,
+                 mujoco_actuator=mujoco_actuator, mujoco_kp=mujoco_kp,
+                 mujoco_armature=mujoco_armature,
+                 mujoco_self_collision=mujoco_self_collision,
+                 mujoco_backemf_damping=mujoco_backemf_damping)
 
 
 def _exclude_list(s):
@@ -889,6 +922,49 @@ def main():
                     help="lump fixed-joint child links (with geometry) into "
                          "their parents in the --ros-pkg URDF -- one rigid link "
                          "per moving body; mesh-less coordinate frames are kept")
+    ap.add_argument("--mujoco", action="store_true",
+                    help="also write a standalone <name>_mjcf package: an MJCF "
+                         "MuJoCo model plus binary-STL assets, with fixed links "
+                         "merged, per-joint damping derived from the servo "
+                         "limits, a contact sphere sized from each foot's own "
+                         "contact patch, IMU site + sensors, and a 'home' "
+                         "keyframe standing on the floor")
+    ap.add_argument("--mujoco-pkg-name", default=None,
+                    help="directory name for the --mujoco package "
+                         "(default <name>_mjcf)")
+    ap.add_argument("--mujoco-name", default=None,
+                    help="stem for the .xml inside the --mujoco package "
+                         "(default: the robot name)")
+    ap.add_argument("--mujoco-fixed-base", action="store_true",
+                    help="weld the --mujoco base to the world instead of "
+                         "giving it a free joint; for an arm bolted down, not "
+                         "a legged robot.  Also turns off the foot contact "
+                         "spheres and the IMU sensors, which are legged-robot "
+                         "features")
+    ap.add_argument("--mujoco-actuator",
+                    choices=("position", "velocity", "motor"),
+                    default="position",
+                    help="--mujoco actuator per joint: 'position' (default) "
+                         "tracks a target angle, 'velocity' a target rate, "
+                         "'motor' takes direct torque")
+    ap.add_argument("--mujoco-kp", type=float, default=50.0,
+                    help="proportional gain of the --mujoco-actuator position "
+                         "servos (default 50)")
+    ap.add_argument("--mujoco-armature", type=float, default=0.0,
+                    help="rotor inertia reflected through the gearbox, added "
+                         "to every --mujoco joint (kg*m^2).  A CAD model "
+                         "cannot supply this -- it depends on the motor and "
+                         "the gear ratio -- so it defaults to 0")
+    ap.add_argument("--mujoco-self-collision", action="store_true",
+                    help="keep full self-collision in the --mujoco model.  Off "
+                         "by default: neighbouring links of a CAD assembly "
+                         "touch by construction, which blows up at spawn time")
+    ap.add_argument("--mujoco-no-backemf-damping", action="store_true",
+                    help="do not write each joint's effort/velocity damping "
+                         "into the --mujoco model.  Use this when the consumer "
+                         "brings its own actuator model (an RL framework that "
+                         "replaces the MJCF's actuators, say) -- otherwise both "
+                         "apply and the joint ends up damped twice")
     args = ap.parse_args()
     export(args.assembly, args.out, args.name, args.visible,
            configuration=args.configuration, attach=args.attach,
@@ -900,7 +976,14 @@ def main():
            ros_robot_name=args.ros_robot_name,
            collision=args.collision, coacd_quality=args.coacd_quality,
            merge_fixed=args.merge_fixed, ros_mesh_dir=args.ros_mesh_dir,
-           scan_part_frames=args.part_frames)
+           scan_part_frames=args.part_frames,
+           mujoco=args.mujoco, mujoco_pkg_name=args.mujoco_pkg_name,
+           mujoco_name=args.mujoco_name,
+           mujoco_fixed_base=args.mujoco_fixed_base,
+           mujoco_actuator=args.mujoco_actuator, mujoco_kp=args.mujoco_kp,
+           mujoco_armature=args.mujoco_armature,
+           mujoco_self_collision=args.mujoco_self_collision,
+           mujoco_backemf_damping=not args.mujoco_no_backemf_damping)
 
 
 if __name__ == "__main__":

@@ -573,6 +573,21 @@ package:// URLs, meshes in the chosen format">
 package:// URLs, meshes in the chosen format, plus launch/display.launch.py + rviz
 config (run: ros2 launch <name>_description display.launch.py)">
             ⬇ ROS2 package</button></a>
+        <a id="expmjcf" href="/api/export/zip?target=mujoco" download>
+          <button data-i18n="ui.expmjcf" data-i18n-title="t.expmjcf"
+                  title="MuJoCo package (<name>_mjcf): an MJCF model + binary-STL
+assets, fixed links merged, per-joint damping from the servo limits, a contact
+sphere per foot, IMU site + sensors and a 'home' keyframe standing on the floor">
+            ⬇ MuJoCo (MJCF)</button></a>
+        <label style="display:flex;align-items:center;gap:3px;font-size:11px;
+                      color:#8a93a3;cursor:pointer"
+               data-i18n-title="t.expfixedbase"
+               title="Weld the MuJoCo base to the world instead of giving it a free
+joint — for an arm bolted to a table. Also turns off the foot contact spheres and
+the IMU sensors, which are legged-robot features.">
+          <input id="expfixedbase" type="checkbox">
+          <span data-i18n="ui.expfixedbase">fixed base</span>
+        </label>
       </div>
       <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;margin-top:4px">
         <button id="redetectmimic" data-i18n="ui.redetectmimic"

@@ -812,6 +812,48 @@ def _warn_dropped_geometry_on_export(pkg_dir):
         print(f"      (dropped-geometry check skipped on export: {e!r})")
 
 
+def _export_mjcf_zip(pkg_dir, robot_name, pkg_name=None, mjcf_name=None,
+                     colors=None, collision="copy", coacd_quality="balanced",
+                     floating_base=True, armature=0.0, actuator_kp=50.0,
+                     progress=None):
+    """ZIP a MuJoCo package (MJCF + STL assets).
+
+    Returns ``(pkg, bytes)`` like :func:`_export_zip`, so the same start /
+    progress / download plumbing carries either target.  The MuJoCo builder runs
+    to completion in one call rather than reporting per mesh, so progress here is
+    per stage, not per file.
+    """
+    import io as _io
+    import zipfile
+
+    from sw2robot.exporter.mjcf_export import build_mjcf_package
+
+    _warn_dropped_geometry_on_export(pkg_dir)
+
+    stages = {"urdf": 0, "mjcf": 1, "extras": 2}
+
+    def _stage(stage, detail=""):
+        if progress:
+            progress("mjcf", stages.get(stage, 0), len(stages), detail)
+
+    pkg, files = build_mjcf_package(
+        pkg_dir, robot_name, pkg_name=pkg_name, mjcf_name=mjcf_name,
+        colors=colors, collision=collision, coacd_quality=coacd_quality,
+        floating_base=floating_base, armature=armature,
+        actuator_kp=actuator_kp, progress=_stage)
+
+    buf = _io.BytesIO()
+    n = len(files)
+    if progress:
+        progress("zip", 0, n)
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for i, (arc, data) in enumerate(files):
+            z.writestr(arc, data)
+            if progress:
+                progress("zip", i + 1, n)
+    return pkg, buf.getvalue()
+
+
 def _export_zip(pkg_dir, robot_name, visual_fmt="dae", collision_fmt="stl",
                 ros_version=1, pkg_name=None, urdf_name=None, robot_tag=None,
                 colors=None,
@@ -900,6 +942,14 @@ def _export_zip(pkg_dir, robot_name, visual_fmt="dae", collision_fmt="stl",
 # from /api/export/zip/download.  The sync endpoint stays for the launch_it.sh
 # curl one-liner, which needs a direct URL.
 _EXPORT_STAGES = ["collision", "convert meshes", "package + zip"]
+# the MuJoCo export runs one URDF rebuild and one conversion instead of a
+# per-mesh pass, so it reports its own, shorter set of stages
+_MJCF_EXPORT_STAGES = ["build MJCF", "package + zip"]
+
+
+def _export_stages(params):
+    return (_MJCF_EXPORT_STAGES if params.get("target") == "mujoco"
+            else _EXPORT_STAGES)
 _export_out = {"data": None, "fname": None}
 _export_lock = threading.Lock()
 # cooperative cancel for the async export (checked between links/meshes; CoACD
@@ -912,6 +962,9 @@ def _parse_export_query(cls, query):
     ``(kwargs_for__export_zip, None)`` or ``(None, (error_str, code))``."""
     if not cls.pkg_dir:
         return None, ("no package open", 400)
+    target = (query.get("target") or ["ros"])[0]
+    if target not in ("ros", "mujoco"):
+        return None, (f"unsupported export target: {target}", 400)
     visual_fmt = (query.get("meshes") or ["dae"])[0]
     if visual_fmt not in ("dae", "stl", "glb"):
         return None, (f"unsupported visual mesh format: {visual_fmt}", 400)
@@ -938,7 +991,25 @@ def _parse_export_query(cls, query):
         return None, ("export needs the standard <pkg>/urdf/<name>.urdf + "
                       "<pkg>/meshes/ layout; open the URDF from inside a "
                       "urdf/ folder", 400)
+    if target == "mujoco":
+        # the MuJoCo package has no ROS manifests and no per-context mesh
+        # format to choose -- MJCF assets are always binary STL -- so only the
+        # parameters that mean something there are read
+        try:
+            armature = float((query.get("armature") or ["0"])[0])
+            kp = float((query.get("kp") or ["50"])[0])
+        except ValueError:
+            return None, ("armature and kp must be numbers", 400)
+        return {
+            "target": "mujoco",
+            "collision": collision, "coacd_quality": cquality,
+            "pkg_name": (query.get("name") or [""])[0].strip() or None,
+            "mjcf_name": (query.get("urdf") or [""])[0].strip() or None,
+            "floating_base": (query.get("fixedbase") or ["0"])[0] != "1",
+            "armature": armature, "actuator_kp": kp,
+        }, None
     return {
+        "target": "ros",
         "visual_fmt": visual_fmt, "collision_fmt": collision_fmt,
         "ros_version": int(ros), "collision": collision,
         "coacd_quality": cquality,
@@ -972,8 +1043,27 @@ def _export_gate(cls, query):
 
 def _export_fname(robot_name, pkg, params):
     return (f"{robot_name}_glb.zip"
-            if params["visual_fmt"] == "glb" and params["collision_fmt"] == "glb"
+            if params.get("visual_fmt") == "glb"
+            and params.get("collision_fmt") == "glb"
             else f"{pkg}.zip")
+
+
+def _export_target(pkg_dir, robot_name, colors, params, progress=None,
+                   should_cancel=None):
+    """Run whichever export ``params['target']`` names; return ``(pkg, bytes)``.
+
+    Keeps the target choice in one place, so the sync endpoint, the async job
+    and the filename all agree on it.
+    """
+    params = dict(params)
+    target = params.pop("target", "ros")
+    if target == "mujoco":
+        # no should_cancel: the MuJoCo builder is a single call, with nothing to
+        # interrupt between -- claiming otherwise would just ignore the request
+        return _export_mjcf_zip(pkg_dir, robot_name, colors=colors,
+                                progress=progress, **params)
+    return _export_zip(pkg_dir, robot_name, colors=colors, progress=progress,
+                       should_cancel=should_cancel, **params)
 
 
 def _run_export(pkg_dir, robot_name, urdf_rel, params, gen):
@@ -982,7 +1072,7 @@ def _run_export(pkg_dir, robot_name, urdf_rel, params, gen):
     CoACD parts, so their late progress reports must not touch a newer job."""
     from sw2robot.exporter.ros_export import ExportCancelled
     _stage_map = {"collision": "collision", "meshes": "convert meshes",
-                  "zip": "package + zip"}
+                  "mjcf": "build MJCF", "zip": "package + zip"}
 
     def _bp(stage, done, total, detail=""):
         if _prog_gen() != gen:      # a newer job owns the panel; drop stale ticks
@@ -999,10 +1089,9 @@ def _run_export(pkg_dir, robot_name, urdf_rel, params, gen):
         colors = (_read_colors(pkg_dir, urdf_rel) if _cad_mode(pkg_dir)
                   else _um_colors(_um["state"]))
         with _um_materialized(pkg_dir, urdf_rel):
-            pkg, data = _export_zip(pkg_dir, robot_name, colors=colors,
-                                    progress=_bp,
-                                    should_cancel=_export_cancel.is_set,
-                                    **params)
+            pkg, data = _export_target(pkg_dir, robot_name, colors, params,
+                                       progress=_bp,
+                                       should_cancel=_export_cancel.is_set)
         fname = _export_fname(robot_name, pkg, params)
         with _export_lock:
             _export_out.update(data=data, fname=fname)
@@ -5731,8 +5820,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                               if _cad_mode(cls.pkg_dir)
                               else _um_colors(_um["state"]))
                     with _um_materialized(cls.pkg_dir, cls.urdf_rel):
-                        pkg, data = _export_zip(cls.pkg_dir, cls.robot_name,
-                                                colors=colors, **params)
+                        pkg, data = _export_target(cls.pkg_dir, cls.robot_name,
+                                                   colors, params)
                 except ValueError as e:
                     return self._send_json({"error": str(e)}, 400)
                 fname = _export_fname(cls.robot_name, pkg, params)
@@ -5754,7 +5843,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 gate = _export_gate(cls, query)
                 if gate:
                     return self._send_json(gate[0], gate[1])
-                gen = _prog_start("export", _EXPORT_STAGES)
+                gen = _prog_start("export", _export_stages(params))
                 if gen is None:
                     return self._send_json(
                         {"error": "a job is already running"}, 409)

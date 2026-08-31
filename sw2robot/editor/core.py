@@ -344,6 +344,23 @@ def register_module(state: RobotCompilerState, registry_dir) -> Path:
     return dst_urdf
 
 
+def export_mjcf_package(state: RobotCompilerState, dest_dir, **options) -> Path:
+    """Write the MuJoCo package for this module under ``dest_dir``.
+
+    A thin wrapper over :func:`sw2robot.exporter.mjcf_export.write_mjcf_package`
+    that supplies the module's own package directory and name, and the per-link
+    colour overrides the editor holds.  Extra keyword arguments (``collision``,
+    ``floating_base``, ``armature``, ...) go straight through.
+    """
+    from sw2robot.exporter.mjcf_export import write_mjcf_package
+
+    options.setdefault("colors", {link: edit.color
+                                  for link, edit in state.link_edits.items()
+                                  if getattr(edit, "color", None)} or None)
+    return Path(write_mjcf_package(state.package_dir, state.robot_name,
+                                   dest_dir, **options))
+
+
 # --------------------------------------------------------------- edits
 def _require_joint(state, joint):
     if joint not in {j["name"] for j in state.joints}:

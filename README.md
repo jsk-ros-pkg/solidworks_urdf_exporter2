@@ -355,6 +355,58 @@ resolve referenced parts.
 python -m sw2robot.editor            # see the CLI
 ```
 
+**Export a MuJoCo model.** `--mujoco` writes a standalone `<robot>_mjcf`
+package — an MJCF model plus its binary-STL assets — next to the URDF one, and
+the editor has the same thing as a **⬇ MuJoCo (MJCF)** button:
+
+```bash
+# straight from the assembly
+python -m sw2robot.exporter.export path/to/assembly.sldasm -o output --mujoco
+
+# or from an already-extracted package (no SolidWorks)
+python -m sw2robot.exporter.build output/<robot> --mujoco
+```
+
+A URDF that loads in RViz is not yet a model you can train on, so the export
+does more than change file format. It merges fixed links (MuJoCo has no use for
+one body per screw), then derives from the CAD itself:
+
+* **per-joint damping** of `effort / velocity` — the torque-speed slope of that
+  joint's own servo, so a leg cannot be swung faster in sim than the real motor
+  can drive it;
+* **a contact sphere per foot**, sized from that foot's own contact patch and
+  tangent to its lowest point, because the convex hull of a flat bracket end
+  gives contact points that jump around under a walking policy;
+* **an IMU site and the sensors a locomotion task looks up by name**
+  (`imu_ang_vel`, `imu_lin_vel`, `imu_lin_acc`, `root_angmom`);
+* **a `home` keyframe** whose base height is computed so nothing starts below
+  the floor.
+
+The base floats by default. `--mujoco-fixed-base` welds it to the world for an
+arm bolted to a table — which also drops the foot spheres and the IMU, both
+legged-robot features. `--mujoco-armature` takes the reflected rotor inertia,
+the one number a CAD model cannot supply (it depends on the motor and the gear
+ratio), and defaults to 0. `--collision` applies here as it does to the ROS
+package.
+
+Feeding it to an RL framework that brings its own actuator model (mjlab, say,
+which deletes the MJCF's actuators and keyframe and substitutes its own) needs
+two things: `--mujoco-no-backemf-damping`, so the joint is not damped twice, and
+foot names that match what the task config selects on. The contact sphere and
+site are named after the link (`FL_foot_toe`, `FL_foot`) unless you say
+otherwise; `write_mjcf_package(foot_links={"FL_foot": "FL", ...})` names them
+after the leg instead (`FL_toe`, `FL`), which is the usual locomotion-task
+convention.
+
+The MJCF itself is written by
+[`skrobot.urdf.urdf_to_mjcf`](https://github.com/iory/scikit-robot), which is
+also where the per-joint damping and the measured base height come from. Real
+CAD meshes routinely include shapes MuJoCo's compiler refuses — a material-split
+single triangle, a stamped part with zero enclosed volume, a perfectly flat
+sheet — so this needs **scikit-robot 0.3.34 or newer**; on 0.3.33 such an
+assembly fails with `mesh volume is too small` or `at least 4 vertices
+required`.
+
 **Fast re-extract while debugging.** Keep the assembly open in SolidWorks, then:
 
 ```bash

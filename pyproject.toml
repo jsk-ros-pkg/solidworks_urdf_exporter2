@@ -59,9 +59,15 @@ dependencies = [
     "pyyaml>=6",
     # rotation/transform math (rpy<->matrix), FK, inertials, the per-mesh
     # primitive API behind the ROS-export --collision fitting, and the URDF
-    # surgery the exporter and the editor run on: >=0.3.29 for
-    # skrobot.urdf.merge_fixed_links.
-    "scikit-robot>=0.3.29",
+    # surgery the exporter and the editor run on (>=0.3.29 for
+    # skrobot.urdf.merge_fixed_links).
+    #
+    # >=0.3.34 is the --mujoco export: earlier urdf_to_mjcf rejects three shapes
+    # every CAD assembly contains (a material-split single triangle, a
+    # zero-volume stamped part, a perfectly flat sheet) so a real robot fails to
+    # compile in MuJoCo, and has neither joint_damping='backemf' nor
+    # home_base_height='auto', which sw2robot asks it for by name.
+    "scikit-robot>=0.3.34",
     # only the EXTRACT step (driving SolidWorks COM) needs this, and only on Windows
     "pywin32>=306; sys_platform == 'win32'",
 ]
