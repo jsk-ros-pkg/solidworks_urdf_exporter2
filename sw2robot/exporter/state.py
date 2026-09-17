@@ -1,15 +1,66 @@
-"""Serializable intermediate state (the cached SolidWorks extraction).
+"""Serializable intermediate state: the CAD graph behind every export.
 
-`extract` (slow, needs SolidWorks) writes a ``GraphState`` to ``graph.json``
-plus the per-component meshes.  Everything after that -- choosing the base,
-excluding parts, wiring joints, setting axes/limits/root frame, writing URDF --
-operates on this JSON with NO SolidWorks, so iteration is instant.
+An extractor (SolidWorks today; any CAD that can list its parts) writes a
+``GraphState`` to ``graph.json`` plus the per-component meshes.  Everything
+after that -- choosing the base, excluding parts, wiring joints, setting
+axes/limits/root frame, writing URDF/MJCF -- operates on this JSON with no CAD
+running, so iteration is instant.  ``graph.schema.json`` next to this module is
+the same contract as a JSON Schema, for extractors that do not import sw2robot.
+
+Conventions every extractor must follow:
+
+* Lengths are metres, masses kilograms, angles radians.  ``world`` matrices and
+  every point/direction are in the frame of the top-level CAD document.
+* A mesh file's unit is fixed by its format: ``.3dxml`` is millimetres (what
+  SolidWorks writes), every other format is metres.
+* Two kinds of relationship, kept apart on purpose:
+
+  - ``edges`` are the raw CAD constraints (mates).  The build INFERS joints
+    from their geometry.
+  - ``joints`` are joints the source DECLARED (a CAD joint feature, a user, an
+    AI agent).  The build uses them as given and only infers the rest.
 """
 
 from __future__ import annotations
 
+import json
+from typing import Annotated, Literal
+
 import numpy as np
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+# Bump when a change would make an older sw2robot misread a new graph.json.
+# Files written before the field existed load as version 1.
+SCHEMA_VERSION = 2
+
+# Who asserted a declared joint.  Kept so a consumer can decide how far to trust
+# it: a joint an AI agent proposed deserves a check a CAD joint feature may not.
+Provenance = Literal["cad", "inferred", "user", "ai"]
+
+# URDF's single-DOF types, plus the multi-DOF ones a CAD joint can be.  URDF
+# cannot express the latter; the build keeps them FIXED and says so.
+JointType = Literal["fixed", "revolute", "continuous", "prismatic",
+                    "cylindrical", "planar", "ball", "floating"]
+SINGLE_DOF_JOINT_TYPES = ("revolute", "continuous", "prismatic")
+
+# a point or direction in space
+Vec3 = Annotated[list[float], Field(min_length=3, max_length=3)]
+
+# The rules DeclaredJoint._check enforces that JSON Schema can express, so an
+# extractor that validates against graph.schema.json alone writes a file that
+# loads.  (A non-zero axis and lower <= upper are left to the loader.)
+_DECLARED_JOINT_RULES = {
+    "allOf": [
+        {"if": {"properties": {"type": {"enum": list(SINGLE_DOF_JOINT_TYPES)}},
+                "required": ["type"]},
+         "then": {"required": ["axis_dir"],
+                  "properties": {"axis_dir": {"type": "array"}}}},
+        {"if": {"properties": {"type": {"const": "continuous"}},
+                "required": ["type"]},
+         "then": {"properties": {"lower": {"type": "null"},
+                                 "upper": {"type": "null"}}}},
+    ],
+}
 
 
 class ComponentState(BaseModel):
@@ -17,7 +68,8 @@ class ComponentState(BaseModel):
     link_name: str                  # URDF-safe
     part_path: str | None = None
     is_subassembly: bool = False
-    world: list[float]              # 16 floats, row-major 4x4 (local->world)
+    # 16 floats, row-major 4x4 (local->world)
+    world: Annotated[list[float], Field(min_length=16, max_length=16)]
     fixed: bool = False
     # screw/bolt/nut/washer/pin -- standard hardware that should weld RIGIDLY to
     # whatever it fastens, never spin on its hole's concentric mate.  Set at
@@ -69,9 +121,10 @@ class ComponentState(BaseModel):
 class MateGeo(BaseModel):
     """One mate occurrence with its full entity geometry (world coords).
 
-    Parallel arrays, one slot per mate entity: ``etypes`` is the SolidWorks
-    ``swMateEntityType_e`` (0 point, 1 line, 2 circle, 3 plane, 4 cylinder,
-    5 sphere, 7 cone); ``dirs`` is the axis (line/cylinder) or normal (plane),
+    Parallel arrays, one slot per mate entity: ``etypes`` is the entity kind
+    (0 point, 1 line, 2 circle, 3 plane, 4 cylinder, 5 sphere, 7 cone -- the
+    numbering SolidWorks' ``swMateEntityType_e`` uses, which other extractors
+    map onto); ``dirs`` is the axis (line/cylinder) or normal (plane),
     zero when meaningless.  GetMates returns each mate once per component, so
     the same physical mate appears ~twice -- consumers dedup geometrically."""
     type: str                       # e.g. "CONCENTRIC"
@@ -117,6 +170,65 @@ class LimitJoint(BaseModel):
     # None on older extracts.
     a_owner: str | None = None
     b_owner: str | None = None
+
+
+class DeclaredJoint(BaseModel):
+    """A joint the source stated outright, rather than one to infer from mates.
+
+    A CAD joint feature (Inventor/Fusion Assembly Joint), a user edit, or an AI
+    agent's proposal.  The build uses its type/axis/limits for the ``parent``--
+    ``child`` pair instead of classifying that pair's mates.
+
+    ``axis_dir`` is the direction in which ``child`` moves positively relative
+    to ``parent`` (right-handed for rotation).  The build may still root the
+    tree the other way round; it then flips the axis so the joint moves the same
+    way.  ``lower``/``upper`` are travel from the extracted pose; None keeps the
+    build's default range (and is the only valid value for ``continuous``).
+
+    Unknown keys are refused: a misspelt ``soruce`` would otherwise vanish and
+    leave the default provenance in its place."""
+    model_config = ConfigDict(extra="forbid",
+                              json_schema_extra=_DECLARED_JOINT_RULES)
+    parent: str                     # component name
+    child: str
+    type: JointType
+    axis_point: Vec3 | None = None  # world, on the joint axis
+    axis_dir: Vec3 | None = None    # world, need not be unit length
+    lower: float | None = None
+    upper: float | None = None
+    name: str | None = None
+    source: Provenance = "cad"
+    # the source's own name for the joint kind (e.g. "INVENTOR_ROTATIONAL"),
+    # so a report can say what the CAD called it
+    source_type: str | None = None
+
+    @model_validator(mode="after")
+    def _check(self):
+        if self.parent == self.child:
+            raise ValueError(f"joint {self.name!r}: parent and child are both "
+                             f"{self.parent!r}")
+        if self.type in SINGLE_DOF_JOINT_TYPES:
+            if self.axis_dir is None \
+                    or not any(abs(float(x)) > 1e-12 for x in self.axis_dir):
+                raise ValueError(f"joint {self.name!r}: a {self.type} joint "
+                                 "needs a non-zero 3-vector axis_dir")
+        if self.type == "continuous" and (self.lower is not None
+                                          or self.upper is not None):
+            raise ValueError(f"joint {self.name!r}: a continuous joint has "
+                             "no lower/upper")
+        if self.lower is not None and self.upper is not None \
+                and self.lower > self.upper:
+            raise ValueError(f"joint {self.name!r}: lower {self.lower} > "
+                             f"upper {self.upper}")
+        return self
+
+
+class SourceInfo(BaseModel):
+    """Where a graph came from."""
+    model_config = ConfigDict(extra="forbid")
+    cad: str                        # e.g. "solidworks", "inventor", "fusion360"
+    cad_version: str | None = None
+    extractor: str | None = None    # e.g. "sw2robot 0.4.4"
 
 
 class CoordinateSystemState(BaseModel):
@@ -171,6 +283,8 @@ class SubGraph(BaseModel):
 
 class GraphState(BaseModel):
     """The raw CAD graph extracted from the assembly (UI/build independent)."""
+    schema_version: int = Field(SCHEMA_VERSION, ge=1, strict=True)
+    source: SourceInfo | None = None
     robot_name: str
     source_assembly: str
     components: list[ComponentState] = []
@@ -209,6 +323,9 @@ class GraphState(BaseModel):
     # LimitDistance/LimitAngle mates = the assembly's real sliders/hinges; the
     # build promotes these edges to prismatic/revolute (empty on older extracts)
     limit_joints: list[LimitJoint] = []
+    # joints the source declared (see DeclaredJoint); empty on SolidWorks
+    # extracts, whose joints are all inferred from `edges`
+    joints: list[DeclaredJoint] = []
     # Which CONFIGURATION of the top-level assembly this graph was read from,
     # and every configuration the file offers.  A configuration suppresses
     # components and swaps part variants, so two graphs of one .SLDASM can
@@ -225,4 +342,24 @@ class GraphState(BaseModel):
     @classmethod
     def load(cls, path):
         with open(path, encoding="utf-8") as f:
-            return cls.model_validate_json(f.read())
+            data = json.load(f)
+        # a file from before the field existed is version 1, not the current one
+        version = data.setdefault("schema_version", 1)
+        # bool is an int subclass: `false` must not load as version 0
+        if type(version) is not int or version < 1:
+            raise ValueError(f"{path}: graph.json schema_version {version!r} "
+                             "is not a version number (an integer >= 1)")
+        if version > SCHEMA_VERSION:
+            raise ValueError(
+                f"{path}: graph.json schema_version {version!r} is newer than "
+                f"this sw2robot understands ({SCHEMA_VERSION}); upgrade sw2robot")
+        return cls.model_validate(data)
+
+
+def graph_json_schema():
+    """The JSON Schema of ``graph.json``, as shipped in ``graph.schema.json``."""
+    schema = GraphState.model_json_schema()
+    schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
+    schema["$id"] = ("https://github.com/jsk-ros-pkg/solidworks_urdf_exporter2/"
+                     f"graph.schema.v{SCHEMA_VERSION}.json")
+    return schema

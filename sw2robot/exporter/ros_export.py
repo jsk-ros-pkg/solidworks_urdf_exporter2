@@ -45,6 +45,7 @@ from .geometry import (
     urdf_link_world_poses,
     urdf_origin_matrix,
 )
+from .inertia import mesh_scale_to_metres
 from .urdf_writer import (
     CMAKELISTS,
     CMAKELISTS_ROS2,
@@ -177,8 +178,9 @@ def _load_mesh_metres(src):
             mesh = loaded.dump(concatenate=True)
     else:
         mesh = loaded
-    if src.lower().endswith(".3dxml"):
-        mesh.apply_scale(0.001)            # 3DXML tessellation is in mm
+    scale = mesh_scale_to_metres(src)      # 3DXML tessellation is in mm
+    if scale != 1.0:
+        mesh.apply_scale(scale)
     # the 'mm' units tag survives apply_scale; leaving it makes unit-aware
     # loaders shrink the mesh 1000x, so pin it to metres
     mesh.units = "meter"

@@ -4,14 +4,16 @@ The inertial maths itself lives in :mod:`skrobot.utils.inertia`
 (``mesh_mass_properties``, ``transform_inertial``, ``link_inertial_from_mesh``,
 ``rescale_inertial_to_mass``, ``validate_inertia``) -- call those directly.
 What is sw2robot-specific, and all that remains here, is the SCALE of the
-meshes we hand it:
+meshes we hand it, which ``graph.json`` fixes by file format
+(see :mod:`sw2robot.exporter.state`):
 
-* SolidWorks exports parts in **millimetres** (a servo body is ~32 mm) while
-  the URDF skeleton is in **metres**, so a per-part mesh needs ``MM_TO_M``
-  before density is applied -- otherwise mass comes out 1e9 times too large.
-* Composed sub-assembly ``.glb`` files are the exception: ``mesh.py`` already
-  applies the 0.001 and stamps ``units="meter"`` when it writes them, so they
-  must NOT be scaled again.
+* ``.3dxml`` -- what SolidWorks exports per part -- is **millimetres** (a servo
+  body is ~32 mm) while the URDF skeleton is in metres, so it needs ``MM_TO_M``
+  before density is applied; otherwise mass comes out 1e9 times too large.
+* Every other format is **metres**: the composed sub-assembly ``.glb`` files
+  ``mesh.py`` writes (it applies the 0.001 itself), and the ``.stl``/``.obj``
+  an extractor for another CAD writes.  The ROS/MJCF export and the editor read
+  meshes the same way.
 """
 
 from __future__ import annotations
@@ -20,15 +22,34 @@ from skrobot.utils.inertia import DEFAULT_DENSITY, link_inertial_from_mesh
 
 MM_TO_M = 0.001
 
+# the only mesh format graph.json stores in millimetres
+MILLIMETRE_MESH_SUFFIXES = (".3dxml",)
+
+
+def mesh_scale_to_metres(mesh_path):
+    """Factor that turns a working mesh's coordinates into metres.
+
+    Parameters
+    ----------
+    mesh_path : str
+        Path of a mesh referenced from ``graph.json``.
+
+    Returns
+    -------
+    float
+        ``MM_TO_M`` for a ``.3dxml`` mesh, 1.0 for every other format.
+    """
+    if mesh_path.lower().endswith(MILLIMETRE_MESH_SUFFIXES):
+        return MM_TO_M
+    return 1.0
+
 
 def link_inertial(mesh_path, visual_xyz, visual_rpy,
-                  density=DEFAULT_DENSITY, scale=MM_TO_M):
+                  density=DEFAULT_DENSITY, scale=None):
     """Inertial for one link, in the link frame, from a sw2robot-exported mesh.
 
     A thin wrapper over :func:`skrobot.utils.inertia.link_inertial_from_mesh`
-    that applies sw2robot's mesh-unit convention: millimetre parts by default,
-    but ``.glb`` sub-assembly composites taken as metres (see the module
-    docstring).
+    that applies sw2robot's mesh-unit convention (see the module docstring).
 
     Parameters
     ----------
@@ -38,8 +59,9 @@ def link_inertial(mesh_path, visual_xyz, visual_rpy,
         The link's visual origin (mesh -> link), in metres / radians.
     density : float
         Material density in kg/m^3.
-    scale : float
-        Mesh-unit -> metre factor, overridden to 1.0 for ``.glb`` inputs.
+    scale : float | None
+        Mesh-unit -> metre factor.  None derives it from the file format with
+        :func:`mesh_scale_to_metres`.
 
     Returns
     -------
@@ -50,7 +72,7 @@ def link_inertial(mesh_path, visual_xyz, visual_rpy,
     """
     if not mesh_path:
         return None
-    if mesh_path.lower().endswith(".glb"):
-        scale = 1.0
+    if scale is None:
+        scale = mesh_scale_to_metres(mesh_path)
     return link_inertial_from_mesh(mesh_path, visual_xyz, visual_rpy,
                                    density=density, scale=scale)

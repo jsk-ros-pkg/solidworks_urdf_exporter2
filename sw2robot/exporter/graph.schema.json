@@ -1,0 +1,945 @@
+{
+  "$defs": {
+    "ComponentState": {
+      "properties": {
+        "appearance": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Appearance"
+        },
+        "configuration": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Configuration"
+        },
+        "density": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Density"
+        },
+        "dof": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dof"
+        },
+        "fixed": {
+          "default": false,
+          "title": "Fixed",
+          "type": "boolean"
+        },
+        "is_fastener": {
+          "default": false,
+          "title": "Is Fastener",
+          "type": "boolean"
+        },
+        "is_subassembly": {
+          "default": false,
+          "title": "Is Subassembly",
+          "type": "boolean"
+        },
+        "link_name": {
+          "title": "Link Name",
+          "type": "string"
+        },
+        "mass_inherited_from": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mass Inherited From"
+        },
+        "mass_only": {
+          "default": false,
+          "title": "Mass Only",
+          "type": "boolean"
+        },
+        "mass_target": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mass Target"
+        },
+        "material": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Material"
+        },
+        "mesh_file": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mesh File"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "part_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Part Path"
+        },
+        "sw_com": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sw Com"
+        },
+        "sw_inertia": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sw Inertia"
+        },
+        "sw_mass": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sw Mass"
+        },
+        "sw_mass_overridden": {
+          "default": false,
+          "title": "Sw Mass Overridden",
+          "type": "boolean"
+        },
+        "world": {
+          "items": {
+            "type": "number"
+          },
+          "maxItems": 16,
+          "minItems": 16,
+          "title": "World",
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "link_name",
+        "world"
+      ],
+      "title": "ComponentState",
+      "type": "object"
+    },
+    "CoordinateSystemState": {
+      "description": "A named SolidWorks coordinate system in its document frame.\n\n``document_from_frame`` is a row-major 4x4 matrix that maps coordinates\nfrom this named frame into the owning ``.SLDASM`` document frame.  Using\none direction everywhere makes an instance frame simply\n``instance.world @ document_from_frame``.",
+      "properties": {
+        "document_from_frame": {
+          "items": {
+            "type": "number"
+          },
+          "title": "Document From Frame",
+          "type": "array"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "owner_component": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Owner Component"
+        }
+      },
+      "required": [
+        "name",
+        "document_from_frame"
+      ],
+      "title": "CoordinateSystemState",
+      "type": "object"
+    },
+    "DeclaredJoint": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "enum": [
+                  "revolute",
+                  "continuous",
+                  "prismatic"
+                ]
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "axis_dir": {
+                "type": "array"
+              }
+            },
+            "required": [
+              "axis_dir"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "continuous"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "lower": {
+                "type": "null"
+              },
+              "upper": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ],
+      "description": "A joint the source stated outright, rather than one to infer from mates.\n\nA CAD joint feature (Inventor/Fusion Assembly Joint), a user edit, or an AI\nagent's proposal.  The build uses its type/axis/limits for the ``parent``--\n``child`` pair instead of classifying that pair's mates.\n\n``axis_dir`` is the direction in which ``child`` moves positively relative\nto ``parent`` (right-handed for rotation).  The build may still root the\ntree the other way round; it then flips the axis so the joint moves the same\nway.  ``lower``/``upper`` are travel from the extracted pose; None keeps the\nbuild's default range (and is the only valid value for ``continuous``).\n\nUnknown keys are refused: a misspelt ``soruce`` would otherwise vanish and\nleave the default provenance in its place.",
+      "properties": {
+        "axis_dir": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 3,
+              "minItems": 3,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Axis Dir"
+        },
+        "axis_point": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 3,
+              "minItems": 3,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Axis Point"
+        },
+        "child": {
+          "title": "Child",
+          "type": "string"
+        },
+        "lower": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lower"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Name"
+        },
+        "parent": {
+          "title": "Parent",
+          "type": "string"
+        },
+        "source": {
+          "default": "cad",
+          "enum": [
+            "cad",
+            "inferred",
+            "user",
+            "ai"
+          ],
+          "title": "Source",
+          "type": "string"
+        },
+        "source_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Type"
+        },
+        "type": {
+          "enum": [
+            "fixed",
+            "revolute",
+            "continuous",
+            "prismatic",
+            "cylindrical",
+            "planar",
+            "ball",
+            "floating"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "upper": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Upper"
+        }
+      },
+      "required": [
+        "parent",
+        "child",
+        "type"
+      ],
+      "title": "DeclaredJoint",
+      "type": "object"
+    },
+    "LimitJoint": {
+      "description": "A SolidWorks LimitDistance/LimitAngle mate = a real slider/hinge.\n\nThese carry the assembly's actual DOFs (the geometric classifier only sees a\nplain DISTANCE/ANGLE constraint and over-fixes them), so the build uses them\nto override the joint type/axis/limits on the ``a``--``b`` edge.  ``lower``/\n``upper`` are travel relative to the assembled pose (m or rad).",
+      "properties": {
+        "a": {
+          "title": "A",
+          "type": "string"
+        },
+        "a_owner": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "A Owner"
+        },
+        "axis_dir": {
+          "items": {
+            "type": "number"
+          },
+          "title": "Axis Dir",
+          "type": "array"
+        },
+        "axis_point": {
+          "items": {
+            "type": "number"
+          },
+          "title": "Axis Point",
+          "type": "array"
+        },
+        "b": {
+          "title": "B",
+          "type": "string"
+        },
+        "b_owner": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "B Owner"
+        },
+        "lower": {
+          "title": "Lower",
+          "type": "number"
+        },
+        "type": {
+          "title": "Type",
+          "type": "string"
+        },
+        "upper": {
+          "title": "Upper",
+          "type": "number"
+        }
+      },
+      "required": [
+        "a",
+        "b",
+        "type",
+        "axis_point",
+        "axis_dir",
+        "lower",
+        "upper"
+      ],
+      "title": "LimitJoint",
+      "type": "object"
+    },
+    "MateEdge": {
+      "properties": {
+        "a": {
+          "title": "A",
+          "type": "string"
+        },
+        "axis_dir": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Axis Dir"
+        },
+        "axis_point": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Axis Point"
+        },
+        "b": {
+          "title": "B",
+          "type": "string"
+        },
+        "force_fixed": {
+          "default": false,
+          "title": "Force Fixed",
+          "type": "boolean"
+        },
+        "mates": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/MateGeo"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mates"
+        },
+        "types": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Types",
+          "type": "array"
+        }
+      },
+      "required": [
+        "a",
+        "b",
+        "types"
+      ],
+      "title": "MateEdge",
+      "type": "object"
+    },
+    "MateGeo": {
+      "description": "One mate occurrence with its full entity geometry (world coords).\n\nParallel arrays, one slot per mate entity: ``etypes`` is the entity kind\n(0 point, 1 line, 2 circle, 3 plane, 4 cylinder, 5 sphere, 7 cone -- the\nnumbering SolidWorks' ``swMateEntityType_e`` uses, which other extractors\nmap onto); ``dirs`` is the axis (line/cylinder) or normal (plane),\nzero when meaningless.  GetMates returns each mate once per component, so\nthe same physical mate appears ~twice -- consumers dedup geometrically.",
+      "properties": {
+        "dirs": {
+          "default": [],
+          "items": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "title": "Dirs",
+          "type": "array"
+        },
+        "etypes": {
+          "default": [],
+          "items": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": "Etypes",
+          "type": "array"
+        },
+        "owners": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Owners",
+          "type": "array"
+        },
+        "points": {
+          "default": [],
+          "items": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "title": "Points",
+          "type": "array"
+        },
+        "radii": {
+          "default": [],
+          "items": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": "Radii",
+          "type": "array"
+        },
+        "type": {
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "MateGeo",
+      "type": "object"
+    },
+    "ReferenceAxisState": {
+      "description": "A named SolidWorks reference axis in its document frame.\n\nSolidWorks exposes a reference axis as two points.  ``document_point`` is\none point on that line and ``document_direction`` follows the direction\nconvention used by the official SolidWorks URDF Exporter.  The collapsed\nexporter currently consumes only the direction, but retaining the point\nkeeps the extracted CAD geometry complete for future diagnostics.",
+      "properties": {
+        "document_direction": {
+          "items": {
+            "type": "number"
+          },
+          "title": "Document Direction",
+          "type": "array"
+        },
+        "document_point": {
+          "items": {
+            "type": "number"
+          },
+          "title": "Document Point",
+          "type": "array"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "document_point",
+        "document_direction"
+      ],
+      "title": "ReferenceAxisState",
+      "type": "object"
+    },
+    "SourceInfo": {
+      "additionalProperties": false,
+      "description": "Where a graph came from.",
+      "properties": {
+        "cad": {
+          "title": "Cad",
+          "type": "string"
+        },
+        "cad_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cad Version"
+        },
+        "extractor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Extractor"
+        }
+      },
+      "required": [
+        "cad"
+      ],
+      "title": "SourceInfo",
+      "type": "object"
+    },
+    "SubGraph": {
+      "description": "Internal structure of ONE sub-assembly part file, in ITS OWN frame.\n\nStored once per unique .SLDASM path; every instance of that sub-assembly\nreuses it (compose with the instance transform).  Lets the build phase\nexpand sub-assemblies whose internals actually move.",
+      "properties": {
+        "components": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ComponentState"
+          },
+          "title": "Components",
+          "type": "array"
+        },
+        "coordinate_systems": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/CoordinateSystemState"
+          },
+          "title": "Coordinate Systems",
+          "type": "array"
+        },
+        "edges": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/MateEdge"
+          },
+          "title": "Edges",
+          "type": "array"
+        },
+        "ground": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Ground",
+          "type": "array"
+        },
+        "limit_joints": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/LimitJoint"
+          },
+          "title": "Limit Joints",
+          "type": "array"
+        }
+      },
+      "title": "SubGraph",
+      "type": "object"
+    }
+  },
+  "$id": "https://github.com/jsk-ros-pkg/solidworks_urdf_exporter2/graph.schema.v2.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The raw CAD graph extracted from the assembly (UI/build independent).",
+  "properties": {
+    "assembly_mesh": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Assembly Mesh"
+    },
+    "components": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ComponentState"
+      },
+      "title": "Components",
+      "type": "array"
+    },
+    "configuration": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Configuration"
+    },
+    "configurations": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Configurations",
+      "type": "array"
+    },
+    "coordinate_systems": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/CoordinateSystemState"
+      },
+      "title": "Coordinate Systems",
+      "type": "array"
+    },
+    "deep_worlds": {
+      "additionalProperties": {
+        "items": {
+          "type": "number"
+        },
+        "type": "array"
+      },
+      "default": {},
+      "title": "Deep Worlds",
+      "type": "object"
+    },
+    "edges": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/MateEdge"
+      },
+      "title": "Edges",
+      "type": "array"
+    },
+    "ground": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Ground",
+      "type": "array"
+    },
+    "hidden": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Hidden",
+      "type": "array"
+    },
+    "joints": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/DeclaredJoint"
+      },
+      "title": "Joints",
+      "type": "array"
+    },
+    "limit_joints": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/LimitJoint"
+      },
+      "title": "Limit Joints",
+      "type": "array"
+    },
+    "part_coordinate_systems": {
+      "additionalProperties": {
+        "items": {
+          "$ref": "#/$defs/CoordinateSystemState"
+        },
+        "type": "array"
+      },
+      "default": {},
+      "title": "Part Coordinate Systems",
+      "type": "object"
+    },
+    "reference_axes": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ReferenceAxisState"
+      },
+      "title": "Reference Axes",
+      "type": "array"
+    },
+    "robot_name": {
+      "title": "Robot Name",
+      "type": "string"
+    },
+    "schema_version": {
+      "default": 2,
+      "minimum": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "source": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SourceInfo"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "source_assembly": {
+      "title": "Source Assembly",
+      "type": "string"
+    },
+    "subassemblies": {
+      "additionalProperties": {
+        "$ref": "#/$defs/SubGraph"
+      },
+      "default": {},
+      "title": "Subassemblies",
+      "type": "object"
+    },
+    "sw2urdf_config_xml": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Sw2Urdf Config Xml"
+    },
+    "sw2urdf_marker": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Sw2Urdf Marker"
+    }
+  },
+  "required": [
+    "robot_name",
+    "source_assembly"
+  ],
+  "title": "GraphState",
+  "type": "object"
+}
