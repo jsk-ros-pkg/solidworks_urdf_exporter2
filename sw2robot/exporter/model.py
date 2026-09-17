@@ -1647,6 +1647,38 @@ def _max_concentric_radius(recs):
     return max(radii) if radii else None
 
 
+def _twist_nullspace(rows):
+    """Orthonormal 6 x k basis of the relative twists constraint ``rows`` allow."""
+    A = np.asarray(rows, float)
+    _, s, vt = np.linalg.svd(A)
+    tol = max(s[0] * 1e-8, 1e-12) if len(s) else 1e-12
+    rank = int((s > tol).sum())
+    return vt[rank:].T
+
+
+def mate_motion_basis(mates):
+    """The relative motions a pair's mates leave free, or None.
+
+    Parameters
+    ----------
+    mates : list of MateGeo or dict
+        One edge's mate geometry (world frame).
+
+    Returns
+    -------
+    numpy.ndarray | None
+        Orthonormal 6 x k basis of the free relative twists (rows wx, wy, wz,
+        vx, vy, vz; ``k`` = free DOF), or None when no mate has geometry the
+        classifier models.
+    """
+    recs = _dedup_geo([m if isinstance(m, dict) else m.model_dump()
+                       for m in mates])
+    rows, axes, flags = [], [], set()
+    for m in recs:
+        rows.extend(_mate_rows(m, axes, flags))
+    return _twist_nullspace(rows) if rows else None
+
+
 def classify_edge_geo(mates, strict=False, min_radius=None):
     """(jtype, axis, note) from full mate geometry; None -> caller falls back.
 
@@ -1665,11 +1697,7 @@ def classify_edge_geo(mates, strict=False, min_radius=None):
         rows.extend(_mate_rows(m, axes, flags))
     if not rows:
         return None                            # nothing usable -- legacy path
-    A = np.asarray(rows, float)
-    _, s, vt = np.linalg.svd(A)
-    tol = max(s[0] * 1e-8, 1e-12) if len(s) else 1e-12
-    rank = int((s > tol).sum())
-    N = vt[rank:].T                            # 6 x k nullspace basis
+    N = _twist_nullspace(rows)                 # 6 x k nullspace basis
     k = N.shape[1]
     extra = "; has coupling mate (mimic candidate)" if "coupling" in flags \
         else ""

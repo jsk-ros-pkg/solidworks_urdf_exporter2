@@ -61,7 +61,8 @@ jobs:
           # coacd -> exercise the REAL convex-decomposition wheel (the smoke test
           #          in test_coacd_smoke.py), so a missing/broken coacd wheel
           #          fails CI instead of surfacing at runtime
-          pip install ".[ui,test,coacd]"
+          # mcp   -> drive the MCP server's tools (test_check.py)
+          pip install ".[ui,test,coacd,mcp]"
 
       - name: Run tests
         run: pytest -q
