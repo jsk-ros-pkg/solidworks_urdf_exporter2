@@ -483,6 +483,28 @@ python -m sw2robot.exporter.schema --validate output/<robot>/graph.json
 python -m sw2robot.exporter.schema          # regenerate after changing state.py
 ```
 
+### Robots written in code
+
+`GraphBuilder` writes a package straight from code, such as build123d shapes,
+trimesh meshes, or mesh files. The author states the joints, so there is
+nothing to infer. `unit="mm"` scales meshes, poses, and axis points to
+metres. A part's inertia comes from its mesh and its `density` or `mass`.
+
+```python
+from sw2robot.exporter.graph_builder import GraphBuilder
+
+g = GraphBuilder("arm", unit="mm", cad="build123d")
+g.add_part("base", base_shape, fixed=True, density=1200)
+g.add_part("link1", link_shape, pose=T_link1, mass=0.12)
+g.add_joint("base", "link1", "revolute", axis_dir=[0, 0, 1],
+            axis_point=[0, 0, 40], lower=-1.57, upper=1.57)
+pkg_dir = g.write("output")      # then sw2robot-check / build as usual
+```
+
+When exactly one part is fixed, it becomes the graph's `base`, the root of the
+tree. A graph without a `base` roots the tree at the part the most others
+attach to. A `base:` in the joint config overrides both.
+
 ### Checking a package
 
 `sw2robot-check` reports problems in a package. Each finding has a stable

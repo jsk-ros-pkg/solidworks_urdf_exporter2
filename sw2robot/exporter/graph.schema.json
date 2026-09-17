@@ -772,6 +772,18 @@
       "default": null,
       "title": "Assembly Mesh"
     },
+    "base": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Base"
+    },
     "components": {
       "default": [],
       "items": {

@@ -228,3 +228,16 @@ def test_a_bogus_schema_version_is_refused(tmp_path, version):
 def test_a_component_pose_must_be_a_4x4_matrix():
     with pytest.raises(ValidationError, match="world"):
         ComponentState(name="a", link_name="a", world=[1.0, 0.0, 0.0])
+
+
+def test_declared_base_beats_the_hub_heuristic():
+    # 'arm' has more connections, so the heuristic would root the tree there
+    comps = [_comp("base", fixed=True), _comp("arm", (0.1, 0, 0)),
+             _comp("hand", (0.2, 0, 0))]
+    joints = [DeclaredJoint(parent="base", child="arm", type="fixed"),
+              DeclaredJoint(parent="arm", child="hand", type="fixed")]
+    graph = _graph(joints, components=comps)
+    assert build_model(graph).base_link == "arm"
+    graph.base = "base"
+    assert build_model(graph).base_link == "base"
+    assert build_model(graph, config={"base": "hand"}).base_link == "hand"

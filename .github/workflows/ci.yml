@@ -64,12 +64,14 @@ jobs:
           # mcp   -> drive the MCP server's tools (test_check.py)
           # sim   -> MuJoCo, to run the simulation check (test_sim_check.py)
           pip install ".[ui,test,coacd,mcp,sim]"
+          # build123d -> the code-CAD path of GraphBuilder (test_graph_builder.py)
+          pip install build123d
 
       - name: Run tests
         # the extras installed above must import: a broken wheel fails the
         # job instead of quietly skipping the MCP and simulation tests
         env:
-          SW2ROBOT_REQUIRE_EXTRAS: mcp,mujoco
+          SW2ROBOT_REQUIRE_EXTRAS: mcp,mujoco,build123d
         run: pytest -q
 
   # Separate (non-required) job so the cross-platform coacd/python-fcl wheels are

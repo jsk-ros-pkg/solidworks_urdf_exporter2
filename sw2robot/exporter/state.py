@@ -290,6 +290,10 @@ class GraphState(BaseModel):
     components: list[ComponentState] = []
     edges: list[MateEdge] = []
     ground: list[str] = []          # components mated to the assembly itself
+    # the component the source says is the robot's base.  None lets the build
+    # pick the part most others attach to (a CAD's grounded part is often just
+    # whatever sat at the origin); a config `base:` still wins over this.
+    base: str | None = None
     assembly_mesh: str | None = None
     # Named coordinate systems authored directly in the top-level assembly.
     # Their transforms are expressed in that assembly document's frame.

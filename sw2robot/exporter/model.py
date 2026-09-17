@@ -4985,6 +4985,7 @@ def build_model(graph, robot_name=None, base_hint=None, config=None,
             _sw2urdf_directed_joints(sw2cfg), directed or [])
         print("      SW2URDF config: using directed revolute tree "
               f"({len(directed)} joints)")
+    base_hint = base_hint or getattr(graph, "base", None)
     root_z_offset = (config.get("root_z_offset", 0.0) if config else 0.0)
     root_xyz = (config.get("root_xyz") if config else None)
 
