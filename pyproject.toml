@@ -99,6 +99,11 @@ coacd = [
 mcp = [
     "mcp>=2.2,<3",
 ]
+# `sw2robot-check --simulate` / the MCP simulate_package tool: run the exported
+# MJCF for a moment to catch a model that compiles but does not simulate.
+sim = [
+    "mujoco>=3.1",
+]
 test = [
     "catkin_pkg",
     "pytest",
@@ -119,6 +124,7 @@ sw2urdf-extract = "sw2robot.exporter.extract:main"  # extract only / --refresh f
 sw2robot = "sw2robot.editor.cli:main"        # headless build/edit/export CLI
 sw2robot-web = "sw2robot.editor.webserver:main"  # the browser editor server
 sw2robot-check = "sw2robot.exporter.check:main"  # graph/model findings (--json)
+sw2robot-sim = "sw2robot.exporter.sim_check:main"  # run an MJCF (needs [sim])
 sw2robot-mcp = "sw2robot.mcp_server:main"      # MCP tools (needs [mcp])
 
 # hatchling's default sdist sweeps in every non-gitignored path in the repo --

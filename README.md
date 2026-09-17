@@ -496,9 +496,19 @@ sw2robot-check output/<robot> --config output/<robot>/<robot>.joints.yaml
 sw2robot-check output/<robot> --json      # the build's log goes to stderr
 ```
 
-`sw2robot-mcp` serves the same check, plus the build and the schema, as MCP
-tools (`check_package`, `build_package`, `graph_schema`). It runs over stdio
-and needs `pip install "sw2robot[mcp]"`.
+`sw2robot-sim` loads an exported MJCF in MuJoCo and runs it for a moment,
+starting from the `home` keyframe. It reports parts that start overlapping,
+a model that blows up, and a base that falls through the floor, using the same
+finding format. It needs `pip install "sw2robot[sim]"`.
+
+```bash
+sw2robot-sim output/<robot>_mjcf/mjcf/<robot>.xml --seconds 2 --json
+```
+
+`sw2robot-mcp` serves these checks, the build, and the schema as MCP tools
+(`check_package`, `build_package`, `simulate_package`, `graph_schema`). It runs
+over stdio and needs `pip install "sw2robot[mcp]"`, plus `[sim]` for
+`simulate_package`.
 
 ## Layout
 
