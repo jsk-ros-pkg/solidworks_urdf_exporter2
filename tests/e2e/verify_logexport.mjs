@@ -33,7 +33,10 @@ await client.send('Page.setDownloadBehavior', { behavior: 'allow', downloadPath:
 
 await page.goto(URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
 await page.waitForFunction(() => window.sw2robot, { timeout: 60000 });
-await sleep(1500);
+// wait for the model itself, not a fixed delay: under software GL (CI) it can
+// take longer than any guess, and viewer.robot is null until it is in
+await page.waitForFunction(() => window.viewer?.robot, { timeout: 60000 });
+await sleep(500);
 
 // do a real, labelled action
 const link = await page.evaluate(() => {
