@@ -478,9 +478,11 @@ def _refresh_mass_with_config(app, comp):
     try:
         _show_config(md, getattr(comp, "configuration", None))
         from .model import _read_part_props
-        material, density, sw = _read_part_props(md)
+        material, density, sw, appearance = _read_part_props(md)
         if material:
             comp.material = material
+        if appearance:
+            comp.appearance = appearance
         if density:
             comp.density = density
         sw = sw or {}
