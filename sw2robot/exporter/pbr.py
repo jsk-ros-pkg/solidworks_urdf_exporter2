@@ -191,7 +191,7 @@ def provenance(link):
 
 
 # ------------------------------------------------------------------ GLB write
-def glb_with_materials(mesh, metallic, roughness, name=None):
+def glb_with_materials(mesh, metallic, roughness, name=None, textured=()):
     """GLB bytes of ``mesh`` split into one primitive per face colour, each
     bound to a glTF PBR material: ``baseColorFactor`` = that colour, plus the
     given ``metallic`` / ``roughness`` (and ``name``, so a consumer can dedupe).
@@ -204,12 +204,29 @@ def glb_with_materials(mesh, metallic, roughness, name=None):
     carried as ``baseColorFactor`` survive trimesh, the Omniverse asset
     converter (Isaac Sim) and three.js alike.  A one-colour part (the usual
     case) is a single primitive.
+
+    ``textured`` -- trimesh pieces carrying ``TextureVisuals`` (UVs + image,
+    see :func:`sw2robot.exporter.textures.split_textured`) -- are added as
+    primitives of their own whose material has the image as
+    ``baseColorTexture`` and the same metallic / roughness.  ``mesh`` may then
+    be None (every face textured).
     """
     import numpy as np
     import trimesh
     from trimesh.visual import TextureVisuals
     from trimesh.visual.material import PBRMaterial
 
+    scene = trimesh.Scene()
+    for i, piece in enumerate(textured):
+        piece = piece.copy()
+        piece.visual = TextureVisuals(uv=piece.visual.uv, material=PBRMaterial(
+            baseColorTexture=piece.visual.material.image,
+            metallicFactor=float(metallic), roughnessFactor=float(roughness),
+            name=f"{name}_texture_{i}" if name else f"texture_{i}"))
+        label = f"{name or 'material'}_texture_{i}"
+        scene.add_geometry(piece, node_name=label, geom_name=label)
+    if mesh is None or len(mesh.faces) == 0:
+        return scene.export(file_type="glb")
     if mesh.visual.kind in ("vertex", "face"):
         face_colors = np.asarray(mesh.visual.face_colors, dtype=np.uint8)
     else:
@@ -217,7 +234,6 @@ def glb_with_materials(mesh, metallic, roughness, name=None):
                               (len(mesh.faces), 1))
     unique, inverse = np.unique(face_colors, axis=0, return_inverse=True)
     inverse = np.asarray(inverse).ravel()
-    scene = trimesh.Scene()
     for i, rgba in enumerate(unique):
         faces = np.nonzero(inverse == i)[0]
         part = (mesh.submesh([faces], append=True, repair=False)

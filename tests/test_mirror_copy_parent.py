@@ -152,3 +152,23 @@ def test_rule_defers_instead_of_crossing_sides_when_same_side_base_unplaced():
 
     # the right finger must NOT be parented to the wrong-side (left) base
     assert parent_of["finger_r"] != "base_l", "twin rule crossed sides"
+
+
+def test_unmated_island_welds_to_base_not_the_nearest_moving_link():
+    """A part with no mates and no mated twin has nothing saying it moves with
+    anything, so it must weld FIXED to the base -- not to the component that
+    happens to sit nearest, which here is a hinged arm it would then ride."""
+    base = _c("base", "frame.SLDPRT", (0, 0, 0))
+    arm = _c("arm", "arm.SLDPRT", (0.0, 0.2, 0.1))
+    island = _c("island", "plate.SLDPRT", (0.0, 0.19, 0.0))
+    adjacency = {
+        frozenset(("base", "arm")):
+            {"types": ["CONCENTRIC"],
+             "axis": (np.zeros(3), np.array([0.0, 0.0, 1.0])), "mates": []},
+    }
+    comps = [base, arm, island]
+    parent_of, edge_info = _auto_parent_map(comps, adjacency, base)
+
+    assert edge_info[("arm", "base")]["type"] == "revolute"
+    assert parent_of["island"] == "base", "unmated part rides the nearest link"
+    assert edge_info[("island", "base")]["type"] == "fixed"
