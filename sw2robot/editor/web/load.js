@@ -73,7 +73,15 @@ viewer.addEventListener('geometry-loaded', () => {
   _cancelTweens();               // a replay ease must not keep driving the NEW robot
   const restore = loadState.pendingRestore;
   loadState.pendingRestore = null;
+  const loaded = viewer.robot;
   requestAnimationFrame(() => {
+    // A reload can start between this event and the frame (clearing viewer.robot
+    // or swapping in the next model): this robot is gone, and the next load's own
+    // geometry-loaded will set its scene up.  Hand it the pending restore.
+    if (!viewer.robot || viewer.robot !== loaded) {
+      if (restore && !loadState.pendingRestore) { loadState.pendingRestore = restore; }
+      return;
+    }
     addAxisMarkers(viewer.robot);
     addOriginTriad(viewer.robot);
     addPortMarkers(viewer.robot);  // dummy_link ports (mesh-less, else unseen)
