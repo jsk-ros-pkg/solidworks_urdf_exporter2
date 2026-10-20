@@ -1290,10 +1290,28 @@ def _limit_joint_from_feature(sfi, name_set):
         return None
     axis = axis / n
     # URDF joint position 0 == the assembled pose (current distance/angle)
+    if jtype == "prismatic":
+        lower, upper = _limit_distance_travel(lo, hi, cur)
+    else:
+        lower, upper = lo - cur, hi - cur
     return {"a": pair[0], "b": pair[1], "type": jtype,
             "axis_point": [float(x) for x in pt],
             "axis_dir": [float(x) for x in axis],
-            "lower": lo - cur, "upper": hi - cur}
+            "lower": lower, "upper": upper}
+
+
+def _limit_distance_travel(lo, hi, cur):
+    """``(lower, upper)`` joint travel of a limit DISTANCE mate, from the
+    assembled pose.
+
+    The mate bounds the UNSIGNED distance: ``min <= |d| <= max``, ``d`` the
+    signed offset along the extracted axis, which points the way ``d`` grows
+    from its assembled value ``cur`` (>= 0).  With ``min > 0`` the part cannot
+    pass through ``d = 0``, so it stays on its side: ``d`` in ``[min, max]``.
+    With ``min == 0`` nothing stops it crossing, and ``d`` spans ``[-max, max]``
+    -- reading that as ``[0, max]`` would forbid half the travel."""
+    d_lo = -hi if lo <= 1e-9 else lo
+    return d_lo - cur, hi - cur
 
 
 def extract_limit_joints(doc, comps):

@@ -155,3 +155,22 @@ def test_rigid_group_stays_together_under_limit_joints():
     assert jt["plate"].parent == "carriage"     # stays in the carriage's group
     assert jt["carriage"].jtype == "prismatic"
     assert jt["tool"].jtype == "prismatic"
+
+
+def test_limit_distance_with_zero_minimum_travels_both_ways():
+    """A limit distance bounds |d|: with min 0 the part can cross d = 0, so the
+    travel from the assembled pose spans both sides, not just [0, max]."""
+    from sw2robot.exporter.model import _limit_distance_travel
+
+    # assembled on the plane (d = 0): symmetric
+    assert _limit_distance_travel(0.0, 0.1, 0.0) == (-0.1, 0.1)
+    # assembled 0.03 out: it can still go back through 0 to -max
+    lo, hi = _limit_distance_travel(0.0, 0.1, 0.03)
+    assert abs(lo - (-0.13)) < 1e-12 and abs(hi - 0.07) < 1e-12
+
+
+def test_limit_distance_with_positive_minimum_stays_on_its_side():
+    from sw2robot.exporter.model import _limit_distance_travel
+
+    lo, hi = _limit_distance_travel(0.02, 0.1, 0.05)
+    assert abs(lo - (-0.03)) < 1e-12 and abs(hi - 0.05) < 1e-12
