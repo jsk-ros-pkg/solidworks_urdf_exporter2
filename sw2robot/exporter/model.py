@@ -2326,16 +2326,23 @@ def _auto_parent_map(comps, adjacency, base):
             # e.g. the one whose twin is the root).  Break the deadlock THERE:
             # attach the leftover with the SHALLOWEST twin nearest-component, so
             # once it lands everything below it mirrors in tree order.  Distance
-            # to base breaks ties and orders true islands with no twin.  An
-            # unmated connector on a moving link thus rides that link, not the
-            # base.
+            # to base breaks ties and orders true islands with no twin.
             root = min(rem, key=lambda r: (_twin_depth(r), dist2(r)))
-            rpos = by_name[root].world[:3, 3]
-            host = min(visited,
-                       key=lambda n: float(np.sum(
-                           (by_name[n].world[:3, 3] - rpos) ** 2)))
-            print(f"      note: '{root}' has no usable mates; attaching to "
-                  f"nearest component '{host}'")
+            if _twin_depth(root) < (1 << 30):
+                rpos = by_name[root].world[:3, 3]
+                host = min(visited,
+                           key=lambda n: float(np.sum(
+                               (by_name[n].world[:3, 3] - rpos) ** 2)))
+                print(f"      note: '{root}' has no usable mates; anchoring "
+                      f"its mirrored limb on the nearest component '{host}'")
+            else:
+                # A true island: no mates and no mated twin, so nothing says it
+                # moves with anything.  Weld it to the BASE -- never to whatever
+                # sits closest, which may be a moving link (a slider, an arm)
+                # the part would then ride along with.
+                host = base.name
+                print(f"      note: '{root}' has no usable mates; attaching it "
+                      f"FIXED to the base '{host}'")
         parent_of[root] = host
         visited.add(root)
         mate_less.add(root)
@@ -3159,7 +3166,8 @@ def extract_graph(doc, robot_name, source_assembly, progress=None,
     for c in comps:
         if c.name not in mated and c.name not in ground:
             print(f"      WARN: '{c.name}' has NO mates in the top-level "
-                  f"assembly -- it will be force-attached to the base "
+                  f"assembly -- the build welds it FIXED to the base unless "
+                  f"it is a mirror/pattern copy of a mated part "
                   f"(check for suppressed/lightweight mates)")
     _warn_unsolved_mates(comps, adjacency)
     return comps, adjacency, ground
