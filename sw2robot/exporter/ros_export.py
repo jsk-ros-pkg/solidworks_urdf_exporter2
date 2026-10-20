@@ -181,9 +181,27 @@ def _mesh_to_glb_bytes(src, color=None, transform=None, mesh=None, pbr=None):
     metallic / roughness), so every loader keeps both the colours and the
     finish; see :func:`pbr.glb_with_materials`.  Without it the file carries
     vertex colours and no material (which the glTF spec renders as a fully
-    rough metal)."""
+    rough metal).
+
+    Faces textured in SolidWorks (a ``.3dxml`` source, no ``color`` override)
+    keep their image: they become primitives with a ``baseColorTexture`` and the
+    part's finish (``pbr``, or the ``default`` preset when none is given) --
+    see :mod:`sw2robot.exporter.textures`."""
     m = mesh if mesh is not None else _load_mesh_metres(src)
-    m = _apply_uniform_color(_baked(m, transform), color)
+    textured = []
+    if color is None and str(src).lower().endswith(".3dxml"):
+        from . import textures as _textures
+        patches = _textures.read_3dxml_textures(src)
+        if patches:
+            m, textured = _textures.split_textured(m, patches)
+            for piece in textured:
+                _baked(piece, transform)
+    if m is not None:
+        m = _apply_uniform_color(_baked(m, transform), color)
+    if textured:
+        finish = pbr or _pbr.resolve()
+        return _pbr.glb_with_materials(m, finish["metallic"], finish["roughness"],
+                                       name=finish.get("preset"), textured=textured)
     if pbr:
         return _pbr.glb_with_materials(m, pbr["metallic"], pbr["roughness"],
                                        name=pbr.get("preset"))
@@ -267,9 +285,10 @@ def _atomic_write(path, data):
 
 
 # bump when the converted-bytes / measurement cache layout changes (stale caches
-# -- v2: glb visuals carry per-colour PBR materials instead of COLOR_0
 # under a previous version are then ignored rather than mis-read)
-_MESH_CACHE_VERSION = 2
+# -- v2: glb visuals carry per-colour PBR materials instead of COLOR_0
+# -- v3: faces textured in SolidWorks keep their image in the glb
+_MESH_CACHE_VERSION = 3
 
 
 class _MeshCache:
