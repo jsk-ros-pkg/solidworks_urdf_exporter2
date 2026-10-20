@@ -28,6 +28,9 @@ class ComponentState(BaseModel):
     mesh_file: str | None = None    # relative path, e.g. "meshes/x.3dxml"
     material: str | None = None     # SolidWorks material name (e.g. "ABS")
     density: float | None = None    # kg/m^3 from that material
+    # SolidWorks appearance, as its .p2m path under the materials library
+    # (e.g. "metal/aluminum/satin finish aluminum"); None on older extracts
+    appearance: str | None = None
     # SolidWorks-native mass properties of the PART, in its own (part-local)
     # frame and SI units -- the same frame the mesh is exported in.  Preferred
     # over the mesh-derived estimate at build time (exact CAD geometry +

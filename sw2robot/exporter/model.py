@@ -229,10 +229,48 @@ def _read_part_props(md, is_assembly=False):
     its mesh is exported in) or None when the SolidWorks-native mass properties
     are unavailable.  All lookups are best-effort: any failure just leaves that
     field None."""
-    material = density = None
+    material = density = appearance = None
     if not is_assembly:
         material, density = _part_material(md)
-    return material, density, _sw_props_of(md)
+        appearance = _part_appearance(md)
+    return material, density, _sw_props_of(md), appearance
+
+
+def _part_appearance(md):
+    """The SolidWorks APPEARANCE of a part (its ``.p2m``), as the path under
+    the ``materials`` library folder (``metal/aluminum/satin finish
+    aluminum``), or None.
+
+    Read with ``IModelDocExtension.GetRenderMaterials2(swThisDisplayState)``;
+    the first appearance is the part-level one on every part checked (a
+    part-only colour comes back as ``color.p2m``, which :mod:`pbr` treats as
+    "unknown finish").  The appearance is the one thing that tells a PBR
+    renderer chrome from ABS -- see :mod:`sw2robot.exporter.pbr`.
+    Best-effort: any COM failure leaves it None."""
+    try:
+        ext = as_iface(md, "IModelDoc2").Extension
+        ext = as_iface(ext, "IModelDocExtension")
+        mats = ext.GetRenderMaterials2(1, None)        # swThisDisplayState
+    except Exception:
+        return None
+    if not mats:
+        return None
+    for mat in mats:
+        try:
+            name = getattr(mat, "FileName", None)
+        except Exception:
+            name = None
+        if not name:
+            continue
+        name = str(name).replace("\\", "/")
+        marker = "/materials/"
+        i = name.lower().rfind(marker)
+        if i >= 0:
+            name = name[i + len(marker):]
+        if name.lower().endswith(".p2m"):
+            name = name[:-4]
+        return name
+    return None
 
 
 def _part_material(md):
@@ -313,6 +351,9 @@ class Component:
     visual_rpy: list = field(default_factory=lambda: [0, 0, 0])
     material: str | None = None      # SolidWorks material name
     density: float | None = None     # kg/m^3 from that material
+    # the SolidWorks appearance (.p2m under the materials library, e.g.
+    # 'metal/aluminum/satin finish aluminum'); what the PBR export keys on
+    appearance: str | None = None
     # the SolidWorks configuration this INSTANCE references.  Two instances of
     # one part file can reference different configurations with different
     # geometry (a length-configured tube: '180cm_shoulder_L120' vs
@@ -811,7 +852,7 @@ def extract_components(doc, exclude=None, progress=None,
         key = (path.lower(), config or None)
         if key in matcache:
             return matcache[key]
-        props = (None, None, None)
+        props = (None, None, None, None)
         md = None
         try:
             md = safe_call(ct, "GetModelDoc2")
@@ -883,17 +924,18 @@ def extract_components(doc, exclude=None, progress=None,
         if progress:
             progress(ln)
         cfg = safe_prop(ct, "ReferencedConfiguration") or None
-        material = density = None
+        material = density = appearance = None
         sw = None
         # A LINK IS OFTEN A SUB-ASSEMBLY, so read its mass too -- see
         # _sw_props_of.  Only the material/density lookup stays part-only.
         if path:
-            material, density, sw = _material_of(ct, path, cfg, is_asm)
+            material, density, sw, appearance = _material_of(ct, path, cfg, is_asm)
         sw = sw or {}
         comps.append(Component(name=name, link_name=ln, part_path=path,
                                is_subassembly=is_asm, world=world,
                                fixed=fixed, dof=dof,
                                material=material, density=density,
+                               appearance=appearance,
                                sw_mass=sw.get("mass"), sw_com=sw.get("com"),
                                sw_inertia=sw.get("inertia"),
                                sw_mass_overridden=sw.get("overridden", False),
@@ -3415,13 +3457,13 @@ def extract_part_graph(doc, robot_name, part_path):
     # _read_part_props guards every COM call in try/except, so pass the raw doc
     # straight in -- an unguarded as_iface() here would import win32com and blow
     # up the cross-platform unit test on macOS/Linux (there is no SolidWorks).
-    material, density, sw = _read_part_props(doc)
+    material, density, sw, appearance = _read_part_props(doc)
     sw = sw or {}
     ln = safe_name(os.path.splitext(os.path.basename(part_path))[0])
     comp = Component(
         name=ln, link_name=ln, part_path=part_path,
         is_subassembly=False, world=np.eye(4), fixed=True, dof=0,
-        material=material, density=density,
+        material=material, density=density, appearance=appearance,
         sw_mass=sw.get("mass"), sw_com=sw.get("com"),
         sw_inertia=sw.get("inertia"))
     return [comp], {}, [comp.name]
@@ -3544,6 +3586,7 @@ def _component_states(comps):
             world=[float(x) for x in c.world.flatten()],
             fixed=c.fixed, dof=c.dof, mesh_file=c.mesh_file,
             material=c.material, density=c.density,
+            appearance=getattr(c, "appearance", None),
             sw_mass=c.sw_mass, sw_com=c.sw_com, sw_inertia=c.sw_inertia,
             sw_mass_overridden=c.sw_mass_overridden,
             mass_inherited_from=getattr(c, "mass_inherited_from", None),
@@ -3958,6 +4001,7 @@ def from_graph(graph, exclude=None, expand=None, no_expand=None,
             is_subassembly=cs.is_subassembly, world=cs.world_matrix(),
             fixed=cs.fixed, dof=cs.dof, mesh_file=cs.mesh_file,
             material=cs.material, density=cs.density,
+            appearance=getattr(cs, "appearance", None),
             sw_mass=cs.sw_mass, sw_com=cs.sw_com, sw_inertia=cs.sw_inertia,
             sw_mass_overridden=getattr(cs, "sw_mass_overridden", False),
             mass_inherited_from=getattr(cs, "mass_inherited_from", None),
@@ -4078,6 +4122,7 @@ def _expand_one(inst, sub, comps, adjacency, ground, deep=None, hidden=None,
             is_subassembly=cs.is_subassembly, world=world,
             fixed=False, dof=None, mesh_file=cs.mesh_file,
             material=cs.material, density=cs.density,
+            appearance=getattr(cs, "appearance", None),
             sw_mass=cs.sw_mass, sw_com=cs.sw_com, sw_inertia=cs.sw_inertia,
             sw_mass_overridden=getattr(cs, "sw_mass_overridden", False),
             mass_inherited_from=getattr(cs, "mass_inherited_from", None),

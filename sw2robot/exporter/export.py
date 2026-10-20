@@ -659,7 +659,8 @@ def build(pkg_dir, config_path=None, base_hint=None, exclude=None,
           check_geometry=True, mujoco=False, mujoco_pkg_name=None,
           mujoco_name=None, mujoco_fixed_base=False, mujoco_actuator="position",
           mujoco_kp=50.0, mujoco_armature=0.0, mujoco_self_collision=False,
-          mujoco_backemf_damping=True):
+          mujoco_backemf_damping=True, visual_format="dae", isaac=False,
+          isaac_pkg_name=None, world_link=None):
     _tolerant_console()
     graph = GraphState.load(os.path.join(pkg_dir, GRAPH_FILE))
     robot_name = graph.robot_name
@@ -681,6 +682,14 @@ def build(pkg_dir, config_path=None, base_hint=None, exclude=None,
     if isinstance(config, dict):
         urdf_kwargs["link_overrides"] = config.get("link_names") or {}
         urdf_kwargs["joint_overrides"] = config.get("joint_names") or {}
+    # a `world` root at the CAD assembly origin: explicit arg, else the joint
+    # config's `world_link:`, else off.  Whether the model is welded to the
+    # CAD origin is a property of the model (a fixture: yes; a mobile robot:
+    # no), not of the output format, so --isaac does not imply it.
+    if world_link is None:
+        world_link = (config.get("world_link") if isinstance(config, dict)
+                      and config.get("world_link") is not None else False)
+    urdf_kwargs["world_link"] = bool(world_link)
     # the working URDF keeps URDF-relative mesh paths (our viewer + skrobot
     # auto-limits resolve those); the portable ROS variant is a SEPARATE package.
     # The working URDF KEEPS each mass-only link (geometry stripped) so it stays
@@ -774,15 +783,34 @@ def build(pkg_dir, config_path=None, base_hint=None, exclude=None,
         # (RViz/Gazebo-ready).  ros_version 2 also bundles launch/ + rviz/.
         from .ros_export import write_ros_description_package
         # per-link colour overrides (joints.yaml `colors:`) repaint <visual>
-        # meshes in the exported package
+        # meshes in the exported package; `materials:` sets the PBR finish of
+        # glb visuals (see exporter.pbr)
         colors = config.get("colors") if isinstance(config, dict) else None
+        materials = config.get("materials") if isinstance(config, dict) else None
         desc_dir = write_ros_description_package(
             pkg_dir, robot_name, os.path.dirname(os.path.abspath(pkg_dir)),
             ros_version=ros_version, pkg_name=ros_pkg_name,
             urdf_name=ros_urdf_name, robot_tag=ros_robot_name, colors=colors,
             collision=collision, coacd_quality=coacd_quality,
             merge_fixed=merge_fixed, mesh_dir=ros_mesh_dir,
-            loop_closures=closures)
+            loop_closures=closures,
+            ctx_fmt=(("visual", visual_format), ("collision", "stl")),
+            materials=materials)
+
+    isaac_dir = None
+    if isaac:
+        # a standalone Isaac Sim package next to pkg_dir (default
+        # <robot>_isaac): URDF-relative mesh refs, PBR .glb visuals, .stl
+        # collision, no ROS build files
+        from .ros_export import write_isaac_package
+        colors = config.get("colors") if isinstance(config, dict) else None
+        materials = config.get("materials") if isinstance(config, dict) else None
+        isaac_dir = write_isaac_package(
+            pkg_dir, robot_name, os.path.dirname(os.path.abspath(pkg_dir)),
+            pkg_name=isaac_pkg_name, urdf_name=ros_urdf_name,
+            robot_tag=ros_robot_name, colors=colors, materials=materials,
+            collision=collision, coacd_quality=coacd_quality,
+            merge_fixed=merge_fixed, mesh_dir=ros_mesh_dir)
 
     mjcf_dir = None
     if mujoco:
@@ -805,7 +833,10 @@ def build(pkg_dir, config_path=None, base_hint=None, exclude=None,
     print(f"\nDONE. Package: {pkg_dir}")
     print(f"  URDF:   {urdf_path}")
     if desc_dir:
-        print(f"  ROS pkg: {desc_dir}  (ROS {ros_version}, package:// + .dae)")
+        print(f"  ROS pkg: {desc_dir}  (ROS {ros_version}, package:// + "
+              f".{visual_format})")
+    if isaac_dir:
+        print(f"  Isaac Sim: {isaac_dir}  (relative refs, PBR .glb + .stl)")
     if mjcf_dir:
         print(f"  MuJoCo: {mjcf_dir}  (MJCF + .stl assets)")
     if not config_path:
@@ -825,7 +856,9 @@ def export(assembly_path, out_dir=None, robot_name=None, visible=False,
            scan_part_frames=False, mujoco=False, mujoco_pkg_name=None,
            mujoco_name=None, mujoco_fixed_base=False,
            mujoco_actuator="position", mujoco_kp=50.0, mujoco_armature=0.0,
-           mujoco_self_collision=False, mujoco_backemf_damping=True):
+           mujoco_self_collision=False, mujoco_backemf_damping=True,
+           visual_format="dae", isaac=False, isaac_pkg_name=None,
+           world_link=None):
     pkg_dir = extract(assembly_path, out_dir, robot_name, visible,
                       configuration=configuration, attach=attach,
                       scan_part_frames=scan_part_frames)
@@ -841,7 +874,9 @@ def export(assembly_path, out_dir=None, robot_name=None, visible=False,
                  mujoco_actuator=mujoco_actuator, mujoco_kp=mujoco_kp,
                  mujoco_armature=mujoco_armature,
                  mujoco_self_collision=mujoco_self_collision,
-                 mujoco_backemf_damping=mujoco_backemf_damping)
+                 mujoco_backemf_damping=mujoco_backemf_damping,
+                 visual_format=visual_format, isaac=isaac,
+                 isaac_pkg_name=isaac_pkg_name, world_link=world_link)
 
 
 def _exclude_list(s):
@@ -902,6 +937,33 @@ def main():
                     help="package-relative directory the --ros-pkg meshes go in "
                          "and that the URDF's package:// refs point at (default: "
                          "'meshes'); e.g. 'urdf/mesh' for a different layout")
+    ap.add_argument("--visual-format", choices=("dae", "stl", "glb"),
+                    default="dae",
+                    help="<visual> mesh format of the --ros-pkg package: "
+                         "'dae' (default, RViz-loadable, colours) / 'stl' "
+                         "(colourless; a <material> is emitted instead) / "
+                         "'glb' (glTF with a PBR material per link -- "
+                         "metallic/roughness from the part's SolidWorks "
+                         "appearance or material, or a joints.yaml "
+                         "'materials:' override; for Isaac Sim, three.js)")
+    ap.add_argument("--isaac", action="store_true",
+                    help="also write a standalone <name>_isaac package for "
+                         "NVIDIA Isaac Sim: mesh refs relative to the URDF "
+                         "(no ROS package path needed), PBR .glb visuals, "
+                         ".stl collision, no ROS build files")
+    ap.add_argument("--isaac-pkg-name", default=None,
+                    help="directory name for the --isaac package "
+                         "(default <name>_isaac)")
+    ap.add_argument("--world-link", dest="world_link", action="store_const",
+                    const=True, default=None,
+                    help="add a massless 'world' root link fixed to the base "
+                         "at the base's ASSEMBLY pose, so the URDF origin is "
+                         "the CAD origin (for fixtures; without it a base "
+                         "part sitting above the CAD floor loads that far "
+                         "into a simulator's ground). Also `world_link: true` "
+                         "in the joint config")
+    ap.add_argument("--no-world-link", dest="world_link", action="store_const",
+                    const=False, help="never add the 'world' root link")
     ap.add_argument("--collision",
                     choices=("copy", "hull", "coacd",
                              "primitive", "box", "cylinder", "sphere"),
@@ -983,7 +1045,9 @@ def main():
            mujoco_actuator=args.mujoco_actuator, mujoco_kp=args.mujoco_kp,
            mujoco_armature=args.mujoco_armature,
            mujoco_self_collision=args.mujoco_self_collision,
-           mujoco_backemf_damping=not args.mujoco_no_backemf_damping)
+           mujoco_backemf_damping=not args.mujoco_no_backemf_damping,
+           visual_format=args.visual_format, isaac=args.isaac,
+           isaac_pkg_name=args.isaac_pkg_name, world_link=args.world_link)
 
 
 if __name__ == "__main__":

@@ -25,7 +25,7 @@ from skrobot.utils.inertia import (
     validate_inertia,
 )
 
-from .geometry import fmt_urdf_vec
+from .geometry import fmt_urdf_vec, matrix_to_xyz_rpy
 from .inertia import link_inertial
 from .model import safe_name
 
@@ -49,7 +49,8 @@ def _comment_safe(text):
 def _provenance_comment(comp, method):
     """Build the ``<!-- sw2robot ... -->`` provenance line for a link.
 
-    Records the SolidWorks material, its density (kg/m^3) and how the inertial
+    Records the SolidWorks material, its appearance (the ``.p2m`` the PBR
+    export keys on), its density (kg/m^3) and how the inertial
     was obtained (``solidworks`` / ``mesh`` / ``hull`` / ``bbox`` /
     ``placeholder``), so the exported URDF is self-documenting. Returns ``None``
     when there is nothing worth recording.
@@ -68,6 +69,9 @@ def _provenance_comment(comp, method):
     density = getattr(comp, "density", None)
     if material:
         fields.append(f'material="{_comment_safe(material)}"')
+    appearance = getattr(comp, "appearance", None)
+    if appearance:
+        fields.append(f'appearance="{_comment_safe(appearance)}"')
     if density is not None:
         fields.append(f'density="{float(density):g}"')  # kg/m^3
     if method:
@@ -222,6 +226,25 @@ def _link_xml(comp, ros_pkg=None, rn=lambda n: n, mesh_dir=None, density=None):
     return "\n".join(lines), method, problems
 
 
+def _world_link_xml(model, rn):
+    """A ``world`` root link and the fixed joint placing the base link at its
+    assembly pose (``Component.world``, metres)."""
+    base = next((c for c in model.components if c.link_name == model.base_link),
+                None)
+    if base is None:
+        raise ValueError(f"base link {model.base_link!r} is not a component")
+    xyz, rpy = matrix_to_xyz_rpy(base.world)
+    root = rn(base.link_name)
+    return [
+        '  <link name="world"/>',
+        f'  <joint name="world_to_{root}" type="fixed">',
+        f'    <origin xyz="{fmt_urdf_vec(xyz)}" rpy="{fmt_urdf_vec(rpy)}"/>',
+        '    <parent link="world"/>',
+        f'    <child link="{root}"/>',
+        '  </joint>',
+    ]
+
+
 def _attrs(spec, source):
     """Render ``name="value"`` attribute pairs for the keys in ``spec`` that are
     present (not None) in mapping ``source``, in ``spec`` order."""
@@ -320,12 +343,18 @@ def _port_xml(port, rn=lambda n: n, link_name=None, joint_name=None):
 
 
 def write_urdf(model, urdf_path, ros_pkg=None, density=None,
-               link_overrides=None, joint_overrides=None):
+               link_overrides=None, joint_overrides=None, world_link=False):
     """Write the URDF.  ``link_overrides`` / ``joint_overrides`` map a COMPONENT
     link name / joint name to a user-chosen display name (from the editor's
     rename feature); they are applied before safe_name + collision suffixing, so
     every reference (parent/child/mimic) follows automatically.  The root link
     keeps using ``root_link_name``.
+
+    ``world_link`` adds a massless ``world`` link as the root, fixed to the
+    base link at the base's ASSEMBLY pose, so the URDF's origin is the CAD
+    assembly's origin rather than the base part's own frame.  Without it a
+    fixed-base rig whose base part sits above the CAD floor loads that far
+    into the ground in Isaac Sim / MuJoCo (74 mm on the dielectric rig).
 
     Returns the set of FINAL (emitted) link names that are mass-only -- the
     export step folds these into their fixed parent.  write_urdf owns the name
@@ -383,6 +412,8 @@ def write_urdf(model, urdf_path, ros_pkg=None, density=None,
     mesh_dir = os.path.dirname(os.path.dirname(os.path.abspath(urdf_path)))
 
     parts = ['<?xml version="1.0"?>', f'<robot name="{model.name}">']
+    if world_link:
+        parts.extend(_world_link_xml(model, rn))
     methods = {}
     bad_inertia = {}
     mass_only_links = set()
