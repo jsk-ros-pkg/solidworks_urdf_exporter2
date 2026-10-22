@@ -83,7 +83,17 @@ def _load_mesh_metres(src):
     any scene to a single geometry, and return it pinned to metres."""
     import trimesh
 
-    loaded = trimesh.load(src)
+    loaded = None
+    if str(src).lower().endswith(".3dxml"):
+        # without its texture images, or trimesh may drop every face colour of
+        # a part with a textured face (see textures.colour_only_3dxml); the
+        # images are read from the original file by the glb writer
+        from . import textures as _textures
+        plain = _textures.colour_only_3dxml(src)
+        if plain is not None:
+            loaded = trimesh.load(plain, file_type="3dxml")
+    if loaded is None:
+        loaded = trimesh.load(src)
     if isinstance(loaded, trimesh.Scene):
         # to_geometry() is trimesh's current single-mesh flatten; fall back to
         # the older dump() on versions that predate it
@@ -288,7 +298,8 @@ def _atomic_write(path, data):
 # under a previous version are then ignored rather than mis-read)
 # -- v2: glb visuals carry per-colour PBR materials instead of COLOR_0
 # -- v3: faces textured in SolidWorks keep their image in the glb
-_MESH_CACHE_VERSION = 3
+# -- v4: a part with textured faces keeps its other faces' colours
+_MESH_CACHE_VERSION = 4
 
 
 class _MeshCache:
