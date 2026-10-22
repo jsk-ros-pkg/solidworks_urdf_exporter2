@@ -21,6 +21,7 @@ unreadable material) is skipped the same way; nothing here fails an export.
 from __future__ import annotations
 
 import io
+import re
 import xml.etree.ElementTree as ET
 import zipfile
 
@@ -184,6 +185,40 @@ def read_3dxml_textures(path):
                 out.append({"vertices": verts, "faces": np.asarray(faces, np.int64),
                             "uv": uv, "image": image})
         return out
+
+
+_TEXTURE_ATTR = re.compile(rb'<Attr\b[^>]*\bName="TextureImage"[^>]*/>')
+
+
+def colour_only_3dxml(path):
+    """An in-memory copy of a ``.3dxml`` with every material's texture image
+    dropped, for trimesh to load; ``None`` when no material has one.
+
+    trimesh's 3DXML loader sets a part's visual from the LAST rep that names a
+    material: when that material has an image, the whole flattened part becomes
+    TextureVisuals (whose UVs only the textured reps carry) and every face colour
+    is lost, so a plain-coloured face of a part that also has textured faces came
+    out in the default grey -- or not, depending only on the order of the reps.
+    Without images it always keeps the face colours; the textures themselves are
+    read from the original archive (:func:`read_3dxml_textures`).
+    """
+    try:
+        archive = zipfile.ZipFile(path)
+    except (OSError, zipfile.BadZipFile):
+        return None
+    out = io.BytesIO()
+    dropped = 0
+    with archive, zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as copy:
+        for info in archive.infolist():
+            data = archive.read(info)
+            if info.filename.lower().endswith(".3drep"):
+                data, n = _TEXTURE_ATTR.subn(b"", data)
+                dropped += n
+            copy.writestr(info, data)
+    if not dropped:
+        return None
+    out.seek(0)
+    return out
 
 
 def _tri_keys(vertices, faces, decimals):
