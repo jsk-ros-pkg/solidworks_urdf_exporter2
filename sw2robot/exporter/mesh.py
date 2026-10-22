@@ -377,6 +377,7 @@ def _save_3dxml(model_doc, out_path):
             print(f"    {os.path.basename(out_path)}: disambiguated {n} "
                   f"config variant(s) sharing a part name")
         os.replace(tmp, out_path)
+        _TEXTURES_OF[_texture_key(out_path)] = _texture_files(model_doc)
         return True
     # say WHY: a res=True but tiny file is the empty-envelope failure mode
     # (hollow/lightweight doc), distinct from SaveAs refusing outright
@@ -436,13 +437,62 @@ def _manifest_load(meshes_dir):
         return {}
 
 
-def _manifest_record(meshes_dir, mesh_path, source_path, config):
-    """Remember that ``mesh_path`` holds ``source_path`` @ ``config``."""
+# the image files each 3DXML's textures came from: :func:`_save_3dxml` notes them
+# (it has the document), :func:`_manifest_record` keeps them with their mtimes.
+# A texture appearance references its image by path and the 3DXML embeds a copy,
+# so an image changed on disk leaves the part file -- and the mtime gate --
+# untouched: the cached mesh kept the old image (a washer's retextured faces).
+_TEXTURES_OF = {}
+
+
+def _texture_key(path):
+    """The key a mesh's noted textures are kept under: the callers pass the
+    same file as an absolute (``_save_3dxml``) or a relative path."""
+    return os.path.normcase(os.path.abspath(path))
+
+
+def _texture_files(model_doc):
+    """The image files of the document's texture appearances (absolute
+    paths, sorted), read from ``GetRenderMaterials2``; best-effort: a COM
+    failure gives none."""
+    try:
+        ext = as_iface(model_doc, "IModelDoc2").Extension
+        mats = as_iface(ext, "IModelDocExtension").GetRenderMaterials2(1, None)
+    except Exception:
+        return []
+    out = set()
+    for mat in mats or ():
+        try:
+            name = getattr(mat, "TextureFilename", None)
+        except Exception:
+            name = None
+        if name:
+            out.add(os.path.abspath(str(name)))
+    return sorted(out)
+
+
+def _mtimes(paths):
+    out = {}
+    for p in paths:
+        try:
+            out[p] = os.path.getmtime(p)
+        except OSError:
+            out[p] = None
+    return out
+
+
+def _manifest_record(meshes_dir, mesh_path, source_path, config, textures=None):
+    """Remember that ``mesh_path`` holds ``source_path`` @ ``config``, and the
+    texture images it was made with (``textures``, or those
+    :func:`_save_3dxml` noted for it) with their mtimes."""
     if not meshes_dir:
         return
+    if textures is None:
+        textures = _TEXTURES_OF.pop(_texture_key(mesh_path), [])
     man = _manifest_load(meshes_dir)
     man[os.path.basename(mesh_path)] = {"source": str(source_path),
-                                        "config": config or None}
+                                        "config": config or None,
+                                        "textures": _mtimes(textures)}
     dst = os.path.join(meshes_dir, _CACHE_MANIFEST)
     try:
         tmp = dst + ".part"
@@ -465,6 +515,18 @@ def _cache_holds_config(meshes_dir, cand, config):
     if not isinstance(rec, dict):
         return False
     return (rec.get("config") or None) == (config or None)
+
+
+def _cache_textures_unchanged(meshes_dir, cand):
+    """Whether the texture images the cached ``cand`` was made with are all
+    still as they were (same mtime).  A record without them (an older
+    sw2robot's) is refused, as an unrecorded configuration is."""
+    if not meshes_dir:
+        return False
+    rec = _manifest_load(meshes_dir).get(os.path.basename(cand))
+    if not isinstance(rec, dict) or not isinstance(rec.get("textures"), dict):
+        return False
+    return _mtimes(rec["textures"]) == rec["textures"]
 
 
 def _refresh_mass_with_config(app, comp):
@@ -551,7 +613,8 @@ def export_meshes(app, doc, comps, meshes_dir, progress=None, by_path=None):
         # manifest can, so reuse only a mesh recorded as THIS config's
         for cand in (out, mesh_out_path(meshes_dir, comp.link_name, ".glb")):
             if _cache_is_fresh(cand, path) \
-                    and _cache_holds_config(meshes_dir, cand, cfg):
+                    and _cache_holds_config(meshes_dir, cand, cfg) \
+                    and _cache_textures_unchanged(meshes_dir, cand):
                 rel = os.path.join("meshes", os.path.basename(cand))
                 by_path[key] = rel
                 comp.mesh_file = rel
@@ -622,7 +685,8 @@ def export_part_mesh(md, comp, meshes_dir):
     # manifest is what tells the cached mesh's config apart (see _CACHE_MANIFEST)
     cfg = getattr(comp, "configuration", None) or active_config(md)
     if _cache_is_fresh(out, comp.part_path) \
-            and _cache_holds_config(meshes_dir, out, cfg):
+            and _cache_holds_config(meshes_dir, out, cfg) \
+            and _cache_textures_unchanged(meshes_dir, out):
         comp.mesh_file = os.path.join("meshes", os.path.basename(out))
         return 1
     ok = False
@@ -682,7 +746,8 @@ def export_subgraph_meshes(app, subgraphs, meshes_dir, by_path=None):
             # only a mesh the manifest records as THIS config may be reused
             for cand in (out, mesh_out_path(meshes_dir, base, ".glb")):
                 if _cache_is_fresh(cand, p) \
-                        and _cache_holds_config(meshes_dir, cand, cfg):
+                        and _cache_holds_config(meshes_dir, cand, cfg) \
+                        and _cache_textures_unchanged(meshes_dir, cand):
                     out, ok, reused = cand, True, True
                     break
             if not ok:
