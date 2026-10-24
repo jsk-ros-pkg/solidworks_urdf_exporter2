@@ -1270,19 +1270,20 @@ def _limit_joint_from_feature(sfi, name_set):
         return None
 
     ne = safe_call(mate2, "GetMateEntityCount") or 0
-    ents = []                                      # [(top_name, (etype,p,d,r))]
+    ents = []                              # [(top_name, full_name, geo)]
     for i in range(ne):
         me = as_iface(safe_call(mate2, "MateEntity", i), "IMateEntity2")
         rc = as_iface(safe_prop(me, "ReferenceComponent"), "IComponent2")
         rn = safe_prop(rc, "Name2") if rc else None
-        ents.append((_top_level(rn) if rn else None, _entity_geo(me)))
-    pair = list(dict.fromkeys(t for t, _ in ents if t in name_set))
+        ents.append((_top_level(rn) if rn else None, rn, _entity_geo(me)))
+    pair = list(dict.fromkeys(t for t, _, _ in ents if t in name_set))
     if len(pair) != 2:
         return None
-    geo_of = {}                                    # top component -> its entity geo
-    for top, geo in ents:
+    geo_of, owner_of = {}, {}              # top component -> its entity geo / part
+    for top, rn, geo in ents:
         if top in pair and geo is not None:
             geo_of.setdefault(top, geo)
+            owner_of.setdefault(top, rn)
     ga, gb = geo_of.get(pair[0]), geo_of.get(pair[1])
     if ga is None or gb is None:
         return None
@@ -1313,7 +1314,8 @@ def _limit_joint_from_feature(sfi, name_set):
     return {"a": pair[0], "b": pair[1], "type": jtype,
             "axis_point": [float(x) for x in pt],
             "axis_dir": [float(x) for x in axis],
-            "lower": lower, "upper": upper}
+            "lower": lower, "upper": upper,
+            "a_owner": owner_of.get(pair[0]), "b_owner": owner_of.get(pair[1])}
 
 
 def _limit_distance_travel(lo, hi, cur):
@@ -1781,6 +1783,64 @@ def _attach_limit_joint(adjacency, a, b, jtype, ax_pt, ax_dir, lower, upper):
         "axis": (ax_pt, ax_dir),
         "lower": float(lower), "upper": float(upper)}
     return rec
+
+
+def _limit_side(names, top, owner):
+    """The component a limit mate's side lands on once sub-assemblies are
+    expanded: ``top`` while it still exists, else the deepest expanded
+    component the side's ``owner`` (full Name2) lies in.  None when ``top``
+    was expanded and no owner was recorded (an older extract)."""
+    if top in names:
+        return top
+    if not owner:
+        return None
+    hits = [n for n in names if owner == n or owner.startswith(n + "/")]
+    return max(hits, key=len) if hits else None
+
+
+def _attach_limit_joints(comps, adjacency, specs):
+    """Attach limit-mate ``specs`` (see :func:`from_graph`) to the edges
+    between the components they land on, AFTER every expansion: a side whose
+    instance was expanded moves to the child that owns its mated face.
+    Returns how many were attached; a mate that cannot be placed is reported,
+    never dropped silently."""
+    names = {c.name for c in comps}
+    n = 0
+    for s in specs:
+        a = _limit_side(names, s["a"], s.get("a_owner"))
+        b = _limit_side(names, s["b"], s.get("b_owner"))
+        if a is None or b is None or a == b:
+            gone = [x for x, got in ((s["a"], a), (s["b"], b)) if got is None]
+            if gone and all(any(x == m or m.startswith(x + "/")
+                                for m in names) for x in gone):
+                print(f"      WARN: limit mate {s['a']!r} <-> {s['b']!r} not "
+                      f"applied: {', '.join(map(repr, gone))} was expanded "
+                      f"and this graph.json does not record which part the "
+                      f"mate holds -- re-extract to apply it")
+            continue
+        _attach_limit_joint(adjacency, a, b, s["type"],
+                            np.asarray(s["axis_point"], float),
+                            np.asarray(s["axis_dir"], float),
+                            s["lower"], s["upper"])
+        n += 1
+    return n
+
+
+def _limit_spec(lj, prefix="", T=None):
+    """A LimitJoint as a :func:`_attach_limit_joints` spec, its names under
+    ``prefix`` (an expanded instance) and its geometry mapped through ``T``."""
+    pt = np.asarray(lj.axis_point, float)
+    d = np.asarray(lj.axis_dir, float)
+    if T is not None:
+        pt = T[:3, :3] @ pt + T[:3, 3]
+        d = T[:3, :3] @ d
+    a_owner = getattr(lj, "a_owner", None)
+    b_owner = getattr(lj, "b_owner", None)
+    return {"a": prefix + lj.a, "b": prefix + lj.b, "type": lj.type,
+            "axis_point": pt, "axis_dir": d,
+            "lower": lj.lower, "upper": lj.upper,
+            "a_owner": prefix + a_owner if a_owner else None,
+            "b_owner": prefix + b_owner if b_owner else None}
 
 
 def _axis_translation_is_free(rel, d, tol=1e-4):
@@ -4068,9 +4128,9 @@ def from_graph(graph, exclude=None, expand=None, no_expand=None,
                force_no_expand=None, use_limit_joints=True):
     """GraphState -> (comps, adjacency, ground), applying ``exclude`` and
     expanding sub-assemblies whose internals move (see
-    :func:`_expand_subassemblies`).  ``use_limit_joints`` carries the limit
-    mates inside an expanded sub-assembly onto its edges; the top-level ones
-    are applied by :func:`build_model`."""
+    :func:`_expand_subassemblies`).  ``use_limit_joints`` turns the
+    LimitDistance/LimitAngle mates -- top-level and inside expanded
+    sub-assemblies -- into the slider/hinge on their edge."""
     exclude = [e.lower() for e in (exclude or [])]
     hidden = set(getattr(graph, "hidden", None) or [])
     if hidden:
@@ -4101,10 +4161,11 @@ def from_graph(graph, exclude=None, expand=None, no_expand=None,
         adjacency[frozenset((e.a, e.b))] = _edge_rec(e)
     ground = {g for g in graph.ground if g in names}
     _snap_unsolved_mates(comps, adjacency)
+    limit_specs = []
     comps, adjacency, ground = _expand_subassemblies(
         graph, comps, adjacency, ground, expand=expand, no_expand=no_expand,
         force_no_expand=force_no_expand, min_radius=strict_min_radius_cfg,
-        use_limit_joints=use_limit_joints)
+        use_limit_joints=use_limit_joints, limit_specs=limit_specs)
     if exclude:
         # Apply `exclude` AGAIN after expansion: the filter at the top of this
         # function only sees top-level graph.components, so a part excluded from
@@ -4118,6 +4179,17 @@ def from_graph(graph, exclude=None, expand=None, no_expand=None,
         adjacency = {k: v for k, v in adjacency.items()
                      if all(n in keep for n in k)}
         ground = {g for g in ground if g in keep}
+    # SolidWorks LimitDistance/LimitAngle mates ARE the assembly's real DOFs:
+    # promote their edges to prismatic/revolute with the CAD axis + travel,
+    # overriding the (over-constrained) geometric classification.  Only now,
+    # after every expansion, is it known which part each side landed on.
+    if use_limit_joints:
+        limit_specs = [_limit_spec(lj) for lj in
+                       getattr(graph, "limit_joints", None) or []] + limit_specs
+        n_lim = _attach_limit_joints(comps, adjacency, limit_specs)
+        if n_lim:
+            print(f"      limit-mate joints: {n_lim} "
+                  f"(SolidWorks sliders/hinges)")
     return comps, adjacency, ground
 
 
@@ -4178,7 +4250,7 @@ def _subgraph_is_movable(sub, subs, _seen=None, min_radius=None,
 
 
 def _expand_one(inst, sub, comps, adjacency, ground, deep=None, hidden=None,
-                min_radius=None, use_limit_joints=True):
+                min_radius=None, use_limit_joints=True, limit_specs=None):
     T = inst.world
     deep = deep or {}
     hidden = hidden or set()
@@ -4252,18 +4324,17 @@ def _expand_one(inst, sub, comps, adjacency, ground, deep=None, hidden=None,
         adjacency[frozenset((name_map[e.a], name_map[e.b]))] = rec
 
     # limit mates authored inside the sub-assembly: same sub-frame -> world
-    # mapping as its edges, so the slide/hinge axis follows a flexible pose
+    # mapping as its edges, so the slide/hinge axis follows a flexible pose.
+    # Collected, not attached: a side may sit in a nested sub-assembly that
+    # is expanded later (see from_graph)
     n_lim = 0
     sub_limits = getattr(sub, "limit_joints", None) or []
     for lj in (sub_limits if use_limit_joints else []):
         if lj.a not in name_map or lj.b not in name_map:
             continue
-        M = sub_to_world(lj.a, lj.b)
-        _attach_limit_joint(
-            adjacency, name_map[lj.a], name_map[lj.b], lj.type,
-            M[:3, :3] @ np.asarray(lj.axis_point, float) + M[:3, 3],
-            M[:3, :3] @ np.asarray(lj.axis_dir, float),
-            lj.lower, lj.upper)
+        if limit_specs is not None:
+            limit_specs.append(_limit_spec(lj, inst.name + "/",
+                                           sub_to_world(lj.a, lj.b)))
         n_lim += 1
     if n_lim:
         print(f"        {n_lim} limit-mate joint(s) inside "
@@ -4346,8 +4417,9 @@ def _expand_one(inst, sub, comps, adjacency, ground, deep=None, hidden=None,
 def _expand_subassemblies(graph, comps, adjacency, ground,
                           expand=None, no_expand=None,
                           force_no_expand=None, min_radius=None,
-                          use_limit_joints=True):
-    """Expand instances whose internals move.
+                          use_limit_joints=True, limit_specs=None):
+    """Expand instances whose internals move.  The limit mates inside them
+    are appended to ``limit_specs`` for :func:`from_graph` to attach.
 
     ``expand``/``no_expand`` are case-insensitive substring overrides from the
     joint config. ``force_no_expand`` is an exact-name hold list used by
@@ -4387,7 +4459,7 @@ def _expand_subassemblies(graph, comps, adjacency, ground,
         comps, adjacency, ground = _expand_one(
             inst, subs[inst.part_path], comps, adjacency, ground,
             deep=deep, hidden=hidden, min_radius=min_radius,
-            use_limit_joints=use_limit_joints)
+            use_limit_joints=use_limit_joints, limit_specs=limit_specs)
 
 
 # ====================================================================
@@ -4614,8 +4686,8 @@ def build_model(graph, robot_name=None, base_hint=None, config=None,
                               + ", ".join(repr(x) for x in overridden))
 
     # SolidWorks LimitDistance/LimitAngle mates ARE the assembly's real DOFs
-    # (see below).  On by default; `use_limit_joints: false` falls back to pure
-    # geometry, for the mates inside sub-assemblies too.
+    # (see from_graph).  On by default; `use_limit_joints: false` falls back to
+    # pure geometry, for the mates inside sub-assemblies too.
     use_limit_joints = config is None or config.get("use_limit_joints", True)
 
     # `strict_min_radius:` (metres) moves the fastener/bearing cut-off that
@@ -4638,23 +4710,6 @@ def build_model(graph, robot_name=None, base_hint=None, config=None,
 
     if sw2_compat and sw2cfg is not None:
         _apply_sw2urdf_inertials(comps, sw2cfg)
-
-    # Promote those edges to prismatic/revolute with the CAD axis + travel
-    # limits, overriding the (over-constrained) geometric classification.  The
-    # ones inside an expanded sub-assembly were attached during expansion.
-    if use_limit_joints:
-        comp_names = {c.name for c in comps}
-        n_lim = 0
-        for lj in getattr(graph, "limit_joints", None) or []:
-            if lj.a not in comp_names or lj.b not in comp_names:
-                continue
-            _attach_limit_joint(adjacency, lj.a, lj.b, lj.type,
-                                np.asarray(lj.axis_point, float),
-                                np.asarray(lj.axis_dir, float),
-                                lj.lower, lj.upper)
-            n_lim += 1
-        if n_lim:
-            print(f"      limit-mate joints: {n_lim} (SolidWorks sliders/hinges)")
 
     # Standard hardware (screws/nuts/washers/pins) welds RIGIDLY to whatever it
     # fastens: tag it so its concentric-into-tapped-hole mate is never read as a
