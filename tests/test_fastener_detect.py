@@ -34,6 +34,14 @@ CASES = [
     # NejiNeji connector parts merely CONTAIN 'screw' -- not fasteners
     ("Connector", "screwlock_male_hard_jointbase_v4", False),
     ("Connector", "ScrewRing_F", False),
+    # the driven screw of a linear axis turns in its bearings -- a real motion
+    ("LinearModule", "Screw_Rod", False),
+    ("Axis", "LeadScrew_T8x8", False),
+    ("Axis", "ball_screw_SFU1204", False),
+    ("Axis", "ball_screw_nut", False),
+    ("Axis", "ボールねじ_12", False),
+    ("Axis", "lead_screw_M8x300", False),
+    ("BallScrew", "M3x6", True),          # the bolts kept beside it still weld
 ]
 
 

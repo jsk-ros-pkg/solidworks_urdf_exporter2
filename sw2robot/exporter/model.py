@@ -98,6 +98,15 @@ _FASTENER_FOLDER_BARE = re.compile(r"(?i)^(?:fs[\s_-]*)?m\d+(?:[\s_-]\w+)*$")
 # Require the WHOLE token to be M<digits>, so longer codes that merely START
 # with M ("MB080xxxxxxDNx00", "MRA080BC055DSE00", "MAGNET") are left alone.
 _FASTENER_THREAD_TOKEN = re.compile(r"(?i)(?:^|[\s_-])m\d+(?:\.\d+)?(?=[\s_-]|$)")
+# A lead / ball / feed screw is the DRIVEN shaft of a linear axis, not
+# hardware: it spins in its bearings and that rotation is a real motion.  The
+# bare 'screw' noun (and its M8x300-style size) would weld it, so these
+# compound names in the PART name veto the match.  Not the folder: a library
+# folder named "BallScrew" may still hold the bolts that mount it.
+_MOTION_SCREW = re.compile(
+    r"(?i)(?:lead|ball|feed|trapezoidal|acme)[\s_-]*screw|"
+    r"screw[\s_-]*(?:rod|shaft|spindle)|"
+    r"送りねじ|送りネジ|ボールねじ|ボールネジ|台形ねじ|リードスクリュー")
 
 
 def is_fastener_part(name, part_path, extra=None, keep=None):
@@ -120,6 +129,8 @@ def is_fastener_part(name, part_path, extra=None, keep=None):
         return False
     if extra and any(e.lower() in low for e in extra):
         return True
+    if _MOTION_SCREW.search(hay_name):
+        return False
     if (_FASTENER_WORD.search(hay) or _FASTENER_SIZE.search(hay)
             or _FASTENER_THREAD_TOKEN.search(hay_name)):
         return True
