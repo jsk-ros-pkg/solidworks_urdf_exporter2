@@ -405,6 +405,11 @@ class Component:
     # standard hardware (screw/bolt/nut/washer/pin): weld it FIXED to whatever it
     # fastens and never let it be a tree parent -- see is_fastener_part
     is_fastener: bool = False
+    # a child of an EXPANDED sub-assembly that is fixed to that sub-assembly's
+    # own frame (Fix, or mated to its origin): the part the rest of the unit
+    # moves relative to.  When the unit has no mates outside, the tree hangs it
+    # from here -- not from whichever child sits nearest -- see _expand_one
+    sub_anchor: bool = False
     # mass-only: emit <inertial> but no <visual>/<collision>, and lump the
     # inertial into the fixed parent on export (config `mass_only:` / the editor)
     mass_only: bool = False
@@ -2383,7 +2388,12 @@ def _auto_parent_map(comps, adjacency, base):
             # attach the leftover with the SHALLOWEST twin nearest-component, so
             # once it lands everything below it mirrors in tree order.  Distance
             # to base breaks ties and orders true islands with no twin.
-            root = min(rem, key=lambda r: (_twin_depth(r), dist2(r)))
+            # Within an expanded sub-assembly that has no outside mates, start
+            # from the child fixed to its frame: hanging the unit from a MOVING
+            # child (the arm of a hinge) inverts the joint in the world.
+            root = min(rem, key=lambda r: (_twin_depth(r),
+                                           not by_name[r].sub_anchor,
+                                           dist2(r)))
             if _twin_depth(root) < (1 << 30):
                 rpos = by_name[root].world[:3, 3]
                 host = min(visited,
@@ -4207,7 +4217,8 @@ def _expand_one(inst, sub, comps, adjacency, ground, deep=None, hidden=None,
             sw_mass=cs.sw_mass, sw_com=cs.sw_com, sw_inertia=cs.sw_inertia,
             sw_mass_overridden=getattr(cs, "sw_mass_overridden", False),
             mass_inherited_from=getattr(cs, "mass_inherited_from", None),
-            mass_target=getattr(cs, "mass_target", None)))
+            mass_target=getattr(cs, "mass_target", None),
+            sub_anchor=bool(cs.fixed) or cs.name in sub.ground))
         name_map[cs.name] = gname
         local_of[cs.name] = local
         world_of[cs.name] = world
@@ -4324,8 +4335,11 @@ def _expand_one(inst, sub, comps, adjacency, ground, deep=None, hidden=None,
 
     comps = [c for c in comps if c.name != inst.name] + children
     if inst.name in ground:
+        # the instance was grounded as a whole; what stays put inside it is
+        # the child fixed to its frame, which need not be the nearest one
         ground.discard(inst.name)
-        ground.add(nearest_child(inst.world[:3, 3]))
+        anchors = [c.name for c in children if c.sub_anchor]
+        ground.update(anchors or [nearest_child(inst.world[:3, 3])])
     return comps, adjacency, ground
 
 
