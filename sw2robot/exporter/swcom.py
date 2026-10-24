@@ -64,6 +64,32 @@ def _win_path_key(path):
     return ntpath.normcase(ntpath.normpath(path))
 
 
+def _local_file(folder, name):
+    """Path of the file ``name`` in ``folder`` or one of its direct
+    sub-folders (case-insensitive), or None."""
+    want = name.lower()
+    try:
+        entries = sorted(os.listdir(folder))
+    except OSError:
+        return None
+    subdirs = []
+    for e in entries:
+        p = os.path.join(folder, e)
+        if e.lower() == want and os.path.isfile(p):
+            return p
+        if os.path.isdir(p):
+            subdirs.append(p)
+    for d in subdirs:
+        try:
+            for e in sorted(os.listdir(d)):
+                p = os.path.join(d, e)
+                if e.lower() == want and os.path.isfile(p):
+                    return p
+        except OSError:
+            continue
+    return None
+
+
 def _registered_typelib_versions(libid):
     """(major, minor) versions registered for ``libid``, newest first.
 
@@ -316,6 +342,27 @@ class SolidWorksUnavailable(RuntimeError):
     restored."""
 
 
+class NamesakeOpenError(RuntimeError):
+    """The session already holds a file NAMED like one this assembly uses, but
+    from another folder.  SolidWorks keeps one document per file name and
+    resolves every reference to an in-memory match before looking on disk, so
+    extracting here would silently read the other folder's geometry and mass,
+    and no option of the session changes that.  ``conflicts`` is
+    ``[(path open in the session, the assembly's own file), ...]``."""
+
+    def __init__(self, conflicts):
+        self.conflicts = list(conflicts)
+        shown = "; ".join(f"{o} is open, the assembly uses {r}"
+                          for o, r in self.conflicts[:3])
+        more = len(self.conflicts) - 3
+        super().__init__(
+            "SolidWorks already has a same-named file from another folder "
+            f"open ({shown}" + (f"; +{more} more" if more > 0 else "")
+            + "). SolidWorks would use that file instead of the assembly's "
+            "own. Close the document that holds it, or extract with "
+            "SolidWorks closed, then retry.")
+
+
 class SolidWorksTypelibError(SolidWorksUnavailable):
     """The SolidWorks API type library could not be loaded for the installed
     version.  The version is auto-detected, but this build is only verified
@@ -548,6 +595,10 @@ class SolidWorks:
                     self._reused_titles.add(str(title))
                 doc = existing
         t1 = t0
+        if doc is None and doc_type_for(path) == SW_DOC_ASSEMBLY:
+            conflicts = self._namesake_conflicts(path)
+            if conflicts:
+                raise NamesakeOpenError(conflicts)
         if doc is None:
             # A temp copy loses SolidWorks' "same folder as the assembly"
             # reference-resolution rule; assemblies whose STORED part paths are
@@ -802,6 +853,19 @@ class SolidWorks:
         when SolidWorks reports no path for a document."""
         want_path = _win_path_key(path)
         want = os.path.splitext(ntpath.basename(path))[0].lower()
+        for d in self._session_docs():
+            doc_path = safe_prop(d, "GetPathName")
+            if doc_path:
+                if _win_path_key(str(doc_path)) == want_path:
+                    return d
+                continue
+            title = safe_prop(d, "GetTitle") or ""
+            if os.path.splitext(str(title))[0].lower() == want:
+                return d
+        return None
+
+    def _session_docs(self):
+        """Every ModelDoc2 open in this SolidWorks session."""
         docs = safe_call(self.app, "GetDocuments")
         if docs is None:
             # fall back to the linked-list walk on versions without GetDocuments
@@ -812,16 +876,63 @@ class SolidWorks:
                 docs.append(d)
                 d = safe_call(d, "GetNext")
                 seen += 1
-        for d in (docs or []):
-            doc_path = safe_prop(d, "GetPathName")
-            if doc_path:
-                if _win_path_key(str(doc_path)) == want_path:
-                    return d
+        return list(docs or [])
+
+    def _session_files(self):
+        """``{file name (lower): {path, ...}}`` of every file this session
+        holds in memory: the open documents AND every component of the open
+        assemblies.  A component loaded lightweight has no document of its
+        own (GetDocuments omits it), yet SolidWorks still resolves a
+        same-named reference to it."""
+        out = {}
+
+        def add(p):
+            if p:
+                out.setdefault(ntpath.basename(str(p)).lower(),
+                               set()).add(str(p))
+
+        for d in self._session_docs():
+            add(safe_prop(d, "GetPathName"))
+            # a part has no components: GetComponents fails -> None -> []
+            asm = as_iface(d, "IAssemblyDoc")
+            for c in list(safe_call(asm, "GetComponents", False) or []):
+                add(safe_prop(as_iface(c, "IComponent2"), "GetPathName"))
+        return out
+
+    def _namesake_conflicts(self, path):
+        """``[(path in the session, the assembly's own file), ...]`` for files
+        this session holds (see :meth:`_session_files`) that share a name with
+        a file the assembly at ``path`` uses but are not that file.
+
+        The assembly's own file is the same-named file in its folder (or a
+        direct sub-folder), else the path its dependency records give.  Those
+        records alone cannot decide: once a namesake is in memory,
+        ``GetDocumentDependencies2`` reports the in-memory path."""
+        held = self._session_files()
+        if not held:
+            return []
+        try:
+            deps = list(self.app.GetDocumentDependencies2(
+                path, True, False, False) or [])
+        except Exception as e:
+            print(f"      WARN: GetDocumentDependencies2 failed ({e!r}); "
+                  f"cannot check for same-named files already open")
+            return []
+        out = []
+        for ref in dict.fromkeys(str(r) for r in deps[1::2] if r):
+            name = ntpath.basename(ref)
+            open_paths = held.get(name.lower())
+            if not open_paths:
                 continue
-            title = safe_prop(d, "GetTitle") or ""
-            if os.path.splitext(str(title))[0].lower() == want:
-                return d
-        return None
+            own = _local_file(ntpath.dirname(path), name)
+            if own is None and os.path.isfile(ref):
+                own = ref
+            if own is None:
+                continue                  # nothing on disk to compare with
+            for o in sorted(open_paths):
+                if _win_path_key(o) != _win_path_key(own):
+                    out.append((o, own))
+        return out
 
     def close_doc(self, doc):
         title = safe_prop(doc, "GetTitle")
