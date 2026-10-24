@@ -54,12 +54,16 @@ def _session(monkeypatch, pid, running):
     return SolidWorks(visible=False), app
 
 
-def test_shared_process_is_left_running_and_visible(monkeypatch):
+def test_shared_process_is_left_running_and_visible(monkeypatch, tmp_path):
     sw, app = _session(monkeypatch, pid=100, running={100})
     assert app.Visible is True                 # not hidden from its owner
+    copies = tmp_path / "sw2urdf_copies"
+    copies.mkdir()
+    sw._tempdirs.append(str(copies))
     sw.shutdown()
     assert "ExitApp" not in app.calls
     assert "CloseAllDocuments" not in app.calls
+    assert not copies.exists()                 # our temp copies still go
 
 
 def test_own_new_process_is_shut_down(monkeypatch):

@@ -1020,20 +1020,21 @@ class SolidWorks:
             for doc in list(getattr(self, "_open_docs", [])):
                 self.close_doc(doc)
             self._open_docs = []
-            self.app = None
-            return
-        try:
-            # True == include unsaved; we opened read-only so nothing is dirty,
-            # but this guarantees no save prompt blocks the headless run.
-            self.app.CloseAllDocuments(True)
-        except Exception:
-            pass
-        try:
-            self.app.ExitApp()
-        except Exception:
-            pass
+        else:
+            try:
+                # True == include unsaved; we opened read-only so nothing is
+                # dirty, but this guarantees no save prompt blocks the run.
+                self.app.CloseAllDocuments(True)
+            except Exception:
+                pass
+            try:
+                self.app.ExitApp()
+            except Exception:
+                pass
         self.app = None
-        for d in self._tempdirs:
+        # a part a copy pulled in may stay loaded in a session we do not own,
+        # keeping its file locked -- whatever cannot be removed is left
+        for d in getattr(self, "_tempdirs", []):
             shutil.rmtree(d, ignore_errors=True)
         self._tempdirs = []
 
