@@ -104,6 +104,19 @@ This is not busywork: a working demo is the clearest evidence that the change
 does what the description says. PRs that alter the UI without a demo will be sent
 back with a request for one before review.
 
+### UI text and display languages
+
+Every UI string is a key in `sw2robot/editor/web/i18n.js`, with its English and
+Japanese text inline. Other languages each have their own file,
+`i18n.<code>.js` (Simplified Chinese: `i18n.zh-CN.js`). When you add or change a
+string, update every language file too. `tests/test_i18n_catalog.py` fails on a
+key a language lacks, or on a template that reads different arguments than the
+English one.
+
+To add a language: copy `i18n.zh-CN.js` to `i18n.<code>.js` and translate it.
+Then add the language to `LANGS` in `i18n.js`, and load the file in
+`index.html` before `i18n.js`.
+
 ## AI usage policy
 
 sw2robot is not anti-AI. Maintainers use AI tooling too. We care about the

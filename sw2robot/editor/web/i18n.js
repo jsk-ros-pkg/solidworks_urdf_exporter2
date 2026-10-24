@@ -1,4 +1,4 @@
-  // ---- i18n: DISPLAY language only (EN / 日本語).  NOTE: this never touches
+  // ---- i18n: DISPLAY language only (see LANGS below).  NOTE: this never touches
   // any filesystem path, package name, or Google-Drive "shared drives" mount
   // name -- those are real on-disk identifiers (they carry the SolidWorks
   // paths) and are resolved server-side; we only translate UI chrome. --------
@@ -1041,17 +1041,36 @@
                  ja: 'left-drag: 視点回転 · right-drag: pan · wheel: zoom · クリックでリンク選択 · 関節はパネルのスライダーで操作（🖐 pose ON でリンクをドラッグして関節を動かせます）' },
   };
 
+  // Display languages, in language-bar order.  English and Japanese live
+  // inline in I18N above; every other language is its own file,
+  // i18n.<code>.js, loaded BEFORE this one, that fills
+  // window.SW2_I18N[<code>] with { key: string | (args => string) }.  A key a
+  // language lacks falls back to English; tests/test_i18n_catalog.py keeps
+  // each file complete.  `match` picks the language from the browser's.
+  const LANGS = [
+    { code: 'en', label: 'EN', match: /^en\b/i },
+    { code: 'ja', label: '日本語', match: /^ja\b/i },
+    { code: 'zh-CN', label: '简体中文', match: /^zh\b/i },
+  ];
+  const EXTRA = window.SW2_I18N || {};
+  const isLang = code => LANGS.some(l => l.code === code);
+
   function detectLang() {
-    // ?lang=ja|en wins (deep-linking / deterministic tests) and is remembered;
-    // otherwise a saved choice, otherwise the browser's UI language.
+    // ?lang=<code> wins (deep-linking / deterministic tests) and is
+    // remembered; otherwise a saved choice, otherwise the first of the
+    // browser's preferred languages we have.
     const q = new URLSearchParams(location.search).get('lang');
-    if (q === 'ja' || q === 'en') {
+    if (isLang(q)) {
       localStorage.setItem('sw2robot.lang', q);
       return q;
     }
     const saved = localStorage.getItem('sw2robot.lang');
-    if (saved === 'ja' || saved === 'en') { return saved; }
-    return (navigator.language || '').toLowerCase().startsWith('ja') ? 'ja' : 'en';
+    if (isLang(saved)) { return saved; }
+    for (const pref of navigator.languages || [navigator.language || '']) {
+      const hit = LANGS.find(l => l.match.test(pref));
+      if (hit) { return hit.code; }
+    }
+    return 'en';
   }
   window.__lang = detectLang();
   document.documentElement.lang = window.__lang;
@@ -1061,7 +1080,8 @@
   function t(key, args) {
     const entry = I18N[key];
     if (!entry) { return key; }
-    const v = entry[window.__lang] ?? entry.en ?? key;
+    const v = EXTRA[window.__lang]?.[key] ?? entry[window.__lang] ?? entry.en
+      ?? key;
     return typeof v === 'function' ? v(args ?? {}) : v;
   }
   window.t = t;
@@ -1080,8 +1100,18 @@
   }
   window.applyStaticI18n = applyStaticI18n;
 
+  // one button per language; boot.js marks the active one, diagnostics.js
+  // wires the clicks
+  document.getElementById('langbar')?.replaceChildren(...LANGS.map(l => {
+    const b = document.createElement('button');
+    b.dataset.lang = l.code;
+    b.textContent = l.label;
+    b.style.cssText = 'font-size:11px;padding:1px 7px';
+    return b;
+  }));
+
   function setLang(lang) {
-    if (lang !== 'ja' && lang !== 'en') { return; }
+    if (!isLang(lang)) { return; }
     window.__lang = lang;
     localStorage.setItem('sw2robot.lang', lang);
     document.documentElement.lang = lang;
