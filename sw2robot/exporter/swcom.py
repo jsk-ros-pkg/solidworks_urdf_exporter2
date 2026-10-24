@@ -5,13 +5,14 @@ KEY FACTS about this machine (discovered empirically):
 * The user's running SolidWorks does NOT register itself in the COM Running
   Object Table, so ``win32com.client.GetActiveObject("SldWorks.Application")``
   fails with ``MK_E_UNAVAILABLE`` and we cannot attach to the live session.
-* ``Dispatch("SldWorks.Application")`` usually spawns a *new* SolidWorks
-  process, which this module then OWNS and shuts down (``ExitApp``) so it never
-  leaks empty instances.  But while a COM-launched SolidWorks is running
-  (``sldworks.exe -Embedding``, e.g. one another tool started) Dispatch hands
-  back THAT process.  Ownership is therefore decided by process id: a session
-  that got an already-running process never closes its documents, hides it or
-  quits it (see ``SolidWorks.__init__``).
+* ``Dispatch("SldWorks.Application")`` spawns a *new* SolidWorks process only
+  when none is running; this module then OWNS it and shuts it down
+  (``ExitApp``) so it never leaks empty instances.  While ANY SolidWorks runs
+  -- started by the user from the Start menu or by another tool over COM --
+  Dispatch hands back THAT process (measured on SolidWorks 2024).  Ownership is
+  therefore decided by process id: a session that got an already-running
+  process works inside it like an attached one and never closes its
+  documents, hides it or quits it (see ``SolidWorks.__init__``).
 * We open the target file **read-only** and **never save** it, so the user's
   open document is never at risk.
 * The COM client must be an **x64** Python to match SolidWorks (the project is

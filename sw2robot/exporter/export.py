@@ -899,7 +899,10 @@ def main():
                          "of starting a hidden private instance; if the "
                          "assembly is already open there, the multi-minute "
                          "reopen is skipped entirely.  Errors out (no "
-                         "fallback) when no running SolidWorks is found")
+                         "fallback) when no running SolidWorks is found.  "
+                         "Without it, a SolidWorks that is already running "
+                         "is still used (SolidWorks hands it out instead of "
+                         "a new one), but left open and never quit")
     ap.add_argument("--configuration", default=None, metavar="NAME",
                     help="extract this ASSEMBLY configuration instead of the "
                          "file's saved-active one (configs can suppress whole "
