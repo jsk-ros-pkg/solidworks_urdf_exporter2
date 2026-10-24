@@ -2460,3 +2460,31 @@ def test_isolated_hinge_survives_global_solve():
            _edge_rec(_edge("x", "y", dup(conc(O, Z), coinc_planes(O, Z))))}
     parent_of, info = _auto_parent_map([A, B], adj, A)
     assert [v["type"] for v in info.values()] == ["revolute"]
+
+
+def test_unmated_subassembly_hangs_from_its_fixed_child():
+    """A hinge unit placed with Fix (no outside mates): the case fixed inside
+    the unit stays put and the arm turns, even when the ARM sits nearer the
+    origin -- hanging the unit from the arm would swing the case instead."""
+    hcase = _comp("HCase-1", "HCase_1", xyz=(0.3, 0, 0))
+    hcase.fixed = True
+    arm = _comp("Arm-1", "Arm_1", xyz=(-0.25, 0, 0))
+    hinge = [0.0, 0, 0]
+    sub = SubGraph(
+        components=[hcase, arm],
+        edges=[_edge("HCase-1", "Arm-1",
+                     dup(conc(hinge, Z), coinc_planes(hinge, Z)))],
+        ground=[])
+    base = _comp("base-1", "base_1", xyz=(0, 0, -0.5))
+    base.fixed = True
+    inst = _comp("Hinge-1", "Hinge_1", sub=True, path="X:/fake/hinge.SLDASM")
+    inst.fixed = True
+    graph = GraphState(robot_name="t", source_assembly="t.SLDASM",
+                       components=[base, inst], edges=[], ground=["base-1"],
+                       subassemblies={"X:/fake/hinge.SLDASM": sub})
+    model = build_model(graph, base_hint="base_1")
+    by_child = {j.child: j for j in model.joints}
+    assert by_child["Hinge_1__HCase_1"].parent == "base_1"
+    assert by_child["Hinge_1__HCase_1"].jtype == "fixed"
+    assert by_child["Hinge_1__Arm_1"].parent == "Hinge_1__HCase_1"
+    assert by_child["Hinge_1__Arm_1"].jtype == "revolute"
