@@ -111,6 +111,12 @@ class LimitJoint(BaseModel):
     axis_dir: list[float]
     lower: float
     upper: float
+    # full Name2 of the component each side's mated entity belongs to
+    # ("Module-1/Slider-1" under top-level ``a`` = "Module-1").  When ``a`` is
+    # a sub-assembly the build expands, this says which child the joint moves.
+    # None on older extracts.
+    a_owner: str | None = None
+    b_owner: str | None = None
 
 
 class CoordinateSystemState(BaseModel):

@@ -227,3 +227,70 @@ def test_limit_distance_with_positive_minimum_stays_on_its_side():
 
     lo, hi = _limit_distance_travel(0.02, 0.1, 0.05)
     assert abs(lo - (-0.03)) < 1e-12 and abs(hi - 0.05) < 1e-12
+
+
+def _top_level_limit_on_expanded_graph(owner):
+    """The same module, but its slide is a TOP-level limit mate from the base
+    to the module's slider.  The side ``a`` is recorded as the instance
+    ("module-1"); ``owner`` says which part inside it holds the mated face."""
+    graph = _sub_slider_graph()
+    sub = graph.subassemblies["module.SLDASM"]
+    sub.edges = []
+    sub.limit_joints = []
+    graph.limit_joints = [LimitJoint(
+        a="module-1", b="base", type="prismatic",
+        axis_point=[0.2, 0.05, 0], axis_dir=[-1, 0, 0],
+        lower=-0.05, upper=0.15, a_owner=owner, b_owner="base")]
+    return graph
+
+
+def test_top_level_limit_mate_follows_its_part_into_an_expanded_instance():
+    graph = GraphState.model_validate_json(
+        _top_level_limit_on_expanded_graph("module-1/slider-1")
+        .model_dump_json())
+    model = build_model(graph, config={"expand": ["module"]})
+    j = next(j for j in model.joints if j.child == "module_1__slider_1")
+    assert j.jtype == "prismatic"
+    assert abs(j.lower - (-0.05)) < 1e-9 and abs(j.upper - 0.15) < 1e-9
+
+
+def test_top_level_limit_mate_without_owner_is_reported(capsys):
+    """An older graph.json has no owner: the mate cannot be placed on a child,
+    and the build says so instead of dropping it silently."""
+    model = build_model(_top_level_limit_on_expanded_graph(None),
+                        config={"expand": ["module"]})
+    assert not any(j.jtype == "prismatic" for j in model.joints)
+    assert "limit mate 'module-1' <-> 'base' not applied" in capsys.readouterr().out
+
+
+def test_limit_mate_on_a_nested_subassembly_reaches_its_part():
+    """outer.SLDASM holds frame-1 and an inner.SLDASM instance; outer's limit
+    mate slides inner's slider along frame.  Once inner expands too, the
+    joint must land on inner's slider, not vanish with the inner instance."""
+    inner = SubGraph(components=[_comp("case-1"),
+                                 _comp("slider-1", (0, 0.05, 0))],
+                     ground=["case-1"])
+    inner_inst = _comp("inner-1")
+    inner_inst.is_subassembly = True
+    inner_inst.part_path = "inner.SLDASM"
+    outer = SubGraph(
+        components=[_comp("frame-1"), inner_inst], ground=["frame-1"],
+        limit_joints=[LimitJoint(
+            a="inner-1", b="frame-1", type="prismatic",
+            axis_point=[0, 0.05, 0], axis_dir=[0, 1, 0],
+            lower=-0.02, upper=0.08,
+            a_owner="inner-1/slider-1", b_owner="frame-1")])
+    base = _comp("base")
+    base.fixed = True
+    outer_inst = _comp("outer-1")
+    outer_inst.is_subassembly = True
+    outer_inst.part_path = "outer.SLDASM"
+    graph = GraphState(
+        robot_name="t", source_assembly="t.SLDASM",
+        components=[base, outer_inst], ground=["base"],
+        subassemblies={"outer.SLDASM": outer, "inner.SLDASM": inner})
+    model = build_model(graph, config={"expand": ["inner"]})
+    j = next(j for j in model.joints
+             if j.child == "outer_1__inner_1__slider_1")
+    assert j.jtype == "prismatic"
+    assert abs(j.lower - (-0.02)) < 1e-9 and abs(j.upper - 0.08) < 1e-9
