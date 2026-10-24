@@ -62,6 +62,27 @@ const logText = await page.evaluate(() =>
 check('load: camera fitted', logText.includes('カメラを調整しました'));
 check('load: no page errors', pageErrors.length === 0, pageErrors[0] ?? '');
 
+// language bar: one button per language; switching re-labels the static
+// chrome from that language's catalogue, and switching back restores it
+const langs = await page.evaluate(() =>
+  [...document.querySelectorAll('#langbar button')].map(b => b.dataset.lang));
+check('lang: one button per language', langs.join(',') === 'en,ja,zh-CN',
+      langs.join(','));
+const switched = await page.evaluate(() => {
+  const bar = document.getElementById('langbar');
+  const click = code => bar.querySelector(`button[data-lang="${code}"]`).click();
+  click('zh-CN');
+  const zh = { lang: document.documentElement.lang, title: bar.title,
+               active: bar.querySelector('button.active')?.dataset.lang };
+  click('ja');
+  return { zh, ja: { lang: document.documentElement.lang, title: bar.title } };
+});
+check('lang: switches to zh-CN', switched.zh.lang === 'zh-CN'
+      && switched.zh.active === 'zh-CN' && switched.zh.title === '显示语言',
+      JSON.stringify(switched.zh));
+check('lang: switches back to ja', switched.ja.lang === 'ja'
+      && switched.ja.title === '表示言語', JSON.stringify(switched.ja));
+
 const rootPose = async () =>
   await page.evaluate(async () => (await (await fetch('/api/root_pose')).json()));
 const origBase = (await rootPose()).base;

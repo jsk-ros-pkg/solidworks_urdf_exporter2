@@ -251,8 +251,7 @@
   <div id="panel">
     <div id="langbar" style="display:flex;gap:4px;justify-content:flex-end;
          margin-bottom:2px" data-i18n-title="lang.title" title="display language">
-      <button data-lang="en" style="font-size:11px;padding:1px 7px">EN</button>
-      <button data-lang="ja" style="font-size:11px;padding:1px 7px">日本語</button>
+      <!-- one button per language, made by i18n.js from its LANGS list -->
     </div>
     <!-- #title / #status carry dynamic text (package name, live status), so
          they are NOT data-i18n (that would reset them on a language switch);
@@ -617,6 +616,7 @@ the config and does NOT re-detect). Needs graph.json (CAD mode).">🔗 re-detect
 
 <!-- plain (non-module) script: runs even if ES-module loading breaks, so
      errors during CDN imports are always visible on the page -->
+<script src="i18n.zh-CN.js"></script>
 <script src="i18n.js"></script>
 <script src="boot.js"></script>
 
