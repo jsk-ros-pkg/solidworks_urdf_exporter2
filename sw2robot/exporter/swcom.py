@@ -18,6 +18,7 @@ KEY FACTS about this machine (discovered empirically):
 from __future__ import annotations
 
 import contextlib
+import ntpath
 import os
 import shutil
 import sys
@@ -54,6 +55,13 @@ _TYPELIBS = {
 _TESTED_MAJOR = 32                  # SolidWorks 2024 (year - 1992); the verified one
 _ISSUES_URL = "https://github.com/iory/sw2robot/issues"
 _sld_module = None
+
+
+def _win_path_key(path):
+    """``path`` normalised for comparing SolidWorks document paths: Windows
+    paths are case-insensitive and accept either separator.  ``ntpath`` so the
+    comparison is the same when this module is imported off Windows."""
+    return ntpath.normcase(ntpath.normpath(path))
 
 
 def _registered_typelib_versions(libid):
@@ -784,10 +792,16 @@ class SolidWorks:
             pass
 
     def _find_open_doc(self, path):
-        """An already-open ModelDoc2 whose title matches ``path``'s file name, or
-        None.  Lets a reused session extract from the user's resolved document
-        instead of opening a (possibly unresolvable) copy."""
-        want = os.path.splitext(os.path.basename(path))[0].lower()
+        """The already-open ModelDoc2 of the file at ``path``, or None.  Lets a
+        reused session extract from the user's resolved document instead of
+        opening a (possibly unresolvable) copy.
+
+        Matched on the document's full path: two folders often hold an
+        assembly of the same name (a Pack and Go, a variant, a backup), and a
+        title match would extract the OTHER one.  The title is compared only
+        when SolidWorks reports no path for a document."""
+        want_path = _win_path_key(path)
+        want = os.path.splitext(ntpath.basename(path))[0].lower()
         docs = safe_call(self.app, "GetDocuments")
         if docs is None:
             # fall back to the linked-list walk on versions without GetDocuments
@@ -799,11 +813,13 @@ class SolidWorks:
                 d = safe_call(d, "GetNext")
                 seen += 1
         for d in (docs or []):
-            try:
-                title = safe_prop(d, "GetTitle") or ""
-            except Exception:
+            doc_path = safe_prop(d, "GetPathName")
+            if doc_path:
+                if _win_path_key(str(doc_path)) == want_path:
+                    return d
                 continue
-            if os.path.splitext(title)[0].lower() == want:
+            title = safe_prop(d, "GetTitle") or ""
+            if os.path.splitext(str(title))[0].lower() == want:
                 return d
         return None
 
