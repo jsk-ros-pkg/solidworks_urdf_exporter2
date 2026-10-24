@@ -291,9 +291,11 @@ def _extract_into(sw, assembly_path, pkg_dir, meshes_dir, robot_name, _say,
 
     _say("reading sub-assembly internals ...")
     subassembly_coordinate_systems = {}
+    subassembly_limit_joints = {}
     subgraphs = extract_subgraphs(
         doc, comps, sw=sw, progress=_part,
         coordinate_systems_out=subassembly_coordinate_systems,
+        limit_joints_out=subassembly_limit_joints,
         part_coordinate_systems_out=frames_out,
         part_frames_scanned=part_frames_scanned)
 
@@ -368,6 +370,7 @@ def _extract_into(sw, assembly_path, pkg_dir, meshes_dir, robot_name, _say,
                            sw2urdf_config_xml=sw2urdf_config_xml,
                            subassembly_coordinate_systems=
                            subassembly_coordinate_systems,
+                           subassembly_limit_joints=subassembly_limit_joints,
                            part_coordinate_systems=part_coordinate_systems,
                            configuration=used_cfg, configurations=cfgs)
     graph.save(os.path.join(pkg_dir, GRAPH_FILE))

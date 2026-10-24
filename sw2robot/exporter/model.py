@@ -1740,6 +1740,33 @@ def _concentric_axis_of(rec):
     return None
 
 
+def _attach_limit_joint(adjacency, a, b, jtype, ax_pt, ax_dir, lower, upper):
+    """Mark the ``a``--``b`` edge as a limit-mate joint (see
+    :func:`extract_limit_joints`); ``a`` is the mate's reference component,
+    the one whose motion along +axis grows the mate distance/angle."""
+    rec = adjacency.setdefault(frozenset((a, b)),
+                               {"types": [], "axis": None, "mates": []})
+    if jtype == "revolute":
+        # a LimitAngle mate fixes the travel but its plane point is NOT on the
+        # rotation axis -- the hinge is the concentric/cylinder mate on the
+        # same pair.  Pivoting about the angle-plane point swings the part
+        # around an offset centre (the screen hinge was ~5 cm off); use the
+        # concentric axis line so it rotates in place.  Keep the limit's
+        # direction SIGN (lower/upper + ref are relative to it).
+        cax = _concentric_axis_of(rec)
+        if cax is not None:
+            cp, cd = cax
+            n = np.linalg.norm(ax_dir) or 1.0
+            if abs(float(cd @ (ax_dir / n))) > 0.99:
+                ax_pt = cp
+                ax_dir = cd if float(cd @ ax_dir) >= 0 else -cd
+    rec["limit_joint"] = {
+        "type": jtype, "ref": a,
+        "axis": (ax_pt, ax_dir),
+        "lower": float(lower), "upper": float(upper)}
+    return rec
+
+
 def _axis_translation_is_free(rel, d, tol=1e-4):
     """True if the relative-twist nullspace ``rel`` (6 x k: rows wx,wy,wz,
     vx,vy,vz) can realise a PURE translation along unit ``d`` (zero rotation).
@@ -3641,7 +3668,7 @@ def to_graph_state(comps, adjacency, ground, robot_name, source_assembly,
                    subassembly_coordinate_systems=None, reference_axes=None,
                    sw2urdf_marker=None, sw2urdf_config_xml=None,
                    part_coordinate_systems=None, configuration=None,
-                   configurations=None):
+                   configurations=None, subassembly_limit_joints=None):
     subs = {}
     for path, (scomps, sadj, sground) in (subassemblies or {}).items():
         subs[path] = SubGraph(components=_component_states(scomps),
@@ -3649,7 +3676,11 @@ def to_graph_state(comps, adjacency, ground, robot_name, source_assembly,
                               ground=sorted(sground),
                               coordinate_systems=list(
                                   (subassembly_coordinate_systems or {})
-                                  .get(path, [])))
+                                  .get(path, [])),
+                              limit_joints=[
+                                  LimitJoint(**j) for j in
+                                  (subassembly_limit_joints or {})
+                                  .get(path, [])])
     return GraphState(robot_name=robot_name, source_assembly=source_assembly,
                       components=_component_states(comps),
                       edges=_mate_edges(adjacency), ground=sorted(ground),
@@ -3700,7 +3731,8 @@ def capture_deep_worlds(doc):
 def extract_subgraphs(doc, comps, sw=None, progress=None,
                       coordinate_systems_out=None,
                       part_coordinate_systems_out=None,
-                      part_frames_scanned=None):
+                      part_frames_scanned=None,
+                      limit_joints_out=None):
     """{part_path: (comps, adjacency, ground)} for every unique sub-assembly
     appearing in ``comps``, RECURSIVELY (each sub-assembly's own internals in
     its own local frame).  Prefers the in-memory doc the parent resolved;
@@ -3708,7 +3740,9 @@ def extract_subgraphs(doc, comps, sw=None, progress=None,
     optional ``on_doc(path, md, subcomps)`` hook... (kept simple: caller may
     re-open for meshes via the returned part paths).  ``progress(link_name)`` is
     forwarded per child component (see :func:`extract_components`) so the load
-    indicator shows which part is being read."""
+    indicator shows which part is being read.  ``limit_joints_out``, when
+    given, receives ``{part_path: [limit joint spec, ...]}`` for the limit
+    mates authored inside each sub-assembly (see :func:`extract_limit_joints`)."""
     live = {}
     for c in list(safe_call(doc, "GetComponents", True) or []):
         ct = as_iface(c, "IComponent2")
@@ -3765,6 +3799,8 @@ def extract_subgraphs(doc, comps, sw=None, progress=None,
         if coordinate_systems_out is not None:
             coordinate_systems_out[path] = extract_coordinate_systems(
                 md, owners=True)
+        if limit_joints_out is not None:
+            limit_joints_out[path] = extract_limit_joints(md, subcomps)
         print(f"      sub-assembly {os.path.basename(path)}: "
               f"{len(subcomps)} children, {len(subadj)} internal mate pairs")
         live2 = {}
@@ -4008,10 +4044,12 @@ def _sw2urdf_merge_directed(sw2_directed, user_directed):
 
 def from_graph(graph, exclude=None, expand=None, no_expand=None,
                strict_min_radius_cfg=None,
-               force_no_expand=None):
+               force_no_expand=None, use_limit_joints=True):
     """GraphState -> (comps, adjacency, ground), applying ``exclude`` and
     expanding sub-assemblies whose internals move (see
-    :func:`_expand_subassemblies`)."""
+    :func:`_expand_subassemblies`).  ``use_limit_joints`` carries the limit
+    mates inside an expanded sub-assembly onto its edges; the top-level ones
+    are applied by :func:`build_model`."""
     exclude = [e.lower() for e in (exclude or [])]
     hidden = set(getattr(graph, "hidden", None) or [])
     if hidden:
@@ -4044,7 +4082,8 @@ def from_graph(graph, exclude=None, expand=None, no_expand=None,
     _snap_unsolved_mates(comps, adjacency)
     comps, adjacency, ground = _expand_subassemblies(
         graph, comps, adjacency, ground, expand=expand, no_expand=no_expand,
-        force_no_expand=force_no_expand, min_radius=strict_min_radius_cfg)
+        force_no_expand=force_no_expand, min_radius=strict_min_radius_cfg,
+        use_limit_joints=use_limit_joints)
     if exclude:
         # Apply `exclude` AGAIN after expansion: the filter at the top of this
         # function only sees top-level graph.components, so a part excluded from
@@ -4091,12 +4130,16 @@ def _transform_rec(rec, T):
     return out
 
 
-def _subgraph_is_movable(sub, subs, _seen=None, min_radius=None):
+def _subgraph_is_movable(sub, subs, _seen=None, min_radius=None,
+                         use_limit_joints=True):
     """Does any internal mate edge -- at ANY nesting depth -- classify as a
     movable joint?  Internal edges are judged in strict mode (sub-assembly
     fastener heuristics).  Recurses so a rigid wrapper around a moving unit
-    still expands."""
+    still expands.  A limit mate inside counts as movable: its plain
+    DISTANCE/ANGLE edge alone classifies fixed."""
     _seen = _seen if _seen is not None else set()
+    if use_limit_joints and getattr(sub, "limit_joints", None):
+        return True
     for e in sub.edges:
         rec = _edge_rec(e)
         rec["strict"] = True
@@ -4107,13 +4150,14 @@ def _subgraph_is_movable(sub, subs, _seen=None, min_radius=None):
         p = cs.part_path
         if cs.is_subassembly and p and p in subs and p not in _seen:
             _seen.add(p)
-            if _subgraph_is_movable(subs[p], subs, _seen, min_radius):
+            if _subgraph_is_movable(subs[p], subs, _seen, min_radius,
+                                    use_limit_joints):
                 return True
     return False
 
 
 def _expand_one(inst, sub, comps, adjacency, ground, deep=None, hidden=None,
-                min_radius=None):
+                min_radius=None, use_limit_joints=True):
     T = inst.world
     deep = deep or {}
     hidden = hidden or set()
@@ -4166,23 +4210,42 @@ def _expand_one(inst, sub, comps, adjacency, ground, deep=None, hidden=None,
     # geometry is stored in the sub-assembly's SAVED frame; for a flexible
     # instance the joint moved with its child, so map sub-frame -> world
     # through one owning child:  M = world_actual(child) @ inv(local(child))
+    def sub_to_world(a, b):
+        for owner in (a, b):
+            try:
+                return world_of[owner] @ np.linalg.inv(local_of[owner])
+            except Exception:
+                continue
+        return T
+
     for e in sub.edges:
         if e.a not in name_map or e.b not in name_map:
             continue
-        M = T
-        for owner in (e.a, e.b):
-            try:
-                M = world_of[owner] @ np.linalg.inv(local_of[owner])
-                break
-            except Exception:
-                continue
-        rec = _transform_rec(_edge_rec(e), M)
+        rec = _transform_rec(_edge_rec(e), sub_to_world(e.a, e.b))
         rec["strict"] = True
         rec["strict_min_radius"] = min_radius
         for g in rec["mates"]:
             g["owners"] = [f"{inst.name}/{o}" if o else ""
                            for o in g.get("owners", [])]
         adjacency[frozenset((name_map[e.a], name_map[e.b]))] = rec
+
+    # limit mates authored inside the sub-assembly: same sub-frame -> world
+    # mapping as its edges, so the slide/hinge axis follows a flexible pose
+    n_lim = 0
+    sub_limits = getattr(sub, "limit_joints", None) or []
+    for lj in (sub_limits if use_limit_joints else []):
+        if lj.a not in name_map or lj.b not in name_map:
+            continue
+        M = sub_to_world(lj.a, lj.b)
+        _attach_limit_joint(
+            adjacency, name_map[lj.a], name_map[lj.b], lj.type,
+            M[:3, :3] @ np.asarray(lj.axis_point, float) + M[:3, 3],
+            M[:3, :3] @ np.asarray(lj.axis_dir, float),
+            lj.lower, lj.upper)
+        n_lim += 1
+    if n_lim:
+        print(f"        {n_lim} limit-mate joint(s) inside "
+              f"(SolidWorks sliders/hinges)")
 
     # children mated to the sub-assembly ORIGIN are rigid w.r.t. each other.
     # The synthetic LOCK needs a mate RECORD (not just a type string) so the
@@ -4257,7 +4320,8 @@ def _expand_one(inst, sub, comps, adjacency, ground, deep=None, hidden=None,
 
 def _expand_subassemblies(graph, comps, adjacency, ground,
                           expand=None, no_expand=None,
-                          force_no_expand=None, min_radius=None):
+                          force_no_expand=None, min_radius=None,
+                          use_limit_joints=True):
     """Expand instances whose internals move.
 
     ``expand``/``no_expand`` are case-insensitive substring overrides from the
@@ -4284,8 +4348,9 @@ def _expand_subassemblies(graph, comps, adjacency, ground,
         if any(s in nm for s in expand):
             return True
         if inst.part_path not in movable:
-            movable[inst.part_path] = _subgraph_is_movable(sub, subs,
-                                                           min_radius=min_radius)
+            movable[inst.part_path] = _subgraph_is_movable(
+                sub, subs, min_radius=min_radius,
+                use_limit_joints=use_limit_joints)
         return movable[inst.part_path]
 
     deep = getattr(graph, "deep_worlds", None) or {}
@@ -4296,7 +4361,8 @@ def _expand_subassemblies(graph, comps, adjacency, ground,
             return comps, adjacency, ground
         comps, adjacency, ground = _expand_one(
             inst, subs[inst.part_path], comps, adjacency, ground,
-            deep=deep, hidden=hidden, min_radius=min_radius)
+            deep=deep, hidden=hidden, min_radius=min_radius,
+            use_limit_joints=use_limit_joints)
 
 
 # ====================================================================
@@ -4522,6 +4588,11 @@ def build_model(graph, robot_name=None, base_hint=None, config=None,
                               "keeps expansion for: "
                               + ", ".join(repr(x) for x in overridden))
 
+    # SolidWorks LimitDistance/LimitAngle mates ARE the assembly's real DOFs
+    # (see below).  On by default; `use_limit_joints: false` falls back to pure
+    # geometry, for the mates inside sub-assemblies too.
+    use_limit_joints = config is None or config.get("use_limit_joints", True)
+
     # `strict_min_radius:` (metres) moves the fastener/bearing cut-off that
     # welds a small free axis inside a sub-assembly.  A robot built from hobby
     # servos needs it: the default 3 mm reads their 2.4 mm horn boss as a screw.
@@ -4531,7 +4602,8 @@ def build_model(graph, robot_name=None, base_hint=None, config=None,
         no_expand=config.get("no_expand") if config else None,
         strict_min_radius_cfg=(config.get("strict_min_radius")
                                if config else None),
-        force_no_expand=sw2_force_no_expand)
+        force_no_expand=sw2_force_no_expand,
+        use_limit_joints=use_limit_joints)
 
     if sw2cfg is not None and sw2_link_names is not None:
         for c in comps:
@@ -4542,39 +4614,19 @@ def build_model(graph, robot_name=None, base_hint=None, config=None,
     if sw2_compat and sw2cfg is not None:
         _apply_sw2urdf_inertials(comps, sw2cfg)
 
-    # SolidWorks LimitDistance/LimitAngle mates ARE the assembly's real DOFs --
-    # promote those edges to prismatic/revolute with the CAD axis + travel
-    # limits, overriding the (over-constrained) geometric classification.  On by
-    # default; `use_limit_joints: false` falls back to pure geometry.
-    if config is None or config.get("use_limit_joints", True):
+    # Promote those edges to prismatic/revolute with the CAD axis + travel
+    # limits, overriding the (over-constrained) geometric classification.  The
+    # ones inside an expanded sub-assembly were attached during expansion.
+    if use_limit_joints:
         comp_names = {c.name for c in comps}
         n_lim = 0
         for lj in getattr(graph, "limit_joints", None) or []:
             if lj.a not in comp_names or lj.b not in comp_names:
                 continue
-            rec = adjacency.setdefault(frozenset((lj.a, lj.b)),
-                                       {"types": [], "axis": None, "mates": []})
-            ax_pt = np.asarray(lj.axis_point, float)
-            ax_dir = np.asarray(lj.axis_dir, float)
-            if lj.type == "revolute":
-                # a LimitAngle mate fixes the travel but its plane point is NOT
-                # on the rotation axis -- the hinge is the concentric/cylinder
-                # mate on the same pair.  Pivoting about the angle-plane point
-                # swings the part around an offset centre (the screen hinge was
-                # ~5 cm off); use the concentric axis line so it rotates in
-                # place.  Keep the limit's direction SIGN (lower/upper + ref are
-                # relative to it).
-                cax = _concentric_axis_of(rec)
-                if cax is not None:
-                    cp, cd = cax
-                    n = np.linalg.norm(ax_dir) or 1.0
-                    if abs(float(cd @ (ax_dir / n))) > 0.99:
-                        ax_pt = cp
-                        ax_dir = cd if float(cd @ ax_dir) >= 0 else -cd
-            rec["limit_joint"] = {
-                "type": lj.type, "ref": lj.a,
-                "axis": (ax_pt, ax_dir),
-                "lower": float(lj.lower), "upper": float(lj.upper)}
+            _attach_limit_joint(adjacency, lj.a, lj.b, lj.type,
+                                np.asarray(lj.axis_point, float),
+                                np.asarray(lj.axis_dir, float),
+                                lj.lower, lj.upper)
             n_lim += 1
         if n_lim:
             print(f"      limit-mate joints: {n_lim} (SolidWorks sliders/hinges)")
