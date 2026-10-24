@@ -165,4 +165,12 @@
   statusEl.textContent = t('status.starting');
   document.querySelectorAll('#langbar button').forEach(b =>
     b.classList.toggle('active', b.dataset.lang === window.__lang));
+  // the view-button row wraps to more rows on a narrow viewer or with long
+  // labels (a language switch re-labels it); the overlays below it are placed
+  // from --views-bottom (see style.css #views)
+  const views = document.getElementById('views');
+  const syncViewsBottom = () => document.getElementById('viewwrap').style
+    .setProperty('--views-bottom', `${views.offsetTop + views.offsetHeight}px`);
+  new ResizeObserver(syncViewsBottom).observe(views);
+  syncViewsBottom();
   log(t('boot.pageLoaded'));

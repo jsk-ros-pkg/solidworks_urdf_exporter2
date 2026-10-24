@@ -102,7 +102,8 @@
                      border-radius:3px;padding:1px 4px"></select>
     </div>
     <div id="hovertip"></div>
-    <div id="colstat" style="position:absolute;left:50%;top:36px;
+    <div id="colstat" style="position:absolute;left:50%;
+         top:var(--views-bottom, 36px);
          transform:translateX(-50%);z-index:5;display:none;max-width:70%;
          background:#5b1111dd;color:#ffb3b3;border:1px solid #a33;
          border-radius:4px;padding:3px 10px;font-size:12px;
@@ -185,7 +186,8 @@
       <div class="lb-log"></div>
       <button id="lbstop" data-i18n="ui.coacdstop">■ stop</button>
     </div>
-    <div id="selbar" style="position:absolute;top:40px;left:8px;z-index:5;
+    <div id="selbar" style="position:absolute;left:8px;z-index:5;
+         top:calc(var(--views-bottom, 36px) + 4px);
          display:none;gap:4px;align-items:center;background:#22252bdd;
          border:1px solid #444;border-radius:4px;padding:4px 8px;
          font-size:12px">
