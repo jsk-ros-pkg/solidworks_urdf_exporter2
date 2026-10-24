@@ -4549,22 +4549,8 @@ _SW_PID_FILE = os.path.join(_DATA_DIR, "_sw_spawned_pids.txt")
 
 def _sldworks_pids():
     """Set of PIDs of every running SLDWORKS.exe (empty on failure/non-Windows)."""
-    import subprocess
-    try:
-        out = subprocess.run(
-            ["tasklist", "/FI", "IMAGENAME eq SLDWORKS.exe", "/FO", "CSV",
-             "/NH"], capture_output=True, text=True, timeout=10).stdout
-    except Exception:
-        return set()
-    pids = set()
-    for line in out.splitlines():
-        parts = [p.strip().strip('"') for p in line.split('","')]
-        if len(parts) >= 2 and parts[0].lower().startswith("sldworks"):
-            try:
-                pids.add(int(parts[1]))
-            except ValueError:
-                pass
-    return pids
+    from sw2robot.exporter.swcom import sldworks_pids
+    return sldworks_pids() or set()
 
 
 def _record_spawned_pid(pid):

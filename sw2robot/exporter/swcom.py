@@ -5,10 +5,14 @@ KEY FACTS about this machine (discovered empirically):
 * The user's running SolidWorks does NOT register itself in the COM Running
   Object Table, so ``win32com.client.GetActiveObject("SldWorks.Application")``
   fails with ``MK_E_UNAVAILABLE`` and we cannot attach to the live session.
-* Every ``Dispatch("SldWorks.Application")`` spawns a *new* SolidWorks process
-  (the class object is single-use).  Therefore this module always creates and
-  OWNS its own instance and is responsible for shutting it down (``ExitApp``)
-  so it never leaks empty instances.
+* ``Dispatch("SldWorks.Application")`` spawns a *new* SolidWorks process only
+  when none is running; this module then OWNS it and shuts it down
+  (``ExitApp``) so it never leaks empty instances.  While ANY SolidWorks runs
+  -- started by the user from the Start menu or by another tool over COM --
+  Dispatch hands back THAT process (measured on SolidWorks 2024).  Ownership is
+  therefore decided by process id: a session that got an already-running
+  process works inside it like an attached one and never closes its
+  documents, hides it or quits it (see ``SolidWorks.__init__``).
 * We open the target file **read-only** and **never save** it, so the user's
   open document is never at risk.
 * The COM client must be an **x64** Python to match SolidWorks (the project is
@@ -88,6 +92,47 @@ def _local_file(folder, name):
         except OSError:
             continue
     return None
+
+
+def sldworks_pids():
+    """PIDs of every running SLDWORKS.exe, or None when they cannot be listed
+    (non-Windows, tasklist failure) -- unknown, which is not the same as none."""
+    import subprocess
+    try:
+        out = subprocess.run(
+            ["tasklist", "/FI", "IMAGENAME eq SLDWORKS.exe", "/FO", "CSV",
+             "/NH"], capture_output=True, text=True, timeout=10).stdout
+    except Exception:
+        return None
+    pids = set()
+    for line in out.splitlines():
+        parts = [p.strip().strip('"') for p in line.split('","')]
+        if len(parts) >= 2 and parts[0].lower().startswith("sldworks"):
+            try:
+                pids.add(int(parts[1]))
+            except ValueError:
+                pass
+    return pids
+
+
+def _owns_new_process(pid, before):
+    """Whether Dispatch started a NEW SolidWorks: its ``pid`` was not running
+    ``before``.  Unknowns decide for "shared", since wrongly owning means
+    closing someone's documents unsaved and quitting their SolidWorks."""
+    if before is None:
+        return False
+    if pid is None:
+        return not before          # nothing was running, so it must be ours
+    return pid not in before
+
+
+def _com_pid(app):
+    """Process id of the SolidWorks behind ``app`` (ISldWorks.GetProcessID),
+    or None."""
+    try:
+        return int(safe_call(app, "GetProcessID"))
+    except (TypeError, ValueError):
+        return None
 
 
 def _registered_typelib_versions(libid):
@@ -495,6 +540,7 @@ class SolidWorks:
         except Exception:
             pass
         _require_typelibs()  # load typelibs first so Dispatch returns typed
+        before = sldworks_pids()
         try:
             self.app = win32com.client.gencache.EnsureDispatch(
                 "SldWorks.Application")
@@ -518,10 +564,21 @@ class SolidWorks:
                 print("  [swcom] WARNING: OpenDoc6 still unavailable -- makepy "
                       "could not generate the typelib wrapper (frozen build "
                       "with no writable gen_py?)")
-        try:
-            self.app.Visible = visible
-        except Exception:
-            pass
+        pid = _com_pid(self.app)
+        self._shared = not _owns_new_process(pid, before)
+        if self._shared:
+            # someone else's SolidWorks: work in it like an attached session --
+            # keep its window as it is, and never close its documents or quit
+            print(f"  [swcom] SolidWorks handed back an already-running "
+                  f"process (pid {pid if pid is not None else 'unknown'}) "
+                  f"instead of a new one; working in it without closing its "
+                  f"documents or quitting it")
+            visible = bool(safe_prop(self.app, "Visible"))
+        else:
+            try:
+                self.app.Visible = visible
+            except Exception:
+                pass
         self.visible = visible
         self._open_docs = []
         self._tempdirs = []
@@ -955,25 +1012,30 @@ class SolidWorks:
     def shutdown(self):
         """Close all docs WITHOUT saving and terminate OUR instance only.
 
-        In attach mode the application belongs to the USER: never close
-        documents or exit -- just drop our reference."""
+        In attach mode, or when Dispatch handed back an already-running
+        process, the application belongs to someone else: close only the
+        copies we opened, never their documents, and do not exit."""
         self._end_api_batch()
         self._restore_search_folders()
-        if getattr(self, "_attached", False):
-            self.app = None
-            return
-        try:
-            # True == include unsaved; we opened read-only so nothing is dirty,
-            # but this guarantees no save prompt blocks the headless run.
-            self.app.CloseAllDocuments(True)
-        except Exception:
-            pass
-        try:
-            self.app.ExitApp()
-        except Exception:
-            pass
+        if getattr(self, "_attached", False) or getattr(self, "_shared", False):
+            for doc in list(getattr(self, "_open_docs", [])):
+                self.close_doc(doc)
+            self._open_docs = []
+        else:
+            try:
+                # True == include unsaved; we opened read-only so nothing is
+                # dirty, but this guarantees no save prompt blocks the run.
+                self.app.CloseAllDocuments(True)
+            except Exception:
+                pass
+            try:
+                self.app.ExitApp()
+            except Exception:
+                pass
         self.app = None
-        for d in self._tempdirs:
+        # a part a copy pulled in may stay loaded in a session we do not own,
+        # keeping its file locked -- whatever cannot be removed is left
+        for d in getattr(self, "_tempdirs", []):
             shutil.rmtree(d, ignore_errors=True)
         self._tempdirs = []
 
