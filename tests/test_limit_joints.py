@@ -14,6 +14,8 @@ from sw2robot.exporter.state import (
     GraphState,
     LimitJoint,
     MateEdge,
+    MateGeo,
+    SubGraph,
 )
 
 
@@ -94,7 +96,6 @@ def test_revolute_limit_joint_pivots_on_concentric_axis():
     # a LimitAngle mate stores its plane point, which is NOT on the rotation
     # axis; the hinge is the concentric mate.  build_model must pivot the
     # revolute on the concentric axis line, not the (offset) angle point.
-    from sw2robot.exporter.state import MateGeo
     base = _comp("base"); base.fixed = True
     door = _comp("door", (0.2, 0, 0))
     conc = MateGeo(type="CONCENTRIC", etypes=[4, 4],
@@ -121,6 +122,58 @@ def test_without_limit_joint_the_distance_mate_fixes_it():
     model = build_model(_graph(None))
     j = next(j for j in model.joints if j.child == "slider")
     assert j.jtype == "fixed"
+
+
+def _sub_slider_graph():
+    """A linear module sub-assembly (case + slider on a limit DISTANCE mate)
+    mounted on a base, its instance turned 90 deg about z."""
+    case = _comp("case-1")
+    slider = _comp("slider-1", (0, 0.05, 0))
+    sub = SubGraph(
+        components=[case, slider],
+        edges=[MateEdge(a="case-1", b="slider-1", types=["DISTANCE"])],
+        ground=["case-1"],
+        limit_joints=[LimitJoint(a="slider-1", b="case-1", type="prismatic",
+                                 axis_point=[0, 0, 0], axis_dir=[0, 1, 0],
+                                 lower=-0.05, upper=0.15)])
+    base = _comp("base")
+    base.fixed = True
+    inst = _comp("module-1", (0.2, 0, 0))
+    w = np.array(inst.world, float).reshape(4, 4)
+    w[:3, :3] = [[0, -1, 0], [1, 0, 0], [0, 0, 1]]
+    inst.world = [float(x) for x in w.flatten()]
+    inst.is_subassembly = True
+    inst.part_path = "module.SLDASM"
+    return GraphState(
+        robot_name="t", source_assembly="t.SLDASM",
+        components=[base, inst],
+        edges=[MateEdge(a="base", b="module-1", types=["COINCIDENT"],
+                        mates=[MateGeo(type="COINCIDENT", etypes=[3, 3],
+                                       points=[[0.2, 0, 0]] * 2,
+                                       dirs=[[0, 0, 1]] * 2,
+                                       radii=[None, None],
+                                       owners=["base", "module-1/case-1"])])],
+        ground=["base"], subassemblies={"module.SLDASM": sub})
+
+
+def test_limit_joint_inside_a_subassembly_builds_prismatic():
+    """A limit mate authored INSIDE a sub-assembly is a real slider too: the
+    sub-assembly expands for it (its lone DISTANCE edge classifies fixed), and
+    the slide axis is carried into the instance's pose."""
+    graph = GraphState.model_validate_json(_sub_slider_graph()
+                                           .model_dump_json())
+    model = build_model(graph)
+    j = next(j for j in model.joints if j.child == "module_1__slider_1")
+    assert j.jtype == "prismatic"
+    np.testing.assert_allclose([round(x) for x in j.axis], [-1, 0, 0])
+    assert abs(j.lower - (-0.05)) < 1e-9
+    assert abs(j.upper - 0.15) < 1e-9
+
+
+def test_use_limit_joints_off_ignores_subassembly_limit_mates():
+    model = build_model(_sub_slider_graph(),
+                        config={"use_limit_joints": False})
+    assert not any(j.jtype == "prismatic" for j in model.joints)
 
 
 def test_rigid_group_stays_together_under_limit_joints():

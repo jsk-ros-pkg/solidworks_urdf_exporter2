@@ -158,6 +158,9 @@ class SubGraph(BaseModel):
     edges: list[MateEdge] = []
     ground: list[str] = []
     coordinate_systems: list[CoordinateSystemState] = []
+    # LimitDistance/LimitAngle mates authored INSIDE this sub-assembly, in its
+    # own frame, ``a``/``b`` naming its children (empty on older extracts)
+    limit_joints: list[LimitJoint] = []
 
 
 class GraphState(BaseModel):
