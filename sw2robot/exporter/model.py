@@ -646,7 +646,14 @@ def _subassembly_instances(graph):
     the as-posed ``deep_worlds`` transform when the extract captured one (a
     flexible instance poses its internals its own way), else composes the
     instance chain."""
-    out = {}
+    return _instances(graph)[0]
+
+
+def _instances(graph):
+    """``(sub-assemblies, nested parts)``: both ``{path: [(name, world)]}``,
+    the second the parts INSIDE sub-assemblies at every depth
+    (``a-1/b-1/c-1``), posed the same way."""
+    out, parts = {}, {}
     deep = getattr(graph, "deep_worlds", None) or {}
     subs = getattr(graph, "subassemblies", None) or {}
 
@@ -658,6 +665,8 @@ def _subassembly_instances(graph):
             else:
                 world = parent_world @ cs.world_matrix()
             if not (cs.is_subassembly and cs.part_path):
+                if prefix and cs.part_path:
+                    parts.setdefault(cs.part_path, []).append((name, world))
                 continue
             out.setdefault(cs.part_path, []).append((name, world))
             sub = subs.get(cs.part_path)
@@ -668,7 +677,7 @@ def _subassembly_instances(graph):
                      branch | {cs.part_path})
 
     walk("", graph.components, np.eye(4), frozenset())
-    return out
+    return out, parts
 
 
 def _frame_link_name(cad_name):
@@ -716,7 +725,8 @@ def coordinate_system_ports(graph, comps, joints, anchors, base,
     Three sources, each with an unambiguous owner:
 
     * a frame in a PART document travels with that part -- every instance of
-      the part gets one, on that instance's link;
+      the part gets one, on that instance's link (a part inside a sub-assembly
+      kept as one rigid link puts it on that sub-assembly's link);
     * a frame in a SUB-ASSEMBLY document travels with that sub-assembly -- one
       per instance;
     * a frame in the TOP-LEVEL assembly hangs off the component its origin
@@ -772,17 +782,29 @@ def coordinate_system_ports(graph, comps, joints, anchors, base,
     todo = []
     for cs in getattr(graph, "coordinate_systems", None) or []:
         todo.append((cs.owner_component or base.name, cs, np.eye(4)))
+    sub_instances, nested_parts = _instances(graph)
     for path, frames in sorted(
             (getattr(graph, "part_coordinate_systems", None) or {}).items()):
         for c in comps:
             if c.part_path == path:
                 for cs in frames:
                     todo.append((c.name, cs, c.world))
-    instances = _subassembly_instances(graph)
+        # a part inside a sub-assembly that was NOT expanded is no component of
+        # its own: its frames ride on the link of its nearest enclosing
+        # sub-assembly that is one, posed through the instance chain
+        for inst_name, inst_world in nested_parts.get(path, []):
+            if inst_name in by_name:
+                continue
+            steps = inst_name.split("/")
+            owner = next(("/".join(steps[:k])
+                          for k in range(len(steps) - 1, 0, -1)
+                          if "/".join(steps[:k]) in by_name), inst_name)
+            for cs in frames:
+                todo.append((owner, cs, inst_world))
     for path, sub in sorted(
             (getattr(graph, "subassemblies", None) or {}).items()):
         frames = getattr(sub, "coordinate_systems", None) or []
-        for inst_name, inst_world in instances.get(path, []):
+        for inst_name, inst_world in sub_instances.get(path, []):
             for cs in frames:
                 owner = (f"{inst_name}/{cs.owner_component}"
                          if cs.owner_component else inst_name)

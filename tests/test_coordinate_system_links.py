@@ -155,6 +155,36 @@ def test_subassembly_frame_lands_on_each_instance_of_that_subassembly():
     assert np.allclose(ports["wrist_r_mount"].xyz, [0, 0, 0.02], atol=1e-9)
 
 
+def test_part_frame_inside_a_rigid_subassembly_lands_on_that_subassembly():
+    """A sub-assembly that is NOT expanded stays one link and its parts are no
+    components of their own; a frame drawn in one of those parts still rides
+    on the sub-assembly's link, posed through the part's place inside it."""
+    from sw2robot.exporter.model import build_model
+    from sw2robot.exporter.state import ComponentState, SubGraph
+    comps = _parts(("base", _eye(), None),
+                   ("tube_1", _xlate(0, 0.5, 0), "tube.SLDASM"),
+                   ("tube_2", _xlate(0, -0.5, 0), "tube.SLDASM"))
+    for c in comps[1:]:
+        c.is_subassembly = True
+    sub = SubGraph(components=[ComponentState(
+        name="body-1", link_name="body", part_path="body.SLDPRT",
+        world=_xlate(0, 0, 0.01))])
+    graph = _graph(comps, subassemblies={"tube.SLDASM": sub},
+                   part_coordinate_systems={
+                       "body.SLDPRT": [_frame("mouth", _xlate(0, 0, 0.1))]})
+    model = build_model(graph, config={
+        "base": "base",
+        "joints": [{"parent": "base", "child": "tube_1", "type": "fixed"},
+                   {"parent": "base", "child": "tube_2", "type": "fixed"}]})
+
+    ports = _ports(model)
+    assert set(ports) == {"tube_1_mouth", "tube_2_mouth"}
+    assert ports["tube_1_mouth"].parent_link == "tube_1"
+    assert ports["tube_2_mouth"].parent_link == "tube_2"
+    # 0.1 in the part, the part 0.01 up in the sub-assembly
+    assert np.allclose(ports["tube_1_mouth"].xyz, [0, 0, 0.11], atol=1e-9)
+
+
 # ------------------------------------------------------------ config switch
 
 def test_coordinate_system_links_off_emits_nothing():
