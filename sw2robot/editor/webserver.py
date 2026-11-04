@@ -3852,21 +3852,15 @@ def _remove_yaml_block(txt, mapkey):
                   txt)
 
 
-def _set_mimic_yaml(txt, child, master, multiplier, offset, clear, poly=None):
-    """Add / replace / remove the ``mimic:`` block of the joints.yaml entry whose
-    ``child:`` is the component ``child``.  ``master`` is the driver joint's URDF
-    name (stored verbatim -- urdf_writer's name remap is the identity on an
-    already-emitted name).  Returns ``(new_txt, applied)``.
-
-    Line-based on purpose: it tolerates a mimic block placed anywhere inside the
-    entry and any sibling keys (lower/upper/axis...), and preserves the file's
-    reference comments -- unlike a YAML round-trip."""
-    lines = txt.split("\n")
+def _yaml_entry_span(lines, child):
+    """``(start, end)`` line span of the LAST ``- parent:`` entry of a
+    joints.yaml whose ``child:`` is ``child``, or None.  The entry ends at the
+    next entry or at the first key indented no deeper than its ``-``."""
     starts = [i for i, ln in enumerate(lines)
               if re.match(r"^\s*-\s*parent:", ln)]
     cre = re.compile(r"^\s*child:\s*" + re.escape(child) + r"\s*(#.*)?$")
-    for k in range(len(starts) - 1, -1, -1):          # last->first: edits stay
-        s = starts[k]                                 # valid for earlier entries
+    for k in range(len(starts) - 1, -1, -1):
+        s = starts[k]
         col = len(lines[s]) - len(lines[s].lstrip())
         end = starts[k + 1] if k + 1 < len(starts) else len(lines)
         for idx in range(s + 1, end):                 # stop at a dedented key
@@ -3877,9 +3871,158 @@ def _set_mimic_yaml(txt, child, master, multiplier, offset, clear, poly=None):
             if ind <= col and not ln.lstrip().startswith("-"):
                 end = idx
                 break
+        if any(cre.match(x) for x in lines[s:end]):
+            return s, end
+    return None
+
+
+def _negate_scalar(text):
+    """``-x`` of a yaml number, by editing its text so flipping twice gives
+    back exactly what was written (no reformatting, no lost digits).  Zero
+    toggles to ``-0`` and back the same way, for the same reason; only an
+    explicit leading ``+`` does not come back (``+2`` -> ``-2`` -> ``2``)."""
+    t = text.strip()
+    if t.startswith("-"):
+        return t[1:]
+    if t.startswith("+"):
+        return "-" + t[1:]
+    return "-" + t
+
+
+def _flip_joint_in_yaml(txt, child, joint_names):
+    """Toggle ``flip_axis`` on the joints.yaml entry whose child is ``child``
+    and convert what that file stores in the joint's + sense, so the next
+    build reproduces what :func:`_flip_axis_in_urdf` does to the served URDF:
+    ``lower``/``upper`` swapped and negated, the joint's own ``mimic``
+    multiplier / offset / poly negated, and the ``mimic`` of every joint that
+    follows it re-signed (multiplier negated; ``poly`` coefficient of x^k
+    times (-1)^k).  ``joint_names`` are the names a follower may use for this
+    joint.  Self-inverse.  Returns ``(new_txt, applied)``; raises ValueError
+    on a ``mimic`` written in flow style, which this line-based edit cannot
+    convert."""
+    import yaml as _yaml
+    lines = txt.split("\n")
+    span = _yaml_entry_span(lines, child)
+    if span is None:
+        return txt, False
+    cfg = _yaml.safe_load(txt) or {}
+    num = r"([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)"
+
+    def edit_mimic(s, end, follower_of_flipped):
+        """Re-sign the mimic block inside lines[s:end] in place."""
+        mi = next((i for i in range(s, end)
+                   if re.match(r"^\s*mimic:", lines[i])), None)
+        if mi is None:
+            return
+        if not re.match(r"^\s*mimic:\s*(#.*)?$", lines[mi]):
+            raise ValueError(f"mimic of '{child}' is in flow style; write it "
+                             f"as a block to flip this joint")
+        mind = len(lines[mi]) - len(lines[mi].lstrip())
+        for i in range(mi + 1, end):
+            ln = lines[i]
+            if ln.strip() and len(ln) - len(ln.lstrip()) <= mind:
+                break
+            m = re.match(r"^(\s*)(multiplier|offset):(\s*)" + num + r"(.*)$",
+                         ln)
+            if m and (m.group(2) == "multiplier" or not follower_of_flipped):
+                lines[i] = (f"{m.group(1)}{m.group(2)}:{m.group(3)}"
+                            f"{_negate_scalar(m.group(4))}{m.group(5)}")
+                continue
+            m = re.match(r"^(\s*poly:\s*\[)([^\]]*)(\].*)$", ln)
+            if m:
+                n = len(re.findall(num, m.group(2)))
+                k = iter(range(n))
+
+                def resign(tok):
+                    # highest power first (numpy.polyval order): x^k is at
+                    # index n-1-k; a flipped driver re-signs the odd powers
+                    i_c = next(k)
+                    odd = (n - 1 - i_c) % 2
+                    return (_negate_scalar(tok.group(0))
+                            if (not follower_of_flipped) or odd
+                            else tok.group(0))
+                lines[i] = m.group(1) + re.sub(num, resign, m.group(2)) \
+                    + m.group(3)
+
+    s, end = span
+    # lower/upper: values swapped and negated (keys stay in place)
+    rows = {m.group(2): (i, m) for i in range(s, end)
+            for m in [re.match(r"^(\s*)(lower|upper):(\s*)" + num + r"(.*)$",
+                               lines[i])] if m}
+    if "lower" in rows and "upper" in rows:
+        (li, lm), (ui, um) = rows["lower"], rows["upper"]
+        lines[li] = (f"{lm.group(1)}lower:{lm.group(3)}"
+                     f"{_negate_scalar(um.group(4))}{lm.group(5)}")
+        lines[ui] = (f"{um.group(1)}upper:{um.group(3)}"
+                     f"{_negate_scalar(lm.group(4))}{um.group(5)}")
+    else:
+        for key, (i, m) in rows.items():
+            other = "upper" if key == "lower" else "lower"
+            lines[i] = (f"{m.group(1)}{other}:{m.group(3)}"
+                        f"{_negate_scalar(m.group(4))}{m.group(5)}")
+    edit_mimic(s, end, follower_of_flipped=False)
+    # flip_axis: drop it when present, else add it as the entry's last key
+    fi = next((i for i in range(s, end)
+               if re.match(r"^\s*flip_axis:", lines[i])), None)
+    if fi is not None:
+        del lines[fi]
+    else:
+        ci = next(i for i in range(s, end)
+                  if re.match(r"^\s*child:", lines[i]))
+        ind = lines[ci][:len(lines[ci]) - len(lines[ci].lstrip())]
+        last = max(i for i in range(s, end) if lines[i].strip())
+        lines.insert(last + 1, f"{ind}flip_axis: true")
+    # followers of this joint
+    names = {n for n in joint_names if n}
+    for entry in cfg.get("joints") or []:
+        mm = entry.get("mimic") if isinstance(entry, dict) else None
+        if (isinstance(mm, dict) and mm.get("joint") in names
+                and str(entry.get("child")) != child):
+            fspan = _yaml_entry_span(lines, str(entry.get("child")))
+            if fspan is not None:
+                edit_mimic(*fspan, follower_of_flipped=True)
+    return "\n".join(lines), True
+
+
+def _flip_in_package_yaml(yml_txt, urdf_txt, joint_name):
+    """joints.yaml text with the movable joint ``joint_name`` of the served
+    URDF flipped (see :func:`_flip_joint_in_yaml`); unchanged for a fixed
+    joint or one the URDF does not have.  Raises ValueError for a movable
+    joint that has no entry to record the flip in."""
+    m = re.search(r'<joint\b[^>]*\bname="' + re.escape(joint_name)
+                  + r'"[^>]*>(.*?)</joint>', urdf_txt, re.DOTALL)
+    if not m:
+        return yml_txt
+    head = m.group(0)[:m.group(0).index(">") + 1]
+    tm = re.search(r'\btype="([^"]*)"', head)
+    cm = re.search(r'<child\b[^>]*\blink="([^"]*)"', m.group(1))
+    if not cm or not tm or tm.group(1) not in ("revolute", "continuous",
+                                                "prismatic"):
+        return yml_txt
+    child = _link_names_inverse(yml_txt).get(cm.group(1), cm.group(1))
+    key = _names_inverse(yml_txt, "joint_names").get(joint_name, joint_name)
+    new_txt, applied = _flip_joint_in_yaml(yml_txt, child, {joint_name, key})
+    if not applied:
+        # flipping only the URDF would be undone by the next rebuild
+        raise ValueError(f"'{joint_name}' has no joints.yaml entry (child "
+                         f"'{child}'), so its flip could not be saved")
+    return new_txt
+
+
+def _set_mimic_yaml(txt, child, master, multiplier, offset, clear, poly=None):
+    """Add / replace / remove the ``mimic:`` block of the joints.yaml entry whose
+    ``child:`` is the component ``child``.  ``master`` is the driver joint's URDF
+    name (stored verbatim -- urdf_writer's name remap is the identity on an
+    already-emitted name).  Returns ``(new_txt, applied)``.
+
+    Line-based on purpose: it tolerates a mimic block placed anywhere inside the
+    entry and any sibling keys (lower/upper/axis...), and preserves the file's
+    reference comments -- unlike a YAML round-trip."""
+    lines = txt.split("\n")
+    span = _yaml_entry_span(lines, child)
+    if span is not None:
+        s, end = span
         entry = lines[s:end]
-        if not any(cre.match(x) for x in entry):
-            continue
         type_i = next((i for i, x in enumerate(entry)
                        if re.match(r"^\s*type:", x)), None)
         key_ind = (entry[type_i][:len(entry[type_i])
@@ -6159,6 +6302,9 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 # URDF (axis negated, limits swapped, mimic negated; frame kept).
                 # joints: [<urdf joint name>, ...].  Self-inverse; no rebuild, so
                 # it works on any loaded URDF and the export reads it as-is.
+                # A package also records it as `flip_axis` in joints.yaml (with
+                # that file's limits / mimic converted), or the next rebuild --
+                # a joint-type change, a re-extract -- would quietly undo it.
                 cls = type(self)
                 n = int(self.headers.get("Content-Length", 0))
                 body = json.loads(self.rfile.read(n) or b"{}")
@@ -6167,17 +6313,51 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                     return self._send_json({"error": "no package open"}, 400)
                 if not _cad_mode(cls.pkg_dir):
                     return self._um_reply(_um_set_axis, names)
+                pkg = os.path.splitext(os.path.basename(cls.urdf_rel))[0]
+                yml = os.path.join(cls.pkg_dir, pkg + ".joints.yaml")
+                ytxt = None
+                if os.path.exists(yml):
+                    with open(yml, encoding="utf-8") as f:
+                        ytxt = f.read()
+                with open(os.path.join(cls.pkg_dir, cls.urdf_rel),
+                          encoding="utf-8") as f:
+                    utxt = f.read()
+                # every yaml edit first: one that cannot be made must stop the
+                # request before the URDF is touched, not half-way through it
+                new_ytxt = ytxt
+                if ytxt is not None:
+                    try:
+                        for jn in names:
+                            new_ytxt = _flip_in_package_yaml(new_ytxt, utxt, jn)
+                    except Exception as e:
+                        return self._send_json(
+                            {"error": f"flip failed: {e}"}, 500)
                 applied, missed = [], []
+                urdf_path = os.path.join(cls.pkg_dir, cls.urdf_rel)
                 for jn in names:
                     try:
                         k = _flip_axis_in_urdf(cls.pkg_dir, cls.urdf_rel, jn)
                     except Exception as e:
+                        # all or nothing: put back the joints flipped so far
+                        with open(urdf_path, "w", encoding="utf-8") as f:
+                            f.write(utxt)
                         return self._send_json(
                             {"error": f"flip failed: {e}"}, 500)
                     (applied if k else missed).append(jn)
+                if new_ytxt is not None and new_ytxt != ytxt:
+                    _snapshot(cls.pkg_dir, yml, f"flip axis x{len(applied)}")
+                    with open(yml, "w", encoding="utf-8") as f:
+                        f.write(new_ytxt)
+                # a package without joints.yaml cannot keep a flip: say so
+                not_saved = applied if ytxt is None else []
+                if not_saved:
+                    print(f"[sw2robot.web] set_axis: WARNING no {pkg}.joints.yaml"
+                          f" -- {len(not_saved)} flip(s) are in the URDF only "
+                          f"and the next rebuild will undo them")
                 print(f"[sw2robot.web] set_axis: {len(applied)} flipped, "
                       f"{len(missed)} not matched")
-                return self._send_json({"applied": applied, "missed": missed})
+                return self._send_json({"applied": applied, "missed": missed,
+                                        "not_saved": not_saved})
             if parsed.path == "/api/set_types":
                 cls = type(self)
                 n = int(self.headers.get("Content-Length", 0))

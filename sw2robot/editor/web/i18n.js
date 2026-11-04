@@ -608,6 +608,8 @@
     'flip.done': { en: a => `${a.joint}: + direction reversed (axis negated, limits swapped) ✓`,
                    ja: a => `${a.joint}: ＋方向を反転（軸の符号反転・リミット入替）✓` },
     'flip.fail': { en: a => `flip failed: ${a.e}`, ja: a => `反転に失敗: ${a.e}` },
+    'flip.notSaved': { en: a => `${a.joint}: no joints.yaml in this package, so the flip is in the URDF only — the next rebuild will undo it`,
+                       ja: a => `${a.joint}: このパッケージには joints.yaml がないため、反転は URDF にだけ入っています（次の再ビルドで元に戻ります）` },
     'flip.noTarget': { en: 'press f with a joint selected (or hover its axis) to reverse its + direction',
                        ja: 'f キーは関節を選択（または軸をホバー）してから。＋方向を反転します' },
     'flip.notMovable': { en: 'a fixed joint has no + direction to flip',

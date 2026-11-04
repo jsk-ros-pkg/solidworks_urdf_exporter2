@@ -389,6 +389,7 @@
   'flip.applying': a => `正在反转 ${a.joint} …`,
   'flip.done': a => `${a.joint}：+ 方向已反转（轴取反，限位互换）✓`,
   'flip.fail': a => `反转失败：${a.e}`,
+  'flip.notSaved': a => `${a.joint}：此软件包没有 joints.yaml，反转只写入了 URDF——下次重新构建会将其撤销`,
   'flip.noTarget': '选中一个关节（或悬停在其轴上）后按 f，可反转其 + 方向',
   'flip.notMovable': '固定关节没有可反转的 + 方向',
   'flip.noneMatched': '在当前提供的 URDF 中找不到该关节',
