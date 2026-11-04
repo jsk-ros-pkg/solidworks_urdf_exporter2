@@ -244,7 +244,7 @@ def main() -> int:
         # bundle the editor page at the path WEB_DIR expects (HERE/web).
         # The whole directory, so style.css rides along with index.html.
         "--add-data", f"{web}{os.pathsep}sw2robot/editor/web",
-        # grab lazily / dynamically imported package code (incl. _vendor.rc_config)
+        # grab lazily / dynamically imported package code
         "--collect-submodules", "sw2robot",
         # bundle sw2robot's dist-info so importlib.metadata.version("sw2robot")
         # works in the frozen exe -- that is how sw2robot.__version__ (the

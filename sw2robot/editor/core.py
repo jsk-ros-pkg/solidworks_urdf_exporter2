@@ -115,10 +115,24 @@ def save_state(state: RobotCompilerState, path=None) -> Path:
     return p
 
 
+# the parsed-URDF keys a sidecar written before the switch to
+# skrobot.urdf.ros_config carries (camelCase) -> the ones it uses now
+_LEGACY_KEYS = {"parentLink": "parent_link", "childLink": "child_link",
+                "lowerLimit": "lower_limit", "upperLimit": "upper_limit",
+                "velocityLimit": "velocity_limit",
+                "effortLimit": "effort_limit", "hasVisual": "has_visual",
+                "hasCollision": "has_collision", "hasInertial": "has_inertial"}
+
+
 def load_state(path) -> RobotCompilerState:
     """Load a complete state previously written by :func:`save_state`."""
-    return RobotCompilerState.model_validate_json(
+    state = RobotCompilerState.model_validate_json(
         Path(path).read_text(encoding="utf-8"))
+    for item in (*state.joints, *state.links):
+        for old, new in _LEGACY_KEYS.items():
+            if old in item:
+                item.setdefault(new, item.pop(old))
+    return state
 
 
 def load_edits(state: RobotCompilerState, path=None) -> int:
@@ -903,9 +917,17 @@ def export_ros_package(state: RobotCompilerState, out_path,
         raise ValueError("cannot export, state has problems:\n  - "
                          + "\n  - ".join(problems))
 
+    options = dict(export_options or {})
+    skrobot_keys = ("include_urdf", "include_moveit", "include_gazebo")
+    unknown = set(options) - set(skrobot_keys) - {
+        "include_servo_mapping", "include_imitation_learning"}
+    if unknown:
+        # an option that is ignored would still write the files it was meant
+        # to leave out (the camelCase spellings, e.g. includeMoveIt, are gone)
+        raise ValueError(f"unknown export_options: {sorted(unknown)}")
+
     urdf = build_urdf(state)
     parsed = parse_urdf_content(urdf)
-    options = dict(export_options or {})
     name = state.robot_name
     extra = {}
     if options.get("include_servo_mapping", True):
@@ -919,8 +941,7 @@ def export_ros_package(state: RobotCompilerState, out_path,
         planning_groups=[], controllers=[], disabled_collision_pairs=[],
         gazebo_physics={}, gazebo_plugins=[], robot_name=name,
         export_options={k: v for k, v in options.items()
-                        if k in ("include_urdf", "include_moveit",
-                                 "include_gazebo")} or None,
+                        if k in skrobot_keys} or None,
         extra_files=extra)
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)

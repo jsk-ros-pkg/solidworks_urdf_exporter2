@@ -465,7 +465,6 @@ python -m sw2robot.exporter.extract output/<robot> --refresh frames --attach
 sw2robot/                one import package (pip install sw2robot)
   exporter/              SolidWorks -> graph.json -> URDF
   editor/                the browser editor (server + single-page web/index.html)
-    _vendor/rc_config/   vendored ROS/MoveIt/Gazebo config generators
 examples/fingertip/      a small pre-extracted package to try the editor offline
 tests/                   pytest (sw2robot.exporter classification) + tests/e2e (puppeteer UI suite)
 ```

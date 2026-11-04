@@ -136,3 +136,45 @@ def test_export_ros_package_from_the_quadruped_example(tmp_path):
     with zipfile.ZipFile(only_urdf) as z:
         assert set(z.namelist()) == {"quadruped/urdf/quadruped.urdf",
                                      "quadruped/README.md"}
+
+
+def test_il_config_carries_the_joint_limits():
+    from skrobot.urdf.ros_config import parse_urdf_content
+
+    from sw2robot.editor.imitation_generator import generate_il_config
+
+    joints = parse_urdf_content("""<robot name="r">
+      <link name="a"/><link name="b"/>
+      <joint name="j" type="revolute"><parent link="a"/><child link="b"/>
+        <limit lower="-0.5" upper="1.25" effort="1" velocity="2"/></joint>
+    </robot>""")["joints"]
+    text = generate_il_config({}, {"selectedJoints": ["j"]}, joints)
+    assert "lower: -0.5" in text
+    assert "upper: 1.25" in text
+    assert "velocity: 2.0" in text
+
+
+def test_export_refuses_an_unknown_option(tmp_path):
+    # includeMoveIt was the old spelling: ignoring it would still write MoveIt
+    state = c.RobotCompilerState(robot_name="r", urdf_path="", package_dir="")
+    with pytest.raises(ValueError, match="includeMoveIt"):
+        c.export_ros_package(state, tmp_path / "r.zip",
+                             export_options={"includeMoveIt": False})
+
+
+def test_an_old_sidecar_loads_with_the_current_keys(tmp_path):
+    import json
+
+    sidecar = tmp_path / "old.sw2robot.json"
+    sidecar.write_text(json.dumps({
+        "robot_name": "r", "urdf_path": "", "package_dir": "",
+        "joints": [{"name": "j", "type": "revolute", "parentLink": "a",
+                    "childLink": "b", "lowerLimit": -1.0, "upperLimit": 1.0}],
+        "links": [{"name": "a", "hasVisual": True}],
+    }), encoding="utf-8")
+    state = c.load_state(sidecar)
+    joint = state.joints[0]
+    assert (joint["parent_link"], joint["child_link"]) == ("a", "b")
+    assert (joint["lower_limit"], joint["upper_limit"]) == (-1.0, 1.0)
+    assert "childLink" not in joint
+    assert state.links[0]["has_visual"] is True

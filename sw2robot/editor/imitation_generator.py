@@ -96,9 +96,9 @@ def generate_il_config(
     for joint in actuated_joints:
         if joint["name"] in action_joints:
             lines.append(f"    {joint['name']}:")
-            lines.append(f"      lower: {joint.get('lowerLimit', 0.0)}")
-            lines.append(f"      upper: {joint.get('upperLimit', 0.0)}")
-            lines.append(f"      velocity: {joint.get('velocityLimit', 0.0)}")
+            lines.append(f"      lower: {joint.get('lower_limit', 0.0)}")
+            lines.append(f"      upper: {joint.get('upper_limit', 0.0)}")
+            lines.append(f"      velocity: {joint.get('velocity_limit', 0.0)}")
 
     # Add training hints
     lines.extend(
