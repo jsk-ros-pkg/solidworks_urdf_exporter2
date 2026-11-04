@@ -48,3 +48,43 @@ def test_no_coincident_mate_keeps_the_point():
                       "dirs": [AXIS, AXIS], "radii": [0.005, 0.005]}]}
     pt = [0.085, 0.068, 0.0]
     assert _contact_point_on_axis(rec, pt, AXIS) == pytest.approx(pt)
+
+
+def _hinge_origin(tmp_path, extra=""):
+    """Build the fingertip package; the screwlock hinge's <origin xyz>."""
+    import shutil
+    import xml.etree.ElementTree as ET
+    from pathlib import Path
+
+    from sw2robot.exporter.export import build
+
+    fingertip = Path(__file__).resolve().parent.parent / "examples" / "fingertip"
+    pkg = tmp_path / "pkg"
+    (pkg / "meshes").mkdir(parents=True)
+    shutil.copy(fingertip / "graph.json", pkg / "graph.json")
+    for mesh in (fingertip / "meshes").glob("*.3dxml"):
+        shutil.copy(mesh, pkg / "meshes" / mesh.name)
+    cfg = pkg / "joints.yaml"
+    cfg.write_text(
+        "base: fingertip_front_2\n"
+        "joints:\n"
+        "  - parent: fingertip_front_2\n"
+        "    child: screwlock_male_hard_jointbase_v4_1\n"
+        "    type: revolute\n" + extra, encoding="utf-8")
+    urdf = ET.parse(build(str(pkg), config_path=str(cfg))).getroot()
+    joint = next(j for j in urdf.findall("joint")
+                 if j.find("child").get("link")
+                 == "screwlock_male_hard_jointbase_v4_1")
+    return [float(v) for v in joint.find("origin").get("xyz").split()]
+
+
+def test_a_configured_axis_point_is_used_as_written(tmp_path):
+    # the screwlock hinge has a contact plane 3.5 mm along its axis from the
+    # concentric point; an axis_point in the config must not be slid onto it
+    slid = _hinge_origin(tmp_path / "a")
+    pinned = _hinge_origin(
+        tmp_path / "b",
+        "    axis_point: [0.0, -0.017, 0.01]\n"
+        "    axis_dir: [0.0, -1.0, 0.0]\n")
+    assert slid[1] == pytest.approx(-0.002)
+    assert pinned[1] == pytest.approx(0.0015)

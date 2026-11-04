@@ -3107,6 +3107,8 @@ def _config_parent_map(comps, adjacency, base, directed):
         edge_info[(child, parent)] = {
             "name": d.get("name"),
             "type": jtype, "axis": ax, "note": note,
+            # a point the user wrote is where the frame goes, verbatim
+            "axis_point_given": bool(d.get("axis_dir") and d.get("axis_point")),
             "lower": -3.141592 if lo is None else lo,
             "upper": 3.141592 if up is None else up,
             "mimic": d.get("mimic"),
@@ -3210,8 +3212,10 @@ def _finalize_tree(comps, adjacency, base, parent_of, edge_info, root_rpy=None,
             # exactly), only slid ALONG the axis onto the contact plane when
             # a perpendicular coincident mate gives one.  Not projected onto
             # the part origin -- that is misleading for parts whose origin is
-            # off their geometry.
-            if info["type"] in ("revolute", "continuous"):
+            # off their geometry.  An axis_point from the joint config is
+            # used as written.
+            if (info["type"] in ("revolute", "continuous")
+                    and not info.get("axis_point_given")):
                 pt = _contact_point_on_axis(
                     adjacency.get(frozenset((child, parent)), {}), pt, d)
             anchor[child] = rotation_translation2matrix(
