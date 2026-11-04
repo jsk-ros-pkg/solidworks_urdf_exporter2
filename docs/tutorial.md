@@ -186,16 +186,12 @@ than like a robot:
     slider in the tree on the right; drag one to see it move.
 
     - **= rename**: give links and joints readable names.
+    - Select a right knee and press **`f`** to flip its axis.
     - Set each joint's limits in its row. On a robot whose links can hit
       each other, **auto joint limits** finds them from a self-collision sweep.
 
-    Names and limits are saved into `quadruped.joints.yaml`, so they survive
-    a rebuild or a re-extract.
-
-    For the knee axes, use `axis_dir` in `quadruped.joints.yaml` (the other
-    tab). Pressing **`f`** on a selected joint flips its axis too, but only in
-    the URDF file: the next change that rebuilds the package, such as a
-    joint-type change, undoes it.
+    Every change is saved into `quadruped.joints.yaml` (a flip as
+    `flip_axis: true`), so it survives a rebuild or a re-extract.
 
 === "joints.yaml"
 

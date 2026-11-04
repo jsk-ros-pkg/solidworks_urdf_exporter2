@@ -22,6 +22,9 @@ Format::
         # upper:  1.57
         # axis_point: [x, y, z]        # optional: override world axis point
         # axis_dir:   [x, y, z]        # optional: override world axis direction
+        # flip_axis: true              # optional: reverse the + direction (the
+        #                              # editor's `f`; lower/upper and mimic
+        #                              # here are then in the flipped sense)
 
 Rename links / joints in the emitted URDF (the web editor writes these when you
 rename in the viewer).  Keyed by the COMPONENT link name / the ``parent__child``

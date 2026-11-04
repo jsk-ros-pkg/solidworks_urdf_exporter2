@@ -598,6 +598,7 @@ def resolve_directed(comps, joints_cfg):
                     "lower": j.get("lower"), "upper": j.get("upper"),
                     "axis_point": j.get("axis_point"),
                     "axis_dir": j.get("axis_dir"),
+                    "flip_axis": bool(j.get("flip_axis")),
                     "mimic": j.get("mimic"),
                     **physics_from_cfg(j)})
     return out
@@ -3109,6 +3110,9 @@ def _config_parent_map(comps, adjacency, base, directed):
             "type": jtype, "axis": ax, "note": note,
             # a point the user wrote is where the frame goes, verbatim
             "axis_point_given": bool(d.get("axis_dir") and d.get("axis_point")),
+            "flip_axis": bool(d.get("flip_axis")),
+            "limits_given": (d.get("lower") is not None
+                             or d.get("upper") is not None),
             "lower": -3.141592 if lo is None else lo,
             "upper": 3.141592 if up is None else up,
             "mimic": d.get("mimic"),
@@ -3139,6 +3143,18 @@ def _config_parent_map(comps, adjacency, base, directed):
                             np.array([0.0, 0.0, 1.0]))
             print(f"      note: {parent}->{child} {info['type']}: no CAD axis, "
                   f"defaulting to world +Z (set axis_dir to change)")
+    # flip_axis: reverse the joint's + direction (the editor's `f`).  Applied
+    # to the axis itself, last, so every consumer -- the URDF <axis>, the
+    # loop-closure relay -- sees one direction.  Limits and mimic written in
+    # the config are already in the flipped sense (the editor converts them
+    # when it toggles the flag); travel the build derived itself (a limit
+    # mate, the +/-pi default) is converted here.
+    for info in edge_info.values():
+        if info.get("flip_axis") and info.get("axis") is not None:
+            pt, ax_dir = info["axis"]
+            info["axis"] = (pt, -np.asarray(ax_dir, float))
+            if not info.get("limits_given"):
+                info["lower"], info["upper"] = -info["upper"], -info["lower"]
     # anything unlisted -> fixed to base
     for c in comps:
         if c.name != base.name and c.name not in parent_of:
