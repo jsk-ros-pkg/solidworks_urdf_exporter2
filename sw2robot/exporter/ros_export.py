@@ -41,6 +41,7 @@ from .geometry import (
     fmt_urdf_num,
     fmt_urdf_vec,
     set_urdf_origin,
+    urdf_link_world_poses,
     urdf_origin_matrix,
 )
 from .urdf_writer import (
@@ -605,6 +606,44 @@ def _tf_marker_scale(root, pkg_dir, own_pkgs, cache):
         return 1.0
     sizes.sort()
     return round(min(1.0, max(0.02, sizes[len(sizes) // 2])), 4)
+
+
+def _rviz_view(root, pkg_dir, own_pkgs, cache):
+    """RViz grid cell + orbit camera that frame the whole model at zero pose.
+
+    Each visual mesh counts as a ball (its centroid, half its bounding-box
+    diagonal) placed by the zero-pose link frames; the camera looks at the
+    centre of their union box from 1.8x its diagonal, and the grid cell is the
+    power of ten below that diagonal.  Returns the template's format fields
+    (RViz's own 1 m cell / 10 m view at the origin when nothing measures)."""
+    import numpy as np
+    poses = urdf_link_world_poses(root)
+    lo = hi = None
+    for link in root.findall("link"):
+        for vis in link.findall("visual"):
+            me = vis.find(".//mesh")
+            if me is None:
+                continue
+            _b, src, _e = _resolve_mesh(pkg_dir, me.get("filename"),
+                                        own_pkgs=own_pkgs)
+            res = cache.measure(src) if src is not None else None
+            if res is None or res[0] <= 0.0:
+                continue
+            size, centroid = res
+            M = poses.get(link.get("name"), np.eye(4)) \
+                @ urdf_origin_matrix(vis.find("origin"))
+            c = (M @ np.append(centroid, 1.0))[:3]
+            lo = c - size / 2 if lo is None else np.minimum(lo, c - size / 2)
+            hi = c + size / 2 if hi is None else np.maximum(hi, c + size / 2)
+    if lo is None:
+        return {"cell_size": 1, "distance": 10, "fx": 0, "fy": 0, "fz": 0}
+    diag = float(np.linalg.norm(hi - lo))
+    focal = (lo + hi) / 2
+    return {"cell_size": fmt_urdf_num(10.0 ** np.floor(np.log10(diag))),
+            "distance": fmt_urdf_num(round(1.8 * diag, 4)),
+            "fx": fmt_urdf_num(round(float(focal[0]), 4)),
+            "fy": fmt_urdf_num(round(float(focal[1]), 4)),
+            "fz": fmt_urdf_num(round(float(focal[2]), 4))}
 
 
 def _bake_origins(root, pkg_dir, own_pkgs, cache):
@@ -1258,6 +1297,9 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
     cache = _MeshCache(os.path.join(pkg_dir, "meshes", ".mesh_cache"))
     # bake visual/collision origins into meshes (-> origin 0 0 0, MuJoCo-ready)
     # and re-centre fixed links on their geometry; {id(mesh_el): 4x4 transform}
+    # framed before the baking below moves any link frame (world poses do not
+    # change, but the visual origins it reads are zeroed)
+    rviz_view = _rviz_view(root, pkg_dir, own_pkgs, cache)
     if zero_origins:
         bake, tf_scale = _bake_origins(root, pkg_dir, own_pkgs, cache)
     else:
@@ -1604,7 +1646,7 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
                       launch.format(name=pkg, robot=urdf_stem).encode("utf-8")))
         files.append((f"{pkg}/rviz/{urdf_stem}.rviz",
                       RVIZ_CONFIG_ROS2.format(fixed_frame=fixed_frame,
-                                              tf_scale=tf_scale)
+                                              tf_scale=tf_scale, **rviz_view)
                       .encode("utf-8")))
         if coupled:
             files.append((f"{pkg}/config/loop_closures.yaml",
