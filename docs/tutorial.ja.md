@@ -272,8 +272,29 @@ python -m sw2robot.exporter.build examples/quadruped \
 エディタの **Export** 欄にも同じボタン（**⬇ ROS2 パッケージ**、
 **⬇ MuJoCo (MJCF)**）があります。
 
+### RViz2 で見る
+
+**Export** 欄の **🚀 ROS 2マシンでビルド＆起動 (curl | bash)** の下に、1 行のコマンドが
+表示されます。クリックするとコピーされるので、エディタを起動したまま、ROS 2 の入った
+マシンの端末に貼り付けて実行します（同じ PC の WSL 2 でも動きます）。エディタから
+ROS 2 パッケージを取ってきて `colcon` でビルドし、`display.launch.py`
+（`robot_state_publisher`、関節スライダーの GUI、RViz2）を起動します。
+
+```bash
+bash -c 'for H in localhost:8090 $(ip route show default 2>/dev/null | cut -d" " -f3):8090; do curl -fs http://$H/api/launch_it.sh && break; done' | bash
+```
+
+（ポート番号はエディタのものです。手で打たずに、Export 欄からコピーしてください。）
+
+![1 行のコマンドで起動した RViz2。関節スライダーを動かすと脚が動く](images/rviz_launch_it.gif){ width="720" }
+
+RViz2 は最初からロボット全体が収まる視点で開きます。スライダーを動かすと、その関節が回ります。
+WSL 2 と ROS 2 Jazzy で試したところ、ビルドは 3.4 秒でした。
+
 ## 次のステップ
 
+- [MuJoCo で歩かせる](walk.md): このロボットを MuJoCo に書き出し、強化学習で
+  トロット歩行させます（CPU で動きます）。
 - 実際のサーボを使う: サーボ本体とホーンをアセンブリに入れ、ホーンをサーボの
   出力軸に同心円で合致させます。ルールは同じ 2 つの合致で、ネジで留めた部品は
   `fixed` になります。

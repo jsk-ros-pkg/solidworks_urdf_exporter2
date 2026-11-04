@@ -77,7 +77,9 @@ plugins:
           nav_translations:
             Home: ホーム
             "Tutorial: a quadruped": "チュートリアル: 4脚ロボット"
+            "Make it walk in MuJoCo": "MuJoCo で歩かせる"
 
 nav:
   - Home: index.md
   - "Tutorial: a quadruped": tutorial.md
+  - "Make it walk in MuJoCo": walk.md
