@@ -1,0 +1,100 @@
+# Joint config -- this IS the kinematic tree.  Edit parent/child to
+# re-wire the chain and 'type' per edge, then re-run:
+#   uv run python -m sw2robot.exporter.export <asm> --config this_file.yaml
+# type: fixed | revolute | prismatic | continuous
+# Sub-assemblies with moving internals expand automatically;
+# override with  expand: [name-substr]  /  no_expand: [name-substr]
+# Embedded SW2URDF CoordSys/RefAxis config auto-applies when present;
+# set sw2urdf_config: off | require  to disable or enforce it, or
+#   sw2urdf_config: sw2urdf_compat  to migrate the add-in's OWN output --
+#   authored axis signs and its mass/inertia, instead of re-deriving
+# A CAD-only part (a dummy axis) can stay in the tree but export as a
+# bare frame -- no visual, no collision, no inertial:
+#   frame_only: [<part or link name>, ...]   (editor: the row checkbox)
+# Named SolidWorks coordinate systems become frame-only links (an
+# empty dummy_link on a fixed joint -- no visual/collision/inertial),
+# on the part/sub-assembly they were drawn in.  Turn off or pick:
+#   coordinate_system_links: off | all | [<CoordSys name>, ...]
+# Model only half a symmetric robot and generate the rest -- links,
+# joints, inertials and meshes reflected through a base_link plane
+# (same q on both sides = mirror pose; limits carry over unchanged):
+#   mirror_limbs:
+#     - {root: right_arm_0, plane: xz, rename: {right: left}}
+# A CAD reference axis can define ONE joint the mates do not show:
+#   axis_joints: [{axis: <RefAxis name>, parent: <part>, child: <part>}]
+#   (the pair may have no mate at all -- a forgotten constraint)
+# Optional per-joint actuator/physics (movable joints only):
+#   effort: 5   velocity: 2   dynamics: {damping: 0.1, friction: 0.0}
+#   safety_controller: {soft_lower_limit: -1, soft_upper_limit: 1, k_position: 100, k_velocity: 10}   calibration: {rising: 0.0}
+
+# Edited for the tutorial (docs/tutorial.md, step 4): limits, a
+# consistent knee axis, and readable names.  Re-build with
+#   uv run python -m sw2robot.exporter.build examples/quadruped \
+#       --config examples/quadruped/quadruped.joints.yaml
+base: body_1
+joints:
+  - parent: body_1
+    child:  thigh_1
+    type:   revolute
+    lower: -1.57
+    upper: 1.57
+  - parent: body_1
+    child:  thigh_2
+    type:   revolute
+    lower: -1.57
+    upper: 1.57
+  - parent: body_1
+    child:  thigh_3
+    type:   revolute
+    lower: -1.57
+    upper: 1.57
+  - parent: body_1
+    child:  thigh_4
+    type:   revolute
+    lower: -1.57
+    upper: 1.57
+  - parent: thigh_1
+    child:  shin_1
+    type:   revolute
+    lower: -2.5
+    upper: 2.5
+  - parent: thigh_2
+    child:  shin_2
+    type:   revolute
+    lower: -2.5
+    upper: 2.5
+    # the right knee's mate axis points +Y; turn it to -Y like
+    # every other joint, so the same angle bends all knees alike
+    axis_dir: [0, -1, 0]
+  - parent: thigh_3
+    child:  shin_3
+    type:   revolute
+    lower: -2.5
+    upper: 2.5
+  - parent: thigh_4
+    child:  shin_4
+    type:   revolute
+    lower: -2.5
+    upper: 2.5
+    # the right knee's mate axis points +Y; turn it to -Y like
+    # every other joint, so the same angle bends all knees alike
+    axis_dir: [0, -1, 0]
+
+link_names:
+  thigh_1: front_left_thigh
+  thigh_2: front_right_thigh
+  thigh_3: rear_left_thigh
+  thigh_4: rear_right_thigh
+  shin_1: front_left_shin
+  shin_2: front_right_shin
+  shin_3: rear_left_shin
+  shin_4: rear_right_shin
+joint_names:
+  body_1__thigh_1: front_left_hip
+  body_1__thigh_2: front_right_hip
+  body_1__thigh_3: rear_left_hip
+  body_1__thigh_4: rear_right_hip
+  thigh_1__shin_1: front_left_knee
+  thigh_2__shin_2: front_right_knee
+  thigh_3__shin_3: rear_left_knee
+  thigh_4__shin_4: rear_right_knee

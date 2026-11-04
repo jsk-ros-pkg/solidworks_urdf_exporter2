@@ -1,0 +1,13 @@
+# Documentation build (mkdocs.yml).  Pinned so a docs deploy never changes
+# because a dependency moved.
+#
+# Material for MkDocs is in maintenance mode -- bug and security fixes only,
+# end of life stated as 2027-05-05 -- and MkDocs 1.6.1 is the last 1.x
+# release.  Zensical, the successor, has a language selector but no workflow
+# for translated pages yet, which this site needs (English + Japanese).
+# Re-evaluate before that end-of-life date.
+#   https://github.com/squidfunk/mkdocs-material/releases
+#   https://zensical.org/docs/setup/language/
+mkdocs==1.6.1
+mkdocs-material==9.8.0
+mkdocs-static-i18n==1.3.1

@@ -17,6 +17,16 @@ output/
 examples/*/urdf/
 examples/*/package.xml
 examples/*/CMakeLists.txt
+# extract-time caches and the whole-assembly preview mesh; the build does
+# not read them
+examples/*/meshes/cache_manifest.json
+examples/*/part_frames_cache.json
+examples/*/*_assembly.3dxml
+# SolidWorks lock files of an open document
+~$*
+
+# `mkdocs build` output (the Pages workflow builds into _site/)
+site/
 
 # test / tooling
 tests/e2e/node_modules/

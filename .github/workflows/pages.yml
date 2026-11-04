@@ -1,14 +1,19 @@
-name: Deploy install scripts to Pages
+name: Docs and install scripts to Pages
 
-# Publish the one-line installers on GitHub Pages so users can fetch them from a
-# shorter, canonical URL:
+# The GitHub Pages site:
 #
-#   https://jsk-ros-pkg.github.io/solidworks_urdf_exporter2/install.sh
+#   https://jsk-ros-pkg.github.io/solidworks_urdf_exporter2/              docs (English)
+#   https://jsk-ros-pkg.github.io/solidworks_urdf_exporter2/ja/           docs (Japanese)
+#   https://jsk-ros-pkg.github.io/solidworks_urdf_exporter2/install.sh    one-line installers
 #   https://jsk-ros-pkg.github.io/solidworks_urdf_exporter2/install.ps1
 #
-# instead of the longer raw.githubusercontent.com/<repo>/main/... path.  The
-# scripts themselves live at the repo root (single source of truth); this job
-# just copies them into the Pages artifact -- editing install.sh redeploys it.
+# The docs are MkDocs (mkdocs.yml, docs/).  The installers live at the repo
+# root (single source of truth) and are copied to the site root next to the
+# docs, so their URLs -- printed in the README and in every release -- never
+# change.
+#
+# Pull requests that touch the docs only BUILD the site (--strict, so a broken
+# link or anchor fails the check); pushes to main build and deploy it.
 #
 # The Pages URL path is always <org>.github.io/<repo>/...; the repo name can't be
 # dropped without a custom domain.  To go shorter (e.g. sw2robot.dev/install.sh),
@@ -20,74 +25,75 @@ on:
     paths:
       - install.sh
       - install.ps1
+      - mkdocs.yml
+      - docs/**
+      - .github/workflows/pages.yml
+  pull_request:
+    paths:
+      - mkdocs.yml
+      - docs/**
       - .github/workflows/pages.yml
   workflow_dispatch:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
-
-# never run two Pages deploys at once; the newest push wins
-concurrency:
-  group: pages
-  cancel-in-progress: true
 
 jobs:
-  deploy:
+  build:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Assemble the Pages site
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build the docs
+        env:
+          # Material's end-of-life banner (see docs/requirements.txt)
+          NO_MKDOCS_2_WARNING: '1'
         run: |
-          mkdir -p _site
+          pip install -r docs/requirements.txt
+          mkdocs build --strict -d _site
+
+      - name: Add the install scripts
+        run: |
           cp install.sh install.ps1 _site/
           # disable Jekyll so the raw scripts are served verbatim (no templating,
           # and files/dirs starting with '_' or '.' aren't dropped)
           touch _site/.nojekyll
-          # a tiny landing page at the site root showing the install commands
-          cat > _site/index.html <<'HTML'
-          <!doctype html>
-          <meta charset="utf-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1">
-          <title>sw2robot — install</title>
-          <style>
-            :root { color-scheme: light dark; }
-            body { font: 16px/1.6 system-ui, sans-serif; max-width: 720px;
-                   margin: 6vh auto; padding: 0 1.2rem; }
-            h1 { font-size: 1.6rem; } code, pre { font-family: ui-monospace, monospace; }
-            pre { background: color-mix(in srgb, currentColor 8%, transparent);
-                  padding: .9rem 1rem; border-radius: 8px; overflow-x: auto; }
-            a { color: inherit; }
-          </style>
-          <h1>sw2robot — one-line install</h1>
-          <p><strong>Linux / macOS</strong></p>
-          <pre>curl -LsSf https://jsk-ros-pkg.github.io/solidworks_urdf_exporter2/install.sh | sh</pre>
-          <p><strong>Windows</strong> (PowerShell)</p>
-          <pre>powershell -ExecutionPolicy ByPass -c "irm https://jsk-ros-pkg.github.io/solidworks_urdf_exporter2/install.ps1 | iex"</pre>
-          <p>Then run <code>sw2robot-web</code>. See the
-          <a href="https://github.com/jsk-ros-pkg/solidworks_urdf_exporter2">project README</a>
-          and <a href="https://github.com/jsk-ros-pkg/solidworks_urdf_exporter2/releases/latest">latest release</a>.</p>
-          HTML
 
           # To serve from a custom domain instead, uncomment and set your domain,
           # then add the DNS records GitHub Pages documents:
           # echo "sw2robot.dev" > _site/CNAME
 
+      - uses: actions/upload-pages-artifact@v3
+        if: github.event_name != 'pull_request'
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    # never run two Pages deploys at once; the newest push wins
+    concurrency:
+      group: pages
+      cancel-in-progress: true
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
       - name: Configure Pages
         # enablement: true turns Pages on for the repo on first run (source =
         # GitHub Actions), so no manual Settings -> Pages click is needed.
         uses: actions/configure-pages@v5
         with:
           enablement: true
-
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: _site
 
       - id: deployment
         uses: actions/deploy-pages@v4
