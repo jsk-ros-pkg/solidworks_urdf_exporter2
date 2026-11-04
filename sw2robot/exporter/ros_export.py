@@ -56,10 +56,8 @@ from .urdf_writer import (
     PACKAGE_XML,
     PACKAGE_XML_ROS2,
     PACKAGE_XML_ROS2_COUPLED,
-    ROS2_CONTROL_JOINT,
     ROS2_CONTROL_URDF_XACRO,
     ROS2_CONTROL_XACRO,
-    ROS2_CONTROLLERS_YAML,
     RVIZ_CONFIG_ROS2,
 )
 
@@ -81,6 +79,8 @@ def _ros2_control_files(urdf_text, root, pkg, urdf_stem):
     from lxml import etree
     from skrobot.urdf import transform_urdf_to_macro
     from skrobot.urdf.modularize_urdf import find_root_link
+    from skrobot.urdf.ros_config import generate_controllers_yaml, parse_urdf_content
+    from skrobot.urdf.ros_config.gazebo_generator import build_ros2_control_elements
 
     macro = re.sub(r"\W", "_", urdf_stem)
     fd, tmp = tempfile.mkstemp(suffix=".urdf")
@@ -94,46 +94,35 @@ def _ros2_control_files(urdf_text, root, pkg, urdf_stem):
     robot_xacro = etree.tostring(xacro_root, pretty_print=True,
                                  xml_declaration=True, encoding="utf-8")
 
-    joints, blocks = [], []
-    for j in root.findall("joint"):
-        if j.get("type") not in ("revolute", "continuous", "prismatic") \
-                or j.find("mimic") is not None:
-            continue
-        lim = j.find("limit")
-        limits, initial = "", 0.0
-        if j.get("type") != "continuous" and lim is not None:
-            lower = float(lim.get("lower", 0.0))
-            upper = float(lim.get("upper", 0.0))
-            limits = (f'          <param name="min">{fmt_urdf_num(lower)}</param>\n'
-                      f'          <param name="max">{fmt_urdf_num(upper)}</param>\n')
-            initial = min(max(0.0, lower), upper)
-        joints.append(j.get("name"))
-        blocks.append(ROS2_CONTROL_JOINT.format(
-            name=j.get("name"), limits=limits, initial=fmt_urdf_num(initial)))
-
-    controllers = jtc = spawn = ""
-    if joints:
-        controllers = ("    joint_trajectory_controller:\n"
-                       "      type: joint_trajectory_controller/"
-                       "JointTrajectoryController\n")
-        jtc = ("\njoint_trajectory_controller:\n"
-               "  ros__parameters:\n"
-               "    joints:\n"
-               + "".join(f"      - {n}\n" for n in joints)
-               + "    command_interfaces:\n      - position\n"
-               "    state_interfaces:\n      - position\n      - velocity\n")
-        spawn = ', "joint_trajectory_controller"'
+    driven = [j for j in parse_urdf_content(urdf_text)["joints"]
+              if j["type"] in ("revolute", "continuous", "prismatic")
+              and not j["is_mimic"]]
+    joints = [j["name"] for j in driven]
+    # every name is ${prefix}-ed and the plugin is a xacro parameter, so the
+    # macro can be instantiated twice and pointed at real hardware
+    ros2_control, _gazebo = build_ros2_control_elements(
+        ["${prefix}" + n for n in joints], package_name=pkg,
+        name="${prefix}" + macro, hardware_plugin="${plugin}",
+        joint_limits={"${prefix}" + j["name"]: (j["lower_limit"],
+                                                j["upper_limit"])
+                      for j in driven if j["type"] != "continuous"
+                      and j["lower_limit"] < j["upper_limit"]})
+    ET.indent(ros2_control, space="  ", level=2)
+    controllers = generate_controllers_yaml(
+        [{"name": "joint_trajectory_controller", "joints": joints}]
+        if joints else [])
+    spawn = ', "joint_trajectory_controller"' if joints else ""
     return [
         (f"{pkg}/urdf/{urdf_stem}.urdf.xacro", robot_xacro),
         (f"{pkg}/urdf/{urdf_stem}.ros2_control.xacro",
-         ROS2_CONTROL_XACRO.format(macro=macro, joints="".join(blocks))
+         ROS2_CONTROL_XACRO.format(
+             macro=macro,
+             ros2_control=ET.tostring(ros2_control, encoding="unicode"))
          .encode("utf-8")),
         (f"{pkg}/urdf/{urdf_stem}_control.urdf.xacro",
          ROS2_CONTROL_URDF_XACRO.format(name=pkg, robot=urdf_stem, macro=macro)
          .encode("utf-8")),
-        (f"{pkg}/config/ros2_controllers.yaml",
-         ROS2_CONTROLLERS_YAML.format(controllers=controllers, jtc=jtc)
-         .encode("utf-8")),
+        (f"{pkg}/config/ros2_controllers.yaml", controllers.encode("utf-8")),
         (f"{pkg}/launch/control.launch.py",
          CONTROL_LAUNCH_ROS2.format(name=pkg, robot=urdf_stem, spawn=spawn)
          .encode("utf-8")),

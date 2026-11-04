@@ -589,32 +589,18 @@ Visualization Manager:
 # urdf/<robot>_control.urdf.xacro that puts the two together on a `world` link.
 # control.launch.py runs that through controller_manager with mock hardware, so
 # a trajectory sent to the package moves the robot in RViz with no real servo;
-# `plugin:=` swaps in a real hardware interface or gz_ros2_control.
-# {macro} = xacro macro name, {joints} = the <joint> blocks below.
+# `plugin:=` swaps in a real hardware interface or gz_ros2_control.  The
+# <ros2_control> element itself comes from skrobot's
+# build_ros2_control_elements and the controllers config from
+# generate_controllers_yaml; only the xacro wrapping and the launch live here.
+# {macro} = xacro macro name, {ros2_control} = the serialised element.
 ROS2_CONTROL_XACRO = """<?xml version="1.0"?>
 <robot xmlns:xacro="http://ros.org/wiki/xacro">
   <xacro:macro name="{macro}_ros2_control"
                params="prefix:='' plugin:=mock_components/GenericSystem">
-    <ros2_control name="${{prefix}}{macro}" type="system">
-      <hardware>
-        <plugin>${{plugin}}</plugin>
-      </hardware>
-{joints}    </ros2_control>
+    {ros2_control}
   </xacro:macro>
 </robot>
-"""
-
-# {name} = joint name, {limits} = its min/max params (none for a continuous
-# joint), {initial} = 0 clamped into the limits (mock hardware starts every
-# joint at its initial_value)
-ROS2_CONTROL_JOINT = """      <joint name="${{prefix}}{name}">
-        <command_interface name="position">
-{limits}        </command_interface>
-        <state_interface name="position">
-          <param name="initial_value">{initial}</param>
-        </state_interface>
-        <state_interface name="velocity"/>
-      </joint>
 """
 
 # {name} = package name, {robot} = urdf file stem, {macro} = xacro macro name
@@ -629,15 +615,6 @@ ROS2_CONTROL_URDF_XACRO = """<?xml version="1.0"?>
   <xacro:{macro}_ros2_control prefix="$(arg prefix)" plugin="$(arg plugin)"/>
 </robot>
 """
-
-# {controllers} = the controller_manager entries, {jtc} = the trajectory
-# controller's own parameters (both empty for a robot with no movable joint)
-ROS2_CONTROLLERS_YAML = """controller_manager:
-  ros__parameters:
-    update_rate: 100
-    joint_state_broadcaster:
-      type: joint_state_broadcaster/JointStateBroadcaster
-{controllers}{jtc}"""
 
 # {name} = package name, {robot} = urdf file stem, {spawn} = the controllers
 # to start after joint_state_broadcaster

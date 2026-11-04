@@ -67,7 +67,7 @@ dependencies = [
     # zero-volume stamped part, a perfectly flat sheet) so a real robot fails to
     # compile in MuJoCo, and has neither joint_damping='backemf' nor
     # home_base_height='auto', which sw2robot asks it for by name.
-    "scikit-robot>=0.3.34",
+    "scikit-robot>=0.4.12",
     # only the EXTRACT step (driving SolidWorks COM) needs this, and only on Windows
     "pywin32>=306; sys_platform == 'win32'",
 ]
