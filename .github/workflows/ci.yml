@@ -392,6 +392,8 @@ jobs:
             "{trajectory: {joint_names: [$joint], points: [{positions: [0.3], time_from_start: {sec: 1}}]}}" \
             | tee /tmp/goal.log
           grep -q SUCCEEDED /tmp/goal.log
-          pos=$(ros2 topic echo --once /joint_states --field position | sed -n 's/^- //p' | head -1)
+          ros2 topic echo --once /joint_states > /tmp/js.txt
+          cat /tmp/js.txt
+          pos=$(sed -n '/^position:/,/^[a-z]/p' /tmp/js.txt | grep -oE -- '-?[0-9]+\.?[0-9]*(e-?[0-9]+)?' | head -1)
           echo "joint position after the goal: $pos"
           python3 -c "import sys; sys.exit(abs(float('$pos') - 0.3) > 1e-3)"
