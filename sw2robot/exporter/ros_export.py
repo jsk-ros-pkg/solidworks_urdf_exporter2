@@ -82,7 +82,11 @@ def _ros2_control_files(urdf_text, root, pkg, urdf_stem):
     from skrobot.urdf.ros_config import generate_controllers_yaml, parse_urdf_content
     from skrobot.urdf.ros_config.gazebo_generator import build_ros2_control_elements
 
+    # the macro name becomes an XML tag (<xacro:NAME>), which cannot start
+    # with a digit the way a URDF file stem may
     macro = re.sub(r"\W", "_", urdf_stem)
+    if not re.match(r"[A-Za-z_]", macro):
+        macro = "_" + macro
     fd, tmp = tempfile.mkstemp(suffix=".urdf")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:

@@ -444,6 +444,31 @@ def test_ros2_package_ships_xacro_and_ros2_control(tmp_path):
     assert "config" in files["jk_description/CMakeLists.txt"].decode()
 
 
+def test_control_xacro_runs_the_robot_unprefixed(tmp_path):
+    """The launched robot's joints must match the controllers config, which
+    names them unprefixed, so the top-level xacro offers no prefix; and a
+    URDF stem that starts with a digit still gives a valid macro tag."""
+    import xml.etree.ElementTree as ET
+
+    from sw2robot.exporter.ros_export import build_ros_description
+
+    pkg_dir = _make_joint_kinds_pkg(tmp_path)
+    files = dict(build_ros_description(pkg_dir, "jk", ros_version=2,
+                                       urdf_name="3axis"))
+    top = files["jk_description/urdf/3axis_control.urdf.xacro"].decode()
+    assert "prefix" not in top
+    root = ET.fromstring(top)     # parses: no <xacro:3axis> tag
+    macros = [el.tag.split("}")[-1] for el in root
+              if el.tag.startswith("{http://ros.org/wiki/xacro}")
+              and el.tag.split("}")[-1] not in ("arg", "include")]
+    assert macros == ["_3axis", "_3axis_ros2_control"]
+    robot = files["jk_description/urdf/3axis.urdf.xacro"].decode()
+    assert 'xacro:macro name="_3axis"' in robot
+    launch = files["jk_description/launch/control.launch.py"].decode()
+    assert '("~/robot_description", "/robot_description")' in launch
+    compile(launch, "control.launch.py", "exec")
+
+
 def test_build_ros_description_custom_mesh_dir(tmp_path):
     """``mesh_dir`` moves the emitted meshes (and repoints the URDF's
     package:// refs) to a custom package-relative directory."""

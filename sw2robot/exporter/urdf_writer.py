@@ -603,16 +603,18 @@ ROS2_CONTROL_XACRO = """<?xml version="1.0"?>
 </robot>
 """
 
-# {name} = package name, {robot} = urdf file stem, {macro} = xacro macro name
+# {name} = package name, {robot} = urdf file stem, {macro} = xacro macro name.
+# This is the one robot that control.launch.py runs, so it takes no prefix: the
+# controllers config names the joints unprefixed.  Composing several robots
+# goes through the two macros above, each with its own prefix and controllers.
 ROS2_CONTROL_URDF_XACRO = """<?xml version="1.0"?>
 <robot name="{robot}" xmlns:xacro="http://ros.org/wiki/xacro">
-  <xacro:arg name="prefix" default=""/>
   <xacro:arg name="plugin" default="mock_components/GenericSystem"/>
   <xacro:include filename="$(find {name})/urdf/{robot}.urdf.xacro"/>
   <xacro:include filename="$(find {name})/urdf/{robot}.ros2_control.xacro"/>
   <link name="world"/>
-  <xacro:{macro} prefix="$(arg prefix)" parent_link="world"/>
-  <xacro:{macro}_ros2_control prefix="$(arg prefix)" plugin="$(arg plugin)"/>
+  <xacro:{macro} parent_link="world"/>
+  <xacro:{macro}_ros2_control plugin="$(arg plugin)"/>
 </robot>
 """
 
@@ -657,7 +659,11 @@ def generate_launch_description():
             package="controller_manager",
             executable="ros2_control_node",
             output="screen",
+            # Humble reads the description from this parameter; Jazzy from
+            # its ~/robot_description topic, which robot_state_publisher
+            # publishes as /robot_description
             parameters=[robot_description, controllers],
+            remappings=[("~/robot_description", "/robot_description")],
         ),
         *spawners,
         Node(
