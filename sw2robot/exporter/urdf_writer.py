@@ -533,7 +533,9 @@ def generate_launch_description():
 # A minimal RViz2 config so the robot shows up immediately (RobotModel from the
 # /robot_description topic, TF, grid).  {fixed_frame} = the root link name,
 # {tf_scale} = TF axis ("Marker Scale") sized to the model so the triads do not
-# dwarf small parts (<= 1.0).
+# dwarf small parts (<= 1.0); {cell_size}, {distance} and {fx}/{fy}/{fz} = grid
+# cell and orbit camera framing the whole model (RViz's 1 m / 10 m defaults
+# leave a small robot a dot in the middle of the grid).
 RVIZ_CONFIG_ROS2 = """Panels:
   - Class: rviz_common/Displays
     Name: Displays
@@ -542,6 +544,7 @@ Visualization Manager:
     - Class: rviz_default_plugins/Grid
       Enabled: true
       Name: Grid
+      Cell Size: {cell_size}
     - Class: rviz_default_plugins/RobotModel
       Enabled: true
       Name: RobotModel
@@ -568,6 +571,11 @@ Visualization Manager:
     Current:
       Class: rviz_default_plugins/Orbit
       Name: Current View
+      Distance: {distance}
+      Focal Point:
+        X: {fx}
+        Y: {fy}
+        Z: {fz}
 """
 
 # --- ROS 2 closed-loop variants ---------------------------------------------

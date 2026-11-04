@@ -133,3 +133,71 @@ def set_urdf_origin(el, M):
     xyz, rpy = matrix_to_xyz_rpy(M)
     origin.set("xyz", fmt_urdf_vec(xyz))
     origin.set("rpy", fmt_urdf_vec(rpy))
+
+
+def urdf_link_world_poses(root):
+    """Zero-position link poses from URDF joint origins.
+
+    Editor URDFs are routinely partial -- several roots, or links no joint
+    reaches -- and every disconnected piece sits at identity.
+
+    Only the kinematic skeleton goes to skrobot, because the rest of an editor
+    URDF does not survive a load: meshes are still .3dxml, and inertials are
+    empty placeholders until the mass pass runs.  Joints go over as `fixed` so
+    that a limit range excluding zero cannot displace the frames -- skrobot
+    starts a prismatic joint at its lower limit, not at zero.  Every root is
+    then hung off one synthetic link by an identity joint, which leaves the
+    poses untouched and hands skrobot the single connected tree it validates
+    for; a disconnected editor URDF is the normal case here, and letting it
+    log a graph error every time would bury the errors that matter.
+    """
+    from skrobot.models.urdf import RobotModelFromURDF
+
+    names = list(dict.fromkeys(ln.get("name") for ln in root.findall("link")
+                               if ln.get("name")))
+    if not names:
+        return {}
+
+    edges, parented = [], set()
+    for j in root.findall("joint"):
+        p = j.find("parent")
+        c = j.find("child")
+        parent = p.get("link") if p is not None else ""
+        child = c.get("link") if c is not None else ""
+        # a link has exactly one parent, and none via a self-loop; keeping the
+        # first joint per child mirrors the depth-first walk this replaced
+        if not parent or not child or parent == child or child in parented:
+            continue
+        parented.add(child)
+        edges.append((parent, child, j.find("origin")))
+
+    # a joint may name a link the document never declares; carry it so the
+    # chain below it still resolves, then drop it from the result
+    linked = list(dict.fromkeys(
+        names + [p for p, _, _ in edges] + [c for _, c, _ in edges]))
+    anchor = "_fk_root"
+    while anchor in linked:
+        anchor += "_"
+
+    skeleton = ET.Element("robot", {"name": "fk"})
+    ET.SubElement(skeleton, "link", {"name": anchor})
+    for name in linked:
+        ET.SubElement(skeleton, "link", {"name": name})
+    # joint names are generated, never copied, so a duplicated or missing name
+    # in the source cannot collide here
+    for i, (parent, child, origin) in enumerate(edges):
+        elem = ET.SubElement(skeleton, "joint",
+                              {"name": f"e{i}", "type": "fixed"})
+        ET.SubElement(elem, "parent", {"link": parent})
+        ET.SubElement(elem, "child", {"link": child})
+        if origin is not None:
+            ET.SubElement(elem, "origin", dict(origin.attrib))
+    for i, name in enumerate(n for n in linked if n not in parented):
+        elem = ET.SubElement(skeleton, "joint",
+                              {"name": f"r{i}", "type": "fixed"})
+        ET.SubElement(elem, "parent", {"link": anchor})
+        ET.SubElement(elem, "child", {"link": name})
+
+    rb = RobotModelFromURDF(urdf=ET.tostring(skeleton, encoding="unicode"))
+    poses = {ln.name: ln.worldcoords().T() for ln in rb.link_list}
+    return {name: poses.get(name, np.eye(4)) for name in names}

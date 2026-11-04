@@ -357,6 +357,26 @@ def test_rviz_tf_marker_scale_sized_to_model(tmp_path):
     assert 0.0 < scale <= 1.0
 
 
+def test_rviz_view_frames_the_model(tmp_path):
+    """The generated .rviz points the orbit camera at the model from a distance
+    and a grid cell on its scale, not RViz's 10 m / 1 m defaults that leave a
+    small robot a dot in the middle of the grid."""
+    import re as _re
+
+    from sw2robot.exporter.ros_export import build_ros_description
+
+    pkg_dir = _make_pkg(tmp_path, robot="fing")
+    files = dict(build_ros_description(pkg_dir, "fing", ros_version=2))
+    rviz = files["fing_description/rviz/fing_description.rviz"].decode()
+    tf_scale = float(_re.search(r"Marker Scale:\s*([0-9.]+)", rviz).group(1))
+
+    distance = float(_re.search(r"Distance:\s*([0-9.e-]+)", rviz).group(1))
+    cell = float(_re.search(r"Cell Size:\s*([0-9.e-]+)", rviz).group(1))
+    assert tf_scale <= distance < 10.0 * tf_scale + 1.0
+    assert cell < 1.0 or distance > 5.0
+    assert _re.search(r"Focal Point:\s*\n\s*X: \S+\n\s*Y: \S+\n\s*Z: \S+", rviz)
+
+
 def test_build_ros_description_custom_mesh_dir(tmp_path):
     """``mesh_dir`` moves the emitted meshes (and repoints the URDF's
     package:// refs) to a custom package-relative directory."""

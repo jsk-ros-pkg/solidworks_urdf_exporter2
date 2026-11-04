@@ -3382,77 +3382,6 @@ def _set_urdf_axis(joint, axis):
     elem.set("xyz", fmt_urdf_vec(axis))
 
 
-def _urdf_link_world_poses(root):
-    """Zero-position link poses from URDF joint origins.
-
-    Editor URDFs are routinely partial -- several roots, or links no joint
-    reaches -- and every disconnected piece sits at identity.
-
-    Only the kinematic skeleton goes to skrobot, because the rest of an editor
-    URDF does not survive a load: meshes are still .3dxml, and inertials are
-    empty placeholders until the mass pass runs.  Joints go over as `fixed` so
-    that a limit range excluding zero cannot displace the frames -- skrobot
-    starts a prismatic joint at its lower limit, not at zero.  Every root is
-    then hung off one synthetic link by an identity joint, which leaves the
-    poses untouched and hands skrobot the single connected tree it validates
-    for; a disconnected editor URDF is the normal case here, and letting it
-    log a graph error every time would bury the errors that matter.
-    """
-    import xml.etree.ElementTree as _ET
-
-    import numpy as _np
-    from skrobot.models.urdf import RobotModelFromURDF
-
-    names = list(dict.fromkeys(ln.get("name") for ln in root.findall("link")
-                               if ln.get("name")))
-    if not names:
-        return {}
-
-    edges, parented = [], set()
-    for j in root.findall("joint"):
-        p = j.find("parent")
-        c = j.find("child")
-        parent = p.get("link") if p is not None else ""
-        child = c.get("link") if c is not None else ""
-        # a link has exactly one parent, and none via a self-loop; keeping the
-        # first joint per child mirrors the depth-first walk this replaced
-        if not parent or not child or parent == child or child in parented:
-            continue
-        parented.add(child)
-        edges.append((parent, child, j.find("origin")))
-
-    # a joint may name a link the document never declares; carry it so the
-    # chain below it still resolves, then drop it from the result
-    linked = list(dict.fromkeys(
-        names + [p for p, _, _ in edges] + [c for _, c, _ in edges]))
-    anchor = "_fk_root"
-    while anchor in linked:
-        anchor += "_"
-
-    skeleton = _ET.Element("robot", {"name": "fk"})
-    _ET.SubElement(skeleton, "link", {"name": anchor})
-    for name in linked:
-        _ET.SubElement(skeleton, "link", {"name": name})
-    # joint names are generated, never copied, so a duplicated or missing name
-    # in the source cannot collide here
-    for i, (parent, child, origin) in enumerate(edges):
-        elem = _ET.SubElement(skeleton, "joint",
-                              {"name": f"e{i}", "type": "fixed"})
-        _ET.SubElement(elem, "parent", {"link": parent})
-        _ET.SubElement(elem, "child", {"link": child})
-        if origin is not None:
-            _ET.SubElement(elem, "origin", dict(origin.attrib))
-    for i, name in enumerate(n for n in linked if n not in parented):
-        elem = _ET.SubElement(skeleton, "joint",
-                              {"name": f"r{i}", "type": "fixed"})
-        _ET.SubElement(elem, "parent", {"link": anchor})
-        _ET.SubElement(elem, "child", {"link": name})
-
-    rb = RobotModelFromURDF(urdf=_ET.tostring(skeleton, encoding="unicode"))
-    poses = {ln.name: ln.worldcoords().T() for ln in rb.link_list}
-    return {name: poses.get(name, _np.eye(4)) for name in names}
-
-
 def _collapse_plan_name_map(plan, link_elems):
     """Map plan link names to the current URDF names where they differ."""
     names = set(link_elems)
@@ -3516,8 +3445,9 @@ def _collapsed_preview_urdf_text(urdf_text, plan, robot_name=None,
     def nm(name):
         return name_map.get(name, name)
 
-    link_poses = _urdf_link_world_poses(root)
-    driver_link_poses = _urdf_link_world_poses(driver_root)
+    from sw2robot.exporter.geometry import urdf_link_world_poses
+    link_poses = urdf_link_world_poses(root)
+    driver_link_poses = urdf_link_world_poses(driver_root)
 
     def source_joint_elem(source, fallback_name=""):
         if source in driver_joint_elems:
@@ -5438,6 +5368,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                     return self._send_json({"attach_to": None})
                 import xml.etree.ElementTree as _ET
 
+                from sw2robot.exporter.geometry import urdf_link_world_poses
                 from sw2robot.exporter.limb_mirror import suggest_attach
                 root_el = _ET.parse(urdf).getroot()
                 parent_of = {}
@@ -5446,7 +5377,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                     if c is not None and pa is not None \
                             and c.get("link") not in parent_of:
                         parent_of[c.get("link")] = pa.get("link")
-                poses = _urdf_link_world_poses(root_el)
+                poses = urdf_link_world_poses(root_el)
                 return self._send_json({
                     "attach_to": suggest_attach(poses, parent_of, link, plane)})
             if path == "/api/components":

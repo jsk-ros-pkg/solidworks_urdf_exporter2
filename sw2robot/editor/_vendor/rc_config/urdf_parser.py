@@ -7,7 +7,7 @@ Deliberately NOT ``skrobot.utils.urdf.URDF``, which the editor does use
 wherever it needs kinematics.  That loader validates as much as it parses, and
 the documents reaching this function are the ones that fail validation: the
 editor opens whatever URDF a user points it at, and its own in-progress URDFs
-are routinely partial (see ``webserver._urdf_link_world_poses``).  Concretely
+are routinely partial (see ``geometry.urdf_link_world_poses``).  Concretely
 ``URDF.load`` raises on an empty ``<inertial/>``, on a joint missing
 ``type``/``<parent>``/``<child>``, on a link with no ``name`` and on any joint
 type outside its fixed list; on an XML syntax error it returns
