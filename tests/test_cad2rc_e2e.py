@@ -100,11 +100,17 @@ def test_register_and_export(state, tmp_path):
 
 def test_export_ros_package_from_the_quadruped_example(tmp_path):
     """The config ZIP from a committed package (no cache needed): skrobot's
-    URDF/MoveIt/Gazebo configs plus sw2robot's servo mapping and IL config."""
+    URDF/MoveIt/Gazebo configs plus sw2robot's servo mapping and IL config.
+    Only the extraction (graph.json + meshes) is committed, so the URDF is
+    built here, the way the editor's headless import does it."""
     example = REPO_ROOT / "examples" / "quadruped"
     pkg = tmp_path / "quadruped"
-    shutil.copytree(example, pkg)
-    state = c.load_module(pkg / "urdf" / "quadruped.urdf", package_dir=pkg)
+    (pkg / "meshes").mkdir(parents=True)
+    for name in ("graph.json", "quadruped.joints.yaml"):
+        shutil.copy(example / name, pkg / name)
+    for mesh in (example / "meshes").glob("*.3dxml"):
+        shutil.copy(mesh, pkg / "meshes" / mesh.name)
+    state = c.import_module(pkg, config_path=pkg / "quadruped.joints.yaml")
     hip = c.movable_names(state)[0]
     c.rename_joint(state, hip, "fl_hip")
     c.set_servo(state, hip, servo_id=3, direction=-1, angle_offset=0.0)
