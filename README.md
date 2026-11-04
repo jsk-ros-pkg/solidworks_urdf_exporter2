@@ -19,6 +19,11 @@ URDF, then clean it up in the browser.
 
 https://github.com/user-attachments/assets/96c70440-b0b2-4546-af10-1568d4b97819
 
+**New here?** The [tutorial](https://jsk-ros-pkg.github.io/solidworks_urdf_exporter2/tutorial/)
+([日本語](https://jsk-ros-pkg.github.io/solidworks_urdf_exporter2/ja/tutorial/))
+builds a quadruped in SolidWorks from three simple parts and turns it into a
+URDF; its files are in [`examples/quadruped`](examples/quadruped).
+
 One import package, with two subpackages:
 
 - **`sw2robot.exporter`** — the exporter. `extract` opens a throwaway copy of a `.sldasm`

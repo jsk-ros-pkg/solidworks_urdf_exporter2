@@ -1,0 +1,2068 @@
+{
+  "robot_name": "quadruped",
+  "source_assembly": "C:\\Users\\abior\\src\\github.com\\jsk-ros-pkg\\solidworks_urdf_exporter2\\examples\\quadruped\\cad\\quadruped.SLDASM",
+  "components": [
+    {
+      "name": "body-1",
+      "link_name": "body_1",
+      "part_path": "C:\\Users\\abior\\AppData\\Local\\Temp\\sw2urdf_ys273jps\\body.SLDPRT",
+      "is_subassembly": false,
+      "world": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "fixed": true,
+      "is_fastener": false,
+      "dof": 2,
+      "mesh_file": "meshes\\body_1.3dxml",
+      "material": "ABS",
+      "density": 1020.0,
+      "appearance": "plastic/textured/White-PW-MT11050",
+      "sw_mass": 1.0796835396053295,
+      "sw_com": [
+        -2.924267557426137e-18,
+        3.2008401517919063e-18,
+        -9.402467945888724e-21
+      ],
+      "sw_inertia": [
+        0.0014466899525571902,
+        8.437242248040984e-22,
+        -2.968625734820564e-38,
+        0.004506553617893572,
+        -8.51182415311652e-22,
+        0.005665979526205696
+      ],
+      "sw_mass_overridden": false,
+      "mass_inherited_from": null,
+      "mass_target": null,
+      "mass_only": false,
+      "configuration": "ﾃﾞﾌｫﾙﾄ"
+    },
+    {
+      "name": "shin-1",
+      "link_name": "shin_1",
+      "part_path": "C:\\Users\\abior\\AppData\\Local\\Temp\\sw2urdf_ys273jps\\shin.SLDPRT",
+      "is_subassembly": false,
+      "world": [
+        1.0,
+        0.0,
+        0.0,
+        0.085,
+        0.0,
+        1.0,
+        0.0,
+        0.068,
+        0.0,
+        0.0,
+        1.0,
+        -0.1,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "fixed": false,
+      "is_fastener": false,
+      "dof": 2,
+      "mesh_file": "meshes\\shin_1.3dxml",
+      "material": "ABS",
+      "density": 1019.9999999999999,
+      "appearance": "plastic/textured/White-PW-MT11050",
+      "sw_mass": 0.018242654703996955,
+      "sw_com": [
+        7.486658421158835e-36,
+        0.004,
+        -0.05175655602688106
+      ],
+      "sw_inertia": [
+        0.000019595726366114993,
+        -5.247671477612097e-41,
+        3.079774378285469e-22,
+        0.000020102515167193584,
+        -1.6478988765704848e-23,
+        7.01377117921222e-7
+      ],
+      "sw_mass_overridden": false,
+      "mass_inherited_from": null,
+      "mass_target": null,
+      "mass_only": false,
+      "configuration": "ﾃﾞﾌｫﾙﾄ"
+    },
+    {
+      "name": "shin-2",
+      "link_name": "shin_2",
+      "part_path": "C:\\Users\\abior\\AppData\\Local\\Temp\\sw2urdf_ys273jps\\shin.SLDPRT",
+      "is_subassembly": false,
+      "world": [
+        -1.0,
+        -1.2246467991473532e-16,
+        0.0,
+        0.085,
+        1.2246467991473532e-16,
+        -1.0,
+        0.0,
+        -0.068,
+        0.0,
+        0.0,
+        1.0,
+        -0.1,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "fixed": false,
+      "is_fastener": false,
+      "dof": 2,
+      "mesh_file": "meshes\\shin_1.3dxml",
+      "material": "ABS",
+      "density": 1019.9999999999999,
+      "appearance": "plastic/textured/White-PW-MT11050",
+      "sw_mass": 0.018242654703996955,
+      "sw_com": [
+        7.486658421158835e-36,
+        0.004,
+        -0.05175655602688106
+      ],
+      "sw_inertia": [
+        0.000019595726366114993,
+        -5.247671477612097e-41,
+        3.079774378285469e-22,
+        0.000020102515167193584,
+        -1.6478988765704848e-23,
+        7.01377117921222e-7
+      ],
+      "sw_mass_overridden": false,
+      "mass_inherited_from": null,
+      "mass_target": null,
+      "mass_only": false,
+      "configuration": "ﾃﾞﾌｫﾙﾄ"
+    },
+    {
+      "name": "shin-3",
+      "link_name": "shin_3",
+      "part_path": "C:\\Users\\abior\\AppData\\Local\\Temp\\sw2urdf_ys273jps\\shin.SLDPRT",
+      "is_subassembly": false,
+      "world": [
+        1.0,
+        0.0,
+        0.0,
+        -0.085,
+        0.0,
+        1.0,
+        0.0,
+        0.068,
+        0.0,
+        0.0,
+        1.0,
+        -0.1,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "fixed": false,
+      "is_fastener": false,
+      "dof": 2,
+      "mesh_file": "meshes\\shin_1.3dxml",
+      "material": "ABS",
+      "density": 1019.9999999999999,
+      "appearance": "plastic/textured/White-PW-MT11050",
+      "sw_mass": 0.018242654703996955,
+      "sw_com": [
+        7.486658421158835e-36,
+        0.004,
+        -0.05175655602688106
+      ],
+      "sw_inertia": [
+        0.000019595726366114993,
+        -5.247671477612097e-41,
+        3.079774378285469e-22,
+        0.000020102515167193584,
+        -1.6478988765704848e-23,
+        7.01377117921222e-7
+      ],
+      "sw_mass_overridden": false,
+      "mass_inherited_from": null,
+      "mass_target": null,
+      "mass_only": false,
+      "configuration": "ﾃﾞﾌｫﾙﾄ"
+    },
+    {
+      "name": "shin-4",
+      "link_name": "shin_4",
+      "part_path": "C:\\Users\\abior\\AppData\\Local\\Temp\\sw2urdf_ys273jps\\shin.SLDPRT",
+      "is_subassembly": false,
+      "world": [
+        -1.0,
+        -1.2246467991473532e-16,
+        0.0,
+        -0.085,
+        1.2246467991473532e-16,
+        -1.0,
+        0.0,
+        -0.068,
+        0.0,
+        0.0,
+        1.0,
+        -0.1,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "fixed": false,
+      "is_fastener": false,
+      "dof": 2,
+      "mesh_file": "meshes\\shin_1.3dxml",
+      "material": "ABS",
+      "density": 1019.9999999999999,
+      "appearance": "plastic/textured/White-PW-MT11050",
+      "sw_mass": 0.018242654703996955,
+      "sw_com": [
+        7.486658421158835e-36,
+        0.004,
+        -0.05175655602688106
+      ],
+      "sw_inertia": [
+        0.000019595726366114993,
+        -5.247671477612097e-41,
+        3.079774378285469e-22,
+        0.000020102515167193584,
+        -1.6478988765704848e-23,
+        7.01377117921222e-7
+      ],
+      "sw_mass_overridden": false,
+      "mass_inherited_from": null,
+      "mass_target": null,
+      "mass_only": false,
+      "configuration": "ﾃﾞﾌｫﾙﾄ"
+    },
+    {
+      "name": "thigh-1",
+      "link_name": "thigh_1",
+      "part_path": "C:\\Users\\abior\\AppData\\Local\\Temp\\sw2urdf_ys273jps\\thigh.SLDPRT",
+      "is_subassembly": false,
+      "world": [
+        1.0,
+        0.0,
+        0.0,
+        0.085,
+        0.0,
+        1.0,
+        0.0,
+        0.06,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "fixed": false,
+      "is_fastener": false,
+      "dof": 2,
+      "mesh_file": "meshes\\thigh_1.3dxml",
+      "material": "ABS",
+      "density": 1020.0000000000001,
+      "appearance": "plastic/textured/White-PW-MT11050",
+      "sw_mass": 0.021993727229009514,
+      "sw_com": [
+        0.0,
+        0.004,
+        -0.049999999999999996
+      ],
+      "sw_inertia": [
+        0.000024466564782952125,
+        -2.8839568692980746e-41,
+        3.801256578766371e-22,
+        0.00002541417973627102,
+        -1.2194451686621585e-23,
+        1.1822147104283332e-6
+      ],
+      "sw_mass_overridden": false,
+      "mass_inherited_from": null,
+      "mass_target": null,
+      "mass_only": false,
+      "configuration": "ﾃﾞﾌｫﾙﾄ"
+    },
+    {
+      "name": "thigh-2",
+      "link_name": "thigh_2",
+      "part_path": "C:\\Users\\abior\\AppData\\Local\\Temp\\sw2urdf_ys273jps\\thigh.SLDPRT",
+      "is_subassembly": false,
+      "world": [
+        -1.0,
+        -1.2246467991473532e-16,
+        0.0,
+        0.085,
+        1.2246467991473532e-16,
+        -1.0,
+        0.0,
+        -0.06,
+        0.0,
+        0.0,
+        1.0,
+        -3.469446951953614e-18,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "fixed": false,
+      "is_fastener": false,
+      "dof": 2,
+      "mesh_file": "meshes\\thigh_1.3dxml",
+      "material": "ABS",
+      "density": 1020.0000000000001,
+      "appearance": "plastic/textured/White-PW-MT11050",
+      "sw_mass": 0.021993727229009514,
+      "sw_com": [
+        0.0,
+        0.004,
+        -0.049999999999999996
+      ],
+      "sw_inertia": [
+        0.000024466564782952125,
+        -2.8839568692980746e-41,
+        3.801256578766371e-22,
+        0.00002541417973627102,
+        -1.2194451686621585e-23,
+        1.1822147104283332e-6
+      ],
+      "sw_mass_overridden": false,
+      "mass_inherited_from": null,
+      "mass_target": null,
+      "mass_only": false,
+      "configuration": "ﾃﾞﾌｫﾙﾄ"
+    },
+    {
+      "name": "thigh-3",
+      "link_name": "thigh_3",
+      "part_path": "C:\\Users\\abior\\AppData\\Local\\Temp\\sw2urdf_ys273jps\\thigh.SLDPRT",
+      "is_subassembly": false,
+      "world": [
+        1.0,
+        0.0,
+        0.0,
+        -0.085,
+        0.0,
+        1.0,
+        0.0,
+        0.06,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "fixed": false,
+      "is_fastener": false,
+      "dof": 2,
+      "mesh_file": "meshes\\thigh_1.3dxml",
+      "material": "ABS",
+      "density": 1020.0000000000001,
+      "appearance": "plastic/textured/White-PW-MT11050",
+      "sw_mass": 0.021993727229009514,
+      "sw_com": [
+        0.0,
+        0.004,
+        -0.049999999999999996
+      ],
+      "sw_inertia": [
+        0.000024466564782952125,
+        -2.8839568692980746e-41,
+        3.801256578766371e-22,
+        0.00002541417973627102,
+        -1.2194451686621585e-23,
+        1.1822147104283332e-6
+      ],
+      "sw_mass_overridden": false,
+      "mass_inherited_from": null,
+      "mass_target": null,
+      "mass_only": false,
+      "configuration": "ﾃﾞﾌｫﾙﾄ"
+    },
+    {
+      "name": "thigh-4",
+      "link_name": "thigh_4",
+      "part_path": "C:\\Users\\abior\\AppData\\Local\\Temp\\sw2urdf_ys273jps\\thigh.SLDPRT",
+      "is_subassembly": false,
+      "world": [
+        -1.0,
+        -1.2246467991473532e-16,
+        0.0,
+        -0.085,
+        1.2246467991473532e-16,
+        -1.0,
+        0.0,
+        -0.06,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "fixed": false,
+      "is_fastener": false,
+      "dof": 2,
+      "mesh_file": "meshes\\thigh_1.3dxml",
+      "material": "ABS",
+      "density": 1020.0000000000001,
+      "appearance": "plastic/textured/White-PW-MT11050",
+      "sw_mass": 0.021993727229009514,
+      "sw_com": [
+        0.0,
+        0.004,
+        -0.049999999999999996
+      ],
+      "sw_inertia": [
+        0.000024466564782952125,
+        -2.8839568692980746e-41,
+        3.801256578766371e-22,
+        0.00002541417973627102,
+        -1.2194451686621585e-23,
+        1.1822147104283332e-6
+      ],
+      "sw_mass_overridden": false,
+      "mass_inherited_from": null,
+      "mass_target": null,
+      "mass_only": false,
+      "configuration": "ﾃﾞﾌｫﾙﾄ"
+    }
+  ],
+  "edges": [
+    {
+      "a": "body-1",
+      "b": "thigh-1",
+      "types": [
+        "CONCENTRIC",
+        "COINCIDENT",
+        "CONCENTRIC",
+        "COINCIDENT"
+      ],
+      "axis_point": [
+        0.085,
+        0.068,
+        0.0
+      ],
+      "axis_dir": [
+        -0.0,
+        -1.0,
+        -0.0
+      ],
+      "mates": [
+        {
+          "type": "CONCENTRIC",
+          "etypes": [
+            4,
+            4
+          ],
+          "points": [
+            [
+              0.085,
+              0.068,
+              0.0
+            ],
+            [
+              0.085,
+              0.068,
+              0.0
+            ]
+          ],
+          "dirs": [
+            [
+              -0.0,
+              -1.0,
+              -0.0
+            ],
+            [
+              -0.0,
+              -1.0,
+              -0.0
+            ]
+          ],
+          "radii": [
+            0.0050000000000000044,
+            0.005
+          ],
+          "owners": [
+            "body-1",
+            "thigh-1"
+          ]
+        },
+        {
+          "type": "COINCIDENT",
+          "etypes": [
+            3,
+            3
+          ],
+          "points": [
+            [
+              -0.11,
+              0.06,
+              0.02
+            ],
+            [
+              0.085,
+              0.06,
+              0.0
+            ]
+          ],
+          "dirs": [
+            [
+              -0.0,
+              1.0,
+              -0.0
+            ],
+            [
+              -0.0,
+              -1.0,
+              0.0
+            ]
+          ],
+          "radii": [
+            0.0,
+            0.0
+          ],
+          "owners": [
+            "body-1",
+            "thigh-1"
+          ]
+        },
+        {
+          "type": "CONCENTRIC",
+          "etypes": [
+            4,
+            4
+          ],
+          "points": [
+            [
+              0.085,
+              0.068,
+              0.0
+            ],
+            [
+              0.085,
+              0.068,
+              0.0
+            ]
+          ],
+          "dirs": [
+            [
+              -0.0,
+              -1.0,
+              -0.0
+            ],
+            [
+              -0.0,
+              -1.0,
+              -0.0
+            ]
+          ],
+          "radii": [
+            0.0050000000000000044,
+            0.005
+          ],
+          "owners": [
+            "body-1",
+            "thigh-1"
+          ]
+        },
+        {
+          "type": "COINCIDENT",
+          "etypes": [
+            3,
+            3
+          ],
+          "points": [
+            [
+              -0.11,
+              0.06,
+              0.02
+            ],
+            [
+              0.085,
+              0.06,
+              0.0
+            ]
+          ],
+          "dirs": [
+            [
+              -0.0,
+              1.0,
+              -0.0
+            ],
+            [
+              -0.0,
+              -1.0,
+              0.0
+            ]
+          ],
+          "radii": [
+            0.0,
+            0.0
+          ],
+          "owners": [
+            "body-1",
+            "thigh-1"
+          ]
+        }
+      ],
+      "force_fixed": false
+    },
+    {
+      "a": "thigh-1",
+      "b": "shin-1",
+      "types": [
+        "CONCENTRIC",
+        "COINCIDENT",
+        "CONCENTRIC",
+        "COINCIDENT"
+      ],
+      "axis_point": [
+        0.085,
+        0.068,
+        -0.1
+      ],
+      "axis_dir": [
+        -0.0,
+        -1.0,
+        -0.0
+      ],
+      "mates": [
+        {
+          "type": "CONCENTRIC",
+          "etypes": [
+            4,
+            4
+          ],
+          "points": [
+            [
+              0.085,
+              0.068,
+              -0.1
+            ],
+            [
+              0.085,
+              0.07600000000000001,
+              -0.1
+            ]
+          ],
+          "dirs": [
+            [
+              -0.0,
+              -1.0,
+              -0.0
+            ],
+            [
+              -0.0,
+              -1.0,
+              -0.0
+            ]
+          ],
+          "radii": [
+            0.005,
+            0.005
+          ],
+          "owners": [
+            "thigh-1",
+            "shin-1"
+          ]
+        },
+        {
+          "type": "COINCIDENT",
+          "etypes": [
+            3,
+            3
+          ],
+          "points": [
+            [
+              0.085,
+              0.068,
+              0.0
+            ],
+            [
+              0.085,
+              0.068,
+              -0.1
+            ]
+          ],
+          "dirs": [
+            [
+              0.0,
+              1.0,
+              -0.0
+            ],
+            [
+              -0.0,
+              -1.0,
+              0.0
+            ]
+          ],
+          "radii": [
+            0.0,
+            0.0
+          ],
+          "owners": [
+            "thigh-1",
+            "shin-1"
+          ]
+        },
+        {
+          "type": "CONCENTRIC",
+          "etypes": [
+            4,
+            4
+          ],
+          "points": [
+            [
+              0.085,
+              0.068,
+              -0.1
+            ],
+            [
+              0.085,
+              0.07600000000000001,
+              -0.1
+            ]
+          ],
+          "dirs": [
+            [
+              -0.0,
+              -1.0,
+              -0.0
+            ],
+            [
+              -0.0,
+              -1.0,
+              -0.0
+            ]
+          ],
+          "radii": [
+            0.005,
+            0.005
+          ],
+          "owners": [
+            "thigh-1",
+            "shin-1"
+          ]
+        },
+        {
+          "type": "COINCIDENT",
+          "etypes": [
+            3,
+            3
+          ],
+          "points": [
+            [
+              0.085,
+              0.068,
+              0.0
+            ],
+            [
+              0.085,
+              0.068,
+              -0.1
+            ]
+          ],
+          "dirs": [
+            [
+              0.0,
+              1.0,
+              -0.0
+            ],
+            [
+              -0.0,
+              -1.0,
+              0.0
+            ]
+          ],
+          "radii": [
+            0.0,
+            0.0
+          ],
+          "owners": [
+            "thigh-1",
+            "shin-1"
+          ]
+        }
+      ],
+      "force_fixed": false
+    },
+    {
+      "a": "body-1",
+      "b": "thigh-2",
+      "types": [
+        "CONCENTRIC",
+        "COINCIDENT",
+        "CONCENTRIC",
+        "COINCIDENT"
+      ],
+      "axis_point": [
+        0.085,
+        0.068,
+        0.0
+      ],
+      "axis_dir": [
+        -0.0,
+        -1.0,
+        -0.0
+      ],
+      "mates": [
+        {
+          "type": "CONCENTRIC",
+          "etypes": [
+            4,
+            4
+          ],
+          "points": [
+            [
+              0.085,
+              0.068,
+              0.0
+            ],
+            [
+              0.085,
+              -0.068,
+              -3.469446951953614e-18
+            ]
+          ],
+          "dirs": [
+            [
+              -0.0,
+              -1.0,
+              -0.0
+            ],
+            [
+              1.2246467991473532e-16,
+              1.0,
+              -0.0
+            ]
+          ],
+          "radii": [
+            0.0050000000000000044,
+            0.005
+          ],
+          "owners": [
+            "body-1",
+            "thigh-2"
+          ]
+        },
+        {
+          "type": "COINCIDENT",
+          "etypes": [
+            3,
+            3
+          ],
+          "points": [
+            [
+              -0.11,
+              -0.06,
+              0.02
+            ],
+            [
+              0.085,
+              -0.06,
+              -3.469446951953614e-18
+            ]
+          ],
+          "dirs": [
+            [
+              -0.0,
+              -1.0,
+              -0.0
+            ],
+            [
+              1.2246467991473532e-16,
+              1.0,
+              0.0
+            ]
+          ],
+          "radii": [
+            0.0,
+            0.0
+          ],
+          "owners": [
+            "body-1",
+            "thigh-2"
+          ]
+        },
+        {
+          "type": "CONCENTRIC",
+          "etypes": [
+            4,
+            4
+          ],
+          "points": [
+            [
+              0.085,
+              0.068,
+              0.0
+            ],
+            [
+              0.085,
+              -0.068,
+              -3.469446951953614e-18
+            ]
+          ],
+          "dirs": [
+            [
+              -0.0,
+              -1.0,
+              -0.0
+            ],
+            [
+              1.2246467991473532e-16,
+              1.0,
+              -0.0
+            ]
+          ],
+          "radii": [
+            0.0050000000000000044,
+            0.005
+          ],
+          "owners": [
+            "body-1",
+            "thigh-2"
+          ]
+        },
+        {
+          "type": "COINCIDENT",
+          "etypes": [
+            3,
+            3
+          ],
+          "points": [
+            [
+              -0.11,
+              -0.06,
+              0.02
+            ],
+            [
+              0.085,
+              -0.06,
+              -3.469446951953614e-18
+            ]
+          ],
+          "dirs": [
+            [
+              -0.0,
+              -1.0,
+              -0.0
+            ],
+            [
+              1.2246467991473532e-16,
+              1.0,
+              0.0
+            ]
+          ],
+          "radii": [
+            0.0,
+            0.0
+          ],
+          "owners": [
+            "body-1",
+            "thigh-2"
+          ]
+        }
+      ],
+      "force_fixed": false
+    },
+    {
+      "a": "body-1",
+      "b": "thigh-3",
+      "types": [
+        "CONCENTRIC",
+        "COINCIDENT",
+        "CONCENTRIC",
+        "COINCIDENT"
+      ],
+      "axis_point": [
+        -0.085,
+        0.068,
+        0.0
+      ],
+      "axis_dir": [
+        -0.0,
+        -1.0,
+        -0.0
+      ],
+      "mates": [
+        {
+          "type": "CONCENTRIC",
+          "etypes": [
+            4,
+            4
+          ],
+          "points": [
+            [
+              -0.085,
+              0.068,
+              0.0
+            ],
+            [
+              -0.085,
+              0.068,
+              0.0
+            ]
+          ],
+          "dirs": [
+            [
+              -0.0,
+              -1.0,
+              -0.0
+            ],
+            [
+              -0.0,
+              -1.0,
+              -0.0
+            ]
+          ],
+          "radii": [
+            0.0050000000000000044,
+            0.005
+          ],
+          "owners": [
+            "body-1",
+            "thigh-3"
+          ]
+        },
+        {
+          "type": "COINCIDENT",
+          "etypes": [
+            3,
+            3
+          ],
+          "points": [
+            [
+              -0.11,
+              0.06,
+              0.02
+            ],
+            [
+              -0.085,
+              0.06,
+              0.0
+            ]
+          ],
+          "dirs": [
+            [
+              -0.0,
+              1.0,
+              -0.0
+            ],
+            [
+              -0.0,
+              -1.0,
+              0.0
+            ]
+          ],
+          "radii": [
+            0.0,
+            0.0
+          ],
+          "owners": [
+            "body-1",
+            "thigh-3"
+          ]
+        },
+        {
+          "type": "CONCENTRIC",
+          "etypes": [
+            4,
+            4
+          ],
+          "points": [
+            [
+              -0.085,
+              0.068,
+              0.0
+            ],
+            [
+              -0.085,
+              0.068,
+              0.0
+            ]
+          ],
+          "dirs": [
+            [
+              -0.0,
+              -1.0,
+              -0.0
+            ],
+            [
+              -0.0,
+              -1.0,
+              -0.0
+            ]
+          ],
+          "radii": [
+            0.0050000000000000044,
+            0.005
+          ],
+          "owners": [
+            "body-1",
+            "thigh-3"
+          ]
+        },
+        {
+          "type": "COINCIDENT",
+          "etypes": [
+            3,
+            3
+          ],
+          "points": [
+            [
+              -0.11,
+              0.06,
+              0.02
+            ],
+            [
+              -0.085,
+              0.06,
+              0.0
+            ]
+          ],
+          "dirs": [
+            [
+              -0.0,
+              1.0,
+              -0.0
+            ],
+            [
+              -0.0,
+              -1.0,
+              0.0
+            ]
+          ],
+          "radii": [
+            0.0,
+            0.0
+          ],
+          "owners": [
+            "body-1",
+            "thigh-3"
+          ]
+        }
+      ],
+      "force_fixed": false
+    },
+    {
+      "a": "body-1",
+      "b": "thigh-4",
+      "types": [
+        "CONCENTRIC",
+        "COINCIDENT",
+        "CONCENTRIC",
+        "COINCIDENT"
+      ],
+      "axis_point": [
+        -0.085,
+        0.068,
+        0.0
+      ],
+      "axis_dir": [
+        -0.0,
+        -1.0,
+        -0.0
+      ],
+      "mates": [
+        {
+          "type": "CONCENTRIC",
+          "etypes": [
+            4,
+            4
+          ],
+          "points": [
+            [
+              -0.085,
+              0.068,
+              0.0
+            ],
+            [
+              -0.085,
+              -0.068,
+              0.0
+            ]
+          ],
+          "dirs": [
+            [
+              -0.0,
+              -1.0,
+              -0.0
+            ],
+            [
+              1.2246467991473532e-16,
+              1.0,
+              -0.0
+            ]
+          ],
+          "radii": [
+            0.0050000000000000044,
+            0.005
+          ],
+          "owners": [
+            "body-1",
+            "thigh-4"
+          ]
+        },
+        {
+          "type": "COINCIDENT",
+          "etypes": [
+            3,
+            3
+          ],
+          "points": [
+            [
+              -0.11,
+              -0.06,
+              0.02
+            ],
+            [
+              -0.085,
+              -0.06,
+              0.0
+            ]
+          ],
+          "dirs": [
+            [
+              -0.0,
+              -1.0,
+              -0.0
+            ],
+            [
+              1.2246467991473532e-16,
+              1.0,
+              0.0
+            ]
+          ],
+          "radii": [
+            0.0,
+            0.0
+          ],
+          "owners": [
+            "body-1",
+            "thigh-4"
+          ]
+        },
+        {
+          "type": "CONCENTRIC",
+          "etypes": [
+            4,
+            4
+          ],
+          "points": [
+            [
+              -0.085,
+              0.068,
+              0.0
+            ],
+            [
+              -0.085,
+              -0.068,
+              0.0
+            ]
+          ],
+          "dirs": [
+            [
+              -0.0,
+              -1.0,
+              -0.0
+            ],
+            [
+              1.2246467991473532e-16,
+              1.0,
+              -0.0
+            ]
+          ],
+          "radii": [
+            0.0050000000000000044,
+            0.005
+          ],
+          "owners": [
+            "body-1",
+            "thigh-4"
+          ]
+        },
+        {
+          "type": "COINCIDENT",
+          "etypes": [
+            3,
+            3
+          ],
+          "points": [
+            [
+              -0.11,
+              -0.06,
+              0.02
+            ],
+            [
+              -0.085,
+              -0.06,
+              0.0
+            ]
+          ],
+          "dirs": [
+            [
+              -0.0,
+              -1.0,
+              -0.0
+            ],
+            [
+              1.2246467991473532e-16,
+              1.0,
+              0.0
+            ]
+          ],
+          "radii": [
+            0.0,
+            0.0
+          ],
+          "owners": [
+            "body-1",
+            "thigh-4"
+          ]
+        }
+      ],
+      "force_fixed": false
+    },
+    {
+      "a": "shin-4",
+      "b": "thigh-4",
+      "types": [
+        "CONCENTRIC",
+        "COINCIDENT",
+        "CONCENTRIC",
+        "COINCIDENT"
+      ],
+      "axis_point": [
+        -0.085,
+        -0.068,
+        -0.1
+      ],
+      "axis_dir": [
+        1.2246467991473532e-16,
+        1.0,
+        -0.0
+      ],
+      "mates": [
+        {
+          "type": "CONCENTRIC",
+          "etypes": [
+            4,
+            4
+          ],
+          "points": [
+            [
+              -0.085,
+              -0.068,
+              -0.1
+            ],
+            [
+              -0.085,
+              -0.07600000000000001,
+              -0.1
+            ]
+          ],
+          "dirs": [
+            [
+              1.2246467991473532e-16,
+              1.0,
+              -0.0
+            ],
+            [
+              1.2246467991473532e-16,
+              1.0,
+              -0.0
+            ]
+          ],
+          "radii": [
+            0.005,
+            0.005
+          ],
+          "owners": [
+            "thigh-4",
+            "shin-4"
+          ]
+        },
+        {
+          "type": "COINCIDENT",
+          "etypes": [
+            3,
+            3
+          ],
+          "points": [
+            [
+              -0.085,
+              -0.068,
+              0.0
+            ],
+            [
+              -0.085,
+              -0.068,
+              -0.1
+            ]
+          ],
+          "dirs": [
+            [
+              -1.2246467991473532e-16,
+              -1.0,
+              0.0
+            ],
+            [
+              1.2246467991473532e-16,
+              1.0,
+              0.0
+            ]
+          ],
+          "radii": [
+            0.0,
+            0.0
+          ],
+          "owners": [
+            "thigh-4",
+            "shin-4"
+          ]
+        },
+        {
+          "type": "CONCENTRIC",
+          "etypes": [
+            4,
+            4
+          ],
+          "points": [
+            [
+              -0.085,
+              -0.068,
+              -0.1
+            ],
+            [
+              -0.085,
+              -0.07600000000000001,
+              -0.1
+            ]
+          ],
+          "dirs": [
+            [
+              1.2246467991473532e-16,
+              1.0,
+              -0.0
+            ],
+            [
+              1.2246467991473532e-16,
+              1.0,
+              -0.0
+            ]
+          ],
+          "radii": [
+            0.005,
+            0.005
+          ],
+          "owners": [
+            "thigh-4",
+            "shin-4"
+          ]
+        },
+        {
+          "type": "COINCIDENT",
+          "etypes": [
+            3,
+            3
+          ],
+          "points": [
+            [
+              -0.085,
+              -0.068,
+              0.0
+            ],
+            [
+              -0.085,
+              -0.068,
+              -0.1
+            ]
+          ],
+          "dirs": [
+            [
+              -1.2246467991473532e-16,
+              -1.0,
+              0.0
+            ],
+            [
+              1.2246467991473532e-16,
+              1.0,
+              0.0
+            ]
+          ],
+          "radii": [
+            0.0,
+            0.0
+          ],
+          "owners": [
+            "thigh-4",
+            "shin-4"
+          ]
+        }
+      ],
+      "force_fixed": false
+    },
+    {
+      "a": "thigh-2",
+      "b": "shin-2",
+      "types": [
+        "CONCENTRIC",
+        "COINCIDENT",
+        "CONCENTRIC",
+        "COINCIDENT"
+      ],
+      "axis_point": [
+        0.085,
+        -0.068,
+        -0.1
+      ],
+      "axis_dir": [
+        1.2246467991473532e-16,
+        1.0,
+        -0.0
+      ],
+      "mates": [
+        {
+          "type": "CONCENTRIC",
+          "etypes": [
+            4,
+            4
+          ],
+          "points": [
+            [
+              0.085,
+              -0.068,
+              -0.1
+            ],
+            [
+              0.085,
+              -0.07600000000000001,
+              -0.1
+            ]
+          ],
+          "dirs": [
+            [
+              1.2246467991473532e-16,
+              1.0,
+              -0.0
+            ],
+            [
+              1.2246467991473532e-16,
+              1.0,
+              -0.0
+            ]
+          ],
+          "radii": [
+            0.005,
+            0.005
+          ],
+          "owners": [
+            "thigh-2",
+            "shin-2"
+          ]
+        },
+        {
+          "type": "COINCIDENT",
+          "etypes": [
+            3,
+            3
+          ],
+          "points": [
+            [
+              0.085,
+              -0.068,
+              -3.469446951953614e-18
+            ],
+            [
+              0.085,
+              -0.068,
+              -0.1
+            ]
+          ],
+          "dirs": [
+            [
+              -1.2246467991473532e-16,
+              -1.0,
+              0.0
+            ],
+            [
+              1.2246467991473532e-16,
+              1.0,
+              0.0
+            ]
+          ],
+          "radii": [
+            0.0,
+            0.0
+          ],
+          "owners": [
+            "thigh-2",
+            "shin-2"
+          ]
+        },
+        {
+          "type": "CONCENTRIC",
+          "etypes": [
+            4,
+            4
+          ],
+          "points": [
+            [
+              0.085,
+              -0.068,
+              -0.1
+            ],
+            [
+              0.085,
+              -0.07600000000000001,
+              -0.1
+            ]
+          ],
+          "dirs": [
+            [
+              1.2246467991473532e-16,
+              1.0,
+              -0.0
+            ],
+            [
+              1.2246467991473532e-16,
+              1.0,
+              -0.0
+            ]
+          ],
+          "radii": [
+            0.005,
+            0.005
+          ],
+          "owners": [
+            "thigh-2",
+            "shin-2"
+          ]
+        },
+        {
+          "type": "COINCIDENT",
+          "etypes": [
+            3,
+            3
+          ],
+          "points": [
+            [
+              0.085,
+              -0.068,
+              -3.469446951953614e-18
+            ],
+            [
+              0.085,
+              -0.068,
+              -0.1
+            ]
+          ],
+          "dirs": [
+            [
+              -1.2246467991473532e-16,
+              -1.0,
+              0.0
+            ],
+            [
+              1.2246467991473532e-16,
+              1.0,
+              0.0
+            ]
+          ],
+          "radii": [
+            0.0,
+            0.0
+          ],
+          "owners": [
+            "thigh-2",
+            "shin-2"
+          ]
+        }
+      ],
+      "force_fixed": false
+    },
+    {
+      "a": "shin-3",
+      "b": "thigh-3",
+      "types": [
+        "CONCENTRIC",
+        "COINCIDENT",
+        "CONCENTRIC",
+        "COINCIDENT"
+      ],
+      "axis_point": [
+        -0.085,
+        0.068,
+        -0.1
+      ],
+      "axis_dir": [
+        -0.0,
+        -1.0,
+        -0.0
+      ],
+      "mates": [
+        {
+          "type": "CONCENTRIC",
+          "etypes": [
+            4,
+            4
+          ],
+          "points": [
+            [
+              -0.085,
+              0.068,
+              -0.1
+            ],
+            [
+              -0.085,
+              0.07600000000000001,
+              -0.1
+            ]
+          ],
+          "dirs": [
+            [
+              -0.0,
+              -1.0,
+              -0.0
+            ],
+            [
+              -0.0,
+              -1.0,
+              -0.0
+            ]
+          ],
+          "radii": [
+            0.005,
+            0.005
+          ],
+          "owners": [
+            "thigh-3",
+            "shin-3"
+          ]
+        },
+        {
+          "type": "COINCIDENT",
+          "etypes": [
+            3,
+            3
+          ],
+          "points": [
+            [
+              -0.085,
+              0.068,
+              0.0
+            ],
+            [
+              -0.085,
+              0.068,
+              -0.1
+            ]
+          ],
+          "dirs": [
+            [
+              0.0,
+              1.0,
+              -0.0
+            ],
+            [
+              -0.0,
+              -1.0,
+              0.0
+            ]
+          ],
+          "radii": [
+            0.0,
+            0.0
+          ],
+          "owners": [
+            "thigh-3",
+            "shin-3"
+          ]
+        },
+        {
+          "type": "CONCENTRIC",
+          "etypes": [
+            4,
+            4
+          ],
+          "points": [
+            [
+              -0.085,
+              0.068,
+              -0.1
+            ],
+            [
+              -0.085,
+              0.07600000000000001,
+              -0.1
+            ]
+          ],
+          "dirs": [
+            [
+              -0.0,
+              -1.0,
+              -0.0
+            ],
+            [
+              -0.0,
+              -1.0,
+              -0.0
+            ]
+          ],
+          "radii": [
+            0.005,
+            0.005
+          ],
+          "owners": [
+            "thigh-3",
+            "shin-3"
+          ]
+        },
+        {
+          "type": "COINCIDENT",
+          "etypes": [
+            3,
+            3
+          ],
+          "points": [
+            [
+              -0.085,
+              0.068,
+              0.0
+            ],
+            [
+              -0.085,
+              0.068,
+              -0.1
+            ]
+          ],
+          "dirs": [
+            [
+              0.0,
+              1.0,
+              -0.0
+            ],
+            [
+              -0.0,
+              -1.0,
+              0.0
+            ]
+          ],
+          "radii": [
+            0.0,
+            0.0
+          ],
+          "owners": [
+            "thigh-3",
+            "shin-3"
+          ]
+        }
+      ],
+      "force_fixed": false
+    }
+  ],
+  "ground": [],
+  "assembly_mesh": "quadruped_assembly.3dxml",
+  "coordinate_systems": [],
+  "part_coordinate_systems": {},
+  "reference_axes": [],
+  "sw2urdf_marker": null,
+  "sw2urdf_config_xml": null,
+  "subassemblies": {},
+  "deep_worlds": {
+    "thigh-1": [
+      1.0,
+      0.0,
+      0.0,
+      0.085,
+      0.0,
+      1.0,
+      0.0,
+      0.06,
+      0.0,
+      0.0,
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "body-1": [
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "shin-4": [
+      -1.0,
+      -1.2246467991473532e-16,
+      0.0,
+      -0.085,
+      1.2246467991473532e-16,
+      -1.0,
+      0.0,
+      -0.068,
+      0.0,
+      0.0,
+      1.0,
+      -0.1,
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "thigh-4": [
+      -1.0,
+      -1.2246467991473532e-16,
+      0.0,
+      -0.085,
+      1.2246467991473532e-16,
+      -1.0,
+      0.0,
+      -0.06,
+      0.0,
+      0.0,
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "shin-1": [
+      1.0,
+      0.0,
+      0.0,
+      0.085,
+      0.0,
+      1.0,
+      0.0,
+      0.068,
+      0.0,
+      0.0,
+      1.0,
+      -0.1,
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "thigh-2": [
+      -1.0,
+      -1.2246467991473532e-16,
+      0.0,
+      0.085,
+      1.2246467991473532e-16,
+      -1.0,
+      0.0,
+      -0.06,
+      0.0,
+      0.0,
+      1.0,
+      -3.469446951953614e-18,
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "shin-2": [
+      -1.0,
+      -1.2246467991473532e-16,
+      0.0,
+      0.085,
+      1.2246467991473532e-16,
+      -1.0,
+      0.0,
+      -0.068,
+      0.0,
+      0.0,
+      1.0,
+      -0.1,
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "thigh-3": [
+      1.0,
+      0.0,
+      0.0,
+      -0.085,
+      0.0,
+      1.0,
+      0.0,
+      0.06,
+      0.0,
+      0.0,
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "shin-3": [
+      1.0,
+      0.0,
+      0.0,
+      -0.085,
+      0.0,
+      1.0,
+      0.0,
+      0.068,
+      0.0,
+      0.0,
+      1.0,
+      -0.1,
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  },
+  "hidden": [],
+  "limit_joints": [],
+  "configuration": "ﾃﾞﾌｫﾙﾄ",
+  "configurations": [
+    "ﾃﾞﾌｫﾙﾄ"
+  ]
+}

@@ -1,0 +1,83 @@
+# Documentation site: https://jsk-ros-pkg.github.io/solidworks_urdf_exporter2/
+#
+#   pip install -r docs/requirements.txt
+#   mkdocs serve            # live preview at http://127.0.0.1:8000
+#   mkdocs build --strict   # what .github/workflows/pages.yml runs
+#
+# Pages are English by default; a `<page>.ja.md` next to `<page>.md` is its
+# Japanese translation (mkdocs-static-i18n, suffix layout), served under /ja/.
+site_name: sw2robot
+site_description: SolidWorks assembly to URDF, inferred from the mates
+site_url: https://jsk-ros-pkg.github.io/solidworks_urdf_exporter2/
+repo_url: https://github.com/jsk-ros-pkg/solidworks_urdf_exporter2
+repo_name: jsk-ros-pkg/solidworks_urdf_exporter2
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  logo: images/icon.png
+  favicon: images/icon.png
+  features:
+    - content.code.copy
+    - navigation.footer
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: blue grey
+      accent: deep orange
+      toggle:
+        icon: material/weather-night
+        name: Dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: blue grey
+      accent: deep orange
+      toggle:
+        icon: material/weather-sunny
+        name: Light mode
+
+# docs/requirements.txt is the build's own dependency list, not a page
+exclude_docs: |
+  requirements.txt
+
+# a broken link or #anchor fails `mkdocs build --strict` (the defaults only
+# log anchors at info level)
+validation:
+  links:
+    anchors: warn
+    unrecognized_links: warn
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
+plugins:
+  - search
+  - i18n:
+      docs_structure: suffix
+      reconfigure_material: true
+      languages:
+        - locale: en
+          name: English
+          default: true
+          build: true
+        - locale: ja
+          name: 日本語
+          build: true
+          nav_translations:
+            Home: ホーム
+            "Tutorial: a quadruped": "チュートリアル: 4脚ロボット"
+
+nav:
+  - Home: index.md
+  - "Tutorial: a quadruped": tutorial.md
