@@ -377,6 +377,73 @@ def test_rviz_view_frames_the_model(tmp_path):
     assert _re.search(r"Focal Point:\s*\n\s*X: \S+\n\s*Y: \S+\n\s*Z: \S+", rviz)
 
 
+def _make_joint_kinds_pkg(tmp_path, robot="jk"):
+    """One meshed base and a link per joint kind: revolute (limits that exclude
+    zero), continuous, a mimic of the revolute, and fixed."""
+    if not os.path.exists(_SAMPLE_MESH):
+        pytest.skip("sample .3dxml mesh not present")
+    (tmp_path / "meshes").mkdir()
+    (tmp_path / "urdf").mkdir()
+    shutil.copy(_SAMPLE_MESH, tmp_path / "meshes" / "part.3dxml")
+
+    def child(joint, link, kind, extra=""):
+        return (f'  <link name="{link}"/>\n'
+                f'  <joint name="{joint}" type="{kind}">\n'
+                f'    <parent link="base_link"/><child link="{link}"/>\n'
+                '    <axis xyz="0 0 1"/>\n' + extra + '  </joint>\n')
+
+    limit = '    <limit lower="0.2" upper="1.0" effort="1" velocity="1"/>\n'
+    urdf = (
+        f'<?xml version="1.0"?>\n<robot name="{robot}">\n'
+        '  <link name="base_link"><visual><geometry>'
+        '<mesh filename="../meshes/part.3dxml"/></geometry></visual></link>\n'
+        + child("rev", "a", "revolute", limit)
+        + child("cont", "b", "continuous")
+        + child("mim", "c", "revolute",
+                limit + '    <mimic joint="rev" multiplier="1"/>\n')
+        + child("fix", "d", "fixed")
+        + '</robot>\n')
+    (tmp_path / "urdf" / f"{robot}.urdf").write_text(urdf, encoding="utf-8")
+    return str(tmp_path)
+
+
+def test_ros2_package_ships_xacro_and_ros2_control(tmp_path):
+    """A ROS 2 package carries the robot as a xacro macro, a ros2_control
+    interface for every joint a controller can drive (not the mimic, not the
+    fixed one), and a controllers config that lists the same joints."""
+    import xml.etree.ElementTree as ET
+
+    import yaml
+
+    from sw2robot.exporter.ros_export import build_ros_description
+
+    pkg_dir = _make_joint_kinds_pkg(tmp_path)
+    files = dict(build_ros_description(pkg_dir, "jk", ros_version=2))
+    urdf_dir = "jk_description/urdf/"
+    macro = files[urdf_dir + "jk_description.urdf.xacro"].decode()
+    assert '<xacro:macro name="jk_description"' in macro
+    assert 'name="${prefix}rev"' in macro
+
+    control = files[urdf_dir + "jk_description.ros2_control.xacro"].decode()
+    root = ET.fromstring(control)
+    joints = {j.get("name"): j for j in root.iter("joint")}
+    assert set(joints) == {"${prefix}rev", "${prefix}cont"}
+    rev = joints["${prefix}rev"]
+    params = {p.get("name"): p.text for p in rev.iter("param")}
+    # mock hardware starts at initial_value: 0 is outside [0.2, 1], so 0.2
+    assert params == {"min": "0.2", "max": "1", "initial_value": "0.2"}
+    assert not [p for p in joints["${prefix}cont"].iter("param")
+                if p.get("name") in ("min", "max")]
+
+    cfg = yaml.safe_load(files["jk_description/config/ros2_controllers.yaml"])
+    assert cfg["joint_trajectory_controller"]["ros__parameters"]["joints"] \
+        == ["rev", "cont"]
+    top = files[urdf_dir + "jk_description_control.urdf.xacro"].decode()
+    assert "$(find jk_description)/urdf/jk_description.urdf.xacro" in top
+    assert "jk_description/launch/control.launch.py" in files
+    assert "config" in files["jk_description/CMakeLists.txt"].decode()
+
+
 def test_build_ros_description_custom_mesh_dir(tmp_path):
     """``mesh_dir`` moves the emitted meshes (and repoints the URDF's
     package:// refs) to a custom package-relative directory."""

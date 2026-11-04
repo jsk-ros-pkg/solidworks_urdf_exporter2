@@ -27,6 +27,7 @@ import io
 import json
 import os
 import re
+import tempfile
 import threading
 import xml.etree.ElementTree as ET
 
@@ -48,18 +49,95 @@ from .urdf_writer import (
     CMAKELISTS,
     CMAKELISTS_ROS2,
     CMAKELISTS_ROS2_COUPLED,
+    CONTROL_LAUNCH_ROS2,
     DISPLAY_LAUNCH_ROS2,
     DISPLAY_LAUNCH_ROS2_COUPLED,
     LOOP_COUPLING_RELAY_PY,
     PACKAGE_XML,
     PACKAGE_XML_ROS2,
     PACKAGE_XML_ROS2_COUPLED,
+    ROS2_CONTROL_JOINT,
+    ROS2_CONTROL_URDF_XACRO,
+    ROS2_CONTROL_XACRO,
+    ROS2_CONTROLLERS_YAML,
     RVIZ_CONFIG_ROS2,
 )
 
 # fallback <material> colour for an STL <visual> with no per-link override (STL
 # carries no colour, so without this RViz would show the link in its default grey)
 _DEFAULT_VISUAL_RGBA = (191, 191, 191, 255)   # neutral light grey (~0.75)
+
+
+def _ros2_control_files(urdf_text, root, pkg, urdf_stem):
+    """``[(arc, bytes)]``: the xacro and ros2_control half of a ROS 2 package.
+
+    ``urdf/<stem>.urdf.xacro`` is the robot as a macro (skrobot's
+    modularize-urdf: ``prefix`` on every name, a ``parent_link`` to hang it
+    from), ``urdf/<stem>.ros2_control.xacro`` a position interface for each
+    joint a controller can drive, and ``urdf/<stem>_control.urdf.xacro`` +
+    ``config/ros2_controllers.yaml`` + ``launch/control.launch.py`` run the two
+    under controller_manager.  A mimic joint follows its leader and a fixed one
+    does not move, so neither gets an interface."""
+    from lxml import etree
+    from skrobot.urdf import transform_urdf_to_macro
+    from skrobot.urdf.modularize_urdf import find_root_link
+
+    macro = re.sub(r"\W", "_", urdf_stem)
+    fd, tmp = tempfile.mkstemp(suffix=".urdf")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(urdf_text)
+        xacro_root, _name = transform_urdf_to_macro(
+            tmp, find_root_link(tmp), no_prefix=False, macro_name=macro)
+    finally:
+        os.remove(tmp)
+    robot_xacro = etree.tostring(xacro_root, pretty_print=True,
+                                 xml_declaration=True, encoding="utf-8")
+
+    joints, blocks = [], []
+    for j in root.findall("joint"):
+        if j.get("type") not in ("revolute", "continuous", "prismatic") \
+                or j.find("mimic") is not None:
+            continue
+        lim = j.find("limit")
+        limits, initial = "", 0.0
+        if j.get("type") != "continuous" and lim is not None:
+            lower = float(lim.get("lower", 0.0))
+            upper = float(lim.get("upper", 0.0))
+            limits = (f'          <param name="min">{fmt_urdf_num(lower)}</param>\n'
+                      f'          <param name="max">{fmt_urdf_num(upper)}</param>\n')
+            initial = min(max(0.0, lower), upper)
+        joints.append(j.get("name"))
+        blocks.append(ROS2_CONTROL_JOINT.format(
+            name=j.get("name"), limits=limits, initial=fmt_urdf_num(initial)))
+
+    controllers = jtc = spawn = ""
+    if joints:
+        controllers = ("    joint_trajectory_controller:\n"
+                       "      type: joint_trajectory_controller/"
+                       "JointTrajectoryController\n")
+        jtc = ("\njoint_trajectory_controller:\n"
+               "  ros__parameters:\n"
+               "    joints:\n"
+               + "".join(f"      - {n}\n" for n in joints)
+               + "    command_interfaces:\n      - position\n"
+               "    state_interfaces:\n      - position\n      - velocity\n")
+        spawn = ', "joint_trajectory_controller"'
+    return [
+        (f"{pkg}/urdf/{urdf_stem}.urdf.xacro", robot_xacro),
+        (f"{pkg}/urdf/{urdf_stem}.ros2_control.xacro",
+         ROS2_CONTROL_XACRO.format(macro=macro, joints="".join(blocks))
+         .encode("utf-8")),
+        (f"{pkg}/urdf/{urdf_stem}_control.urdf.xacro",
+         ROS2_CONTROL_URDF_XACRO.format(name=pkg, robot=urdf_stem, macro=macro)
+         .encode("utf-8")),
+        (f"{pkg}/config/ros2_controllers.yaml",
+         ROS2_CONTROLLERS_YAML.format(controllers=controllers, jtc=jtc)
+         .encode("utf-8")),
+        (f"{pkg}/launch/control.launch.py",
+         CONTROL_LAUNCH_ROS2.format(name=pkg, robot=urdf_stem, spawn=spawn)
+         .encode("utf-8")),
+    ]
 
 
 def _loop_closures_yaml(closures):
@@ -1648,6 +1726,7 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
                       RVIZ_CONFIG_ROS2.format(fixed_frame=fixed_frame,
                                               tf_scale=tf_scale, **rviz_view)
                       .encode("utf-8")))
+        files.extend(_ros2_control_files(new_urdf, root, pkg, urdf_stem))
         if coupled:
             files.append((f"{pkg}/config/loop_closures.yaml",
                           _loop_closures_yaml(loop_closures).encode("utf-8")))
