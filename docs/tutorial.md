@@ -274,8 +274,30 @@ python -m sw2robot.exporter.build examples/quadruped \
 The editor's **Export** panel has the same as buttons (**⬇ ROS2 package**,
 **⬇ MuJoCo (MJCF)**).
 
+### See it in RViz2
+
+The **Export** panel also prints a one-liner under **🚀 build + launch on a
+ROS 2 machine (curl | bash)**. Click it to copy it and run it in a terminal on
+a machine with ROS 2, while the editor is running (WSL 2 on the same PC works).
+It downloads the ROS 2 package from the editor, builds it with `colcon` and
+starts `display.launch.py`: `robot_state_publisher`, the joint slider GUI and
+RViz2.
+
+```bash
+bash -c 'for H in localhost:8090 $(ip route show default 2>/dev/null | cut -d" " -f3):8090; do curl -fs http://$H/api/launch_it.sh && break; done' | bash
+```
+
+(The port is the editor's; copy the line from the panel rather than typing it.)
+
+![RViz2 started by the one-liner; dragging the joint sliders moves the legs](images/rviz_launch_it.gif){ width="720" }
+
+RViz2 opens already framed on the robot. Dragging a slider moves its joint.
+Measured on WSL 2 with ROS 2 Jazzy, the build took 3.4 s.
+
 ## Where to go next
 
+- [Make it walk in MuJoCo](walk.md): export this robot to MuJoCo and
+  train it to trot with reinforcement learning, on a CPU.
 - Real servos: put the servo body and its horn in the assembly and mate the
   horn concentric to the servo shaft. The same two-mate rule applies, and
   everything bolted together comes out `fixed`.
