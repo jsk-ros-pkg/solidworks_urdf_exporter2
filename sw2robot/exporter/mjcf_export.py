@@ -279,7 +279,20 @@ def _add_foot_contacts(root, frames, mesh_files, asset_dir, foot_bodies,
                 "group": _COLLISION_GROUP,
                 "rgba": "0.1 0.1 0.1 1",
             })
-        if not any(s.get("name") == tag for s in body.findall("site")):
+        # site names are global, and the converter has already written every
+        # frame link (a tool tip, a CAD coordinate system) as a site: one
+        # named like this foot's tag would leave the task reading the frame
+        # instead of the touch point, so that is refused, not papered over
+        taken = [s for s in root.iter("site") if s.get("name") == tag]
+        ours = [s for s in body.findall("site") if s.get("name") == tag
+                and np.allclose(_floats(s.get("pos"), (0, 0, 0)), touch_local,
+                                atol=1e-9)]
+        if taken and not ours:
+            raise ValueError(
+                f"foot site name {tag!r} is already taken by a frame link of "
+                "the same name; rename that link or pass another tag in "
+                "foot_links")
+        if not taken:
             ET.SubElement(body, "site", {
                 "name": tag,
                 "pos": " ".join(f"{v:.9g}" for v in touch_local),
