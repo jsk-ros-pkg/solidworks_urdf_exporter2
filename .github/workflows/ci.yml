@@ -367,3 +367,33 @@ jobs:
           test -f "$share/urdf/fingertip_description.urdf"
           test -f "$share/launch/display.launch.py"
           test -f "$share/rviz/fingertip_description.rviz"
+
+      - name: ros2_control with mock hardware follows a trajectory
+        shell: bash
+        run: |
+          set -e
+          apt-get install -y --no-install-recommends ros-humble-xacro \
+            ros-humble-ros2-control ros-humble-ros2-controllers
+          source /opt/ros/humble/setup.bash
+          source ws/install/setup.bash
+          share=ws/install/fingertip_description/share/fingertip_description
+          xacro "$share/urdf/fingertip_description_control.urdf.xacro" > /tmp/control.urdf
+          check_urdf /tmp/control.urdf
+          ros2 launch fingertip_description control.launch.py rviz:=false > /tmp/control.log 2>&1 &
+          for i in $(seq 1 60); do
+            ros2 control list_controllers 2>/dev/null \
+              | grep -q "joint_trajectory_controller.*active" && break
+            sleep 1
+          done
+          ros2 control list_controllers
+          joint=$(sed -n 's/^      - //p' "$share/config/ros2_controllers.yaml" | head -1)
+          ros2 action send_goal /joint_trajectory_controller/follow_joint_trajectory \
+            control_msgs/action/FollowJointTrajectory \
+            "{trajectory: {joint_names: [$joint], points: [{positions: [0.3], time_from_start: {sec: 1}}]}}" \
+            | tee /tmp/goal.log
+          grep -q SUCCEEDED /tmp/goal.log
+          ros2 topic echo --once /joint_states > /tmp/js.txt
+          cat /tmp/js.txt
+          pos=$(sed -n '/^position:/,/^[a-z]/p' /tmp/js.txt | grep -oE -- '-?[0-9]+\.?[0-9]*(e-?[0-9]+)?' | head -1)
+          echo "joint position after the goal: $pos"
+          python3 -c "import sys; sys.exit(abs(float('$pos') - 0.3) > 1e-3)"

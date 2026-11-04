@@ -480,6 +480,11 @@ PACKAGE_XML_ROS2 = """<?xml version="1.0"?>
   <exec_depend>rviz2</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
+  <exec_depend>xacro</exec_depend>
+  <exec_depend>controller_manager</exec_depend>
+  <exec_depend>hardware_interface</exec_depend>
+  <exec_depend>joint_state_broadcaster</exec_depend>
+  <exec_depend>joint_trajectory_controller</exec_depend>
   <export>
     <build_type>ament_cmake</build_type>
   </export>
@@ -489,7 +494,7 @@ PACKAGE_XML_ROS2 = """<?xml version="1.0"?>
 CMAKELISTS_ROS2 = """cmake_minimum_required(VERSION 3.8)
 project({name})
 find_package(ament_cmake REQUIRED)
-install(DIRECTORY urdf meshes launch rviz
+install(DIRECTORY urdf meshes launch rviz config
   DESTINATION share/${{PROJECT_NAME}})
 ament_package()
 """
@@ -578,6 +583,99 @@ Visualization Manager:
         Z: {fz}
 """
 
+# --- ROS 2 xacro + ros2_control ----------------------------------------------
+# The robot as a xacro macro (urdf/<robot>.urdf.xacro, skrobot's
+# modularize-urdf), a ros2_control macro for its movable joints, and a top-level
+# urdf/<robot>_control.urdf.xacro that puts the two together on a `world` link.
+# control.launch.py runs that through controller_manager with mock hardware, so
+# a trajectory sent to the package moves the robot in RViz with no real servo;
+# `plugin:=` swaps in a real hardware interface or gz_ros2_control.  The
+# <ros2_control> element itself comes from skrobot's
+# build_ros2_control_elements and the controllers config from
+# generate_controllers_yaml; only the xacro wrapping and the launch live here.
+# {macro} = xacro macro name, {ros2_control} = the serialised element.
+ROS2_CONTROL_XACRO = """<?xml version="1.0"?>
+<robot xmlns:xacro="http://ros.org/wiki/xacro">
+  <xacro:macro name="{macro}_ros2_control"
+               params="prefix:='' plugin:=mock_components/GenericSystem">
+    {ros2_control}
+  </xacro:macro>
+</robot>
+"""
+
+# {name} = package name, {robot} = urdf file stem, {macro} = xacro macro name.
+# This is the one robot that control.launch.py runs, so it takes no prefix: the
+# controllers config names the joints unprefixed.  Composing several robots
+# goes through the two macros above, each with its own prefix and controllers.
+ROS2_CONTROL_URDF_XACRO = """<?xml version="1.0"?>
+<robot name="{robot}" xmlns:xacro="http://ros.org/wiki/xacro">
+  <xacro:arg name="plugin" default="mock_components/GenericSystem"/>
+  <xacro:include filename="$(find {name})/urdf/{robot}.urdf.xacro"/>
+  <xacro:include filename="$(find {name})/urdf/{robot}.ros2_control.xacro"/>
+  <link name="world"/>
+  <xacro:{macro} parent_link="world"/>
+  <xacro:{macro}_ros2_control plugin="$(arg plugin)"/>
+</robot>
+"""
+
+# {name} = package name, {robot} = urdf file stem, {spawn} = the controllers
+# to start after joint_state_broadcaster
+CONTROL_LAUNCH_ROS2 = '''import os
+
+from ament_index_python.packages import get_package_share_directory
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
+from launch.substitutions import Command, LaunchConfiguration
+from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
+
+
+def generate_launch_description():
+    pkg = get_package_share_directory("{name}")
+    xacro_file = os.path.join(pkg, "urdf", "{robot}_control.urdf.xacro")
+    controllers = os.path.join(pkg, "config", "ros2_controllers.yaml")
+    rviz = os.path.join(pkg, "rviz", "{robot}.rviz")
+    plugin = LaunchConfiguration("plugin")
+    robot_description = {{"robot_description": ParameterValue(
+        Command(["xacro ", xacro_file, " plugin:=", plugin]), value_type=str)}}
+    spawners = [
+        Node(package="controller_manager", executable="spawner",
+             arguments=[c, "--controller-manager", "/controller_manager"])
+        for c in ["joint_state_broadcaster"{spawn}]
+    ]
+    return LaunchDescription([
+        DeclareLaunchArgument(
+            "plugin", default_value="mock_components/GenericSystem",
+            description="ros2_control hardware interface"),
+        DeclareLaunchArgument("rviz", default_value="true"),
+        Node(
+            package="robot_state_publisher",
+            executable="robot_state_publisher",
+            output="screen",
+            parameters=[robot_description],
+        ),
+        Node(
+            package="controller_manager",
+            executable="ros2_control_node",
+            output="screen",
+            # Humble reads the description from this parameter; Jazzy from
+            # its ~/robot_description topic, which robot_state_publisher
+            # publishes as /robot_description
+            parameters=[robot_description, controllers],
+            remappings=[("~/robot_description", "/robot_description")],
+        ),
+        *spawners,
+        Node(
+            package="rviz2",
+            executable="rviz2",
+            output="screen",
+            arguments=["-d", rviz],
+            condition=IfCondition(LaunchConfiguration("rviz")),
+        ),
+    ])
+'''
+
 # --- ROS 2 closed-loop variants ---------------------------------------------
 # A package with a detected kinematic loop ships three extra pieces: the loop
 # closure config, a relay node that CLOSES the loop by runtime IK (pure-numpy
@@ -598,6 +696,11 @@ PACKAGE_XML_ROS2_COUPLED = """<?xml version="1.0"?>
   <exec_depend>rviz2</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
+  <exec_depend>xacro</exec_depend>
+  <exec_depend>controller_manager</exec_depend>
+  <exec_depend>hardware_interface</exec_depend>
+  <exec_depend>joint_state_broadcaster</exec_depend>
+  <exec_depend>joint_trajectory_controller</exec_depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
