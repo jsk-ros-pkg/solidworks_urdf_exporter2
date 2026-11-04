@@ -3878,13 +3878,15 @@ def _yaml_entry_span(lines, child):
 
 def _negate_scalar(text):
     """``-x`` of a yaml number, by editing its text so flipping twice gives
-    back exactly what was written (no reformatting, no lost digits)."""
+    back exactly what was written (no reformatting, no lost digits).  Zero
+    toggles to ``-0`` and back the same way, for the same reason; only an
+    explicit leading ``+`` does not come back (``+2`` -> ``-2`` -> ``2``)."""
     t = text.strip()
     if t.startswith("-"):
         return t[1:]
     if t.startswith("+"):
         return "-" + t[1:]
-    return t if float(t) == 0.0 else "-" + t
+    return "-" + t
 
 
 def _flip_joint_in_yaml(txt, child, joint_names):
@@ -3920,34 +3922,44 @@ def _flip_joint_in_yaml(txt, child, joint_names):
             ln = lines[i]
             if ln.strip() and len(ln) - len(ln.lstrip()) <= mind:
                 break
-            m = re.match(r"^(\s*)(multiplier|offset):\s*" + num + r"(.*)$", ln)
+            m = re.match(r"^(\s*)(multiplier|offset):(\s*)" + num + r"(.*)$",
+                         ln)
             if m and (m.group(2) == "multiplier" or not follower_of_flipped):
-                lines[i] = (f"{m.group(1)}{m.group(2)}: "
-                            f"{_negate_scalar(m.group(3))}{m.group(4)}")
+                lines[i] = (f"{m.group(1)}{m.group(2)}:{m.group(3)}"
+                            f"{_negate_scalar(m.group(4))}{m.group(5)}")
                 continue
-            m = re.match(r"^(\s*)poly:\s*\[([^\]]*)\](.*)$", ln)
+            m = re.match(r"^(\s*poly:\s*\[)([^\]]*)(\].*)$", ln)
             if m:
-                coeffs = [c.strip() for c in m.group(2).split(",") if c.strip()]
-                n = len(coeffs)
-                # highest power first (numpy.polyval order)
-                coeffs = [_negate_scalar(c)
-                          if (not follower_of_flipped) or (n - 1 - i_c) % 2
-                          else c for i_c, c in enumerate(coeffs)]
-                lines[i] = f"{m.group(1)}poly: [{', '.join(coeffs)}]{m.group(3)}"
+                n = len(re.findall(num, m.group(2)))
+                k = iter(range(n))
+
+                def resign(tok):
+                    # highest power first (numpy.polyval order): x^k is at
+                    # index n-1-k; a flipped driver re-signs the odd powers
+                    i_c = next(k)
+                    odd = (n - 1 - i_c) % 2
+                    return (_negate_scalar(tok.group(0))
+                            if (not follower_of_flipped) or odd
+                            else tok.group(0))
+                lines[i] = m.group(1) + re.sub(num, resign, m.group(2)) \
+                    + m.group(3)
 
     s, end = span
     # lower/upper: values swapped and negated (keys stay in place)
     rows = {m.group(2): (i, m) for i in range(s, end)
-            for m in [re.match(r"^(\s*)(lower|upper):\s*" + num + r"(.*)$",
+            for m in [re.match(r"^(\s*)(lower|upper):(\s*)" + num + r"(.*)$",
                                lines[i])] if m}
     if "lower" in rows and "upper" in rows:
         (li, lm), (ui, um) = rows["lower"], rows["upper"]
-        lines[li] = f"{lm.group(1)}lower: {_negate_scalar(um.group(3))}{lm.group(4)}"
-        lines[ui] = f"{um.group(1)}upper: {_negate_scalar(lm.group(3))}{um.group(4)}"
+        lines[li] = (f"{lm.group(1)}lower:{lm.group(3)}"
+                     f"{_negate_scalar(um.group(4))}{lm.group(5)}")
+        lines[ui] = (f"{um.group(1)}upper:{um.group(3)}"
+                     f"{_negate_scalar(lm.group(4))}{um.group(5)}")
     else:
         for key, (i, m) in rows.items():
             other = "upper" if key == "lower" else "lower"
-            lines[i] = f"{m.group(1)}{other}: {_negate_scalar(m.group(3))}{m.group(4)}"
+            lines[i] = (f"{m.group(1)}{other}:{m.group(3)}"
+                        f"{_negate_scalar(m.group(4))}{m.group(5)}")
     edit_mimic(s, end, follower_of_flipped=False)
     # flip_axis: drop it when present, else add it as the entry's last key
     fi = next((i for i in range(s, end)
@@ -3975,7 +3987,8 @@ def _flip_joint_in_yaml(txt, child, joint_names):
 def _flip_in_package_yaml(yml_txt, urdf_txt, joint_name):
     """joints.yaml text with the movable joint ``joint_name`` of the served
     URDF flipped (see :func:`_flip_joint_in_yaml`); unchanged for a fixed
-    joint or one the URDF does not have."""
+    joint or one the URDF does not have.  Raises ValueError for a movable
+    joint that has no entry to record the flip in."""
     m = re.search(r'<joint\b[^>]*\bname="' + re.escape(joint_name)
                   + r'"[^>]*>(.*?)</joint>', urdf_txt, re.DOTALL)
     if not m:
@@ -3988,7 +4001,11 @@ def _flip_in_package_yaml(yml_txt, urdf_txt, joint_name):
         return yml_txt
     child = _link_names_inverse(yml_txt).get(cm.group(1), cm.group(1))
     key = _names_inverse(yml_txt, "joint_names").get(joint_name, joint_name)
-    new_txt, _applied = _flip_joint_in_yaml(yml_txt, child, {joint_name, key})
+    new_txt, applied = _flip_joint_in_yaml(yml_txt, child, {joint_name, key})
+    if not applied:
+        # flipping only the URDF would be undone by the next rebuild
+        raise ValueError(f"'{joint_name}' has no joints.yaml entry (child "
+                         f"'{child}'), so its flip could not be saved")
     return new_txt
 
 
@@ -6316,10 +6333,14 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                         return self._send_json(
                             {"error": f"flip failed: {e}"}, 500)
                 applied, missed = [], []
+                urdf_path = os.path.join(cls.pkg_dir, cls.urdf_rel)
                 for jn in names:
                     try:
                         k = _flip_axis_in_urdf(cls.pkg_dir, cls.urdf_rel, jn)
                     except Exception as e:
+                        # all or nothing: put back the joints flipped so far
+                        with open(urdf_path, "w", encoding="utf-8") as f:
+                            f.write(utxt)
                         return self._send_json(
                             {"error": f"flip failed: {e}"}, 500)
                     (applied if k else missed).append(jn)
@@ -6327,9 +6348,16 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                     _snapshot(cls.pkg_dir, yml, f"flip axis x{len(applied)}")
                     with open(yml, "w", encoding="utf-8") as f:
                         f.write(new_ytxt)
+                # a package without joints.yaml cannot keep a flip: say so
+                not_saved = applied if ytxt is None else []
+                if not_saved:
+                    print(f"[sw2robot.web] set_axis: WARNING no {pkg}.joints.yaml"
+                          f" -- {len(not_saved)} flip(s) are in the URDF only "
+                          f"and the next rebuild will undo them")
                 print(f"[sw2robot.web] set_axis: {len(applied)} flipped, "
                       f"{len(missed)} not matched")
-                return self._send_json({"applied": applied, "missed": missed})
+                return self._send_json({"applied": applied, "missed": missed,
+                                        "not_saved": not_saved})
             if parsed.path == "/api/set_types":
                 cls = type(self)
                 n = int(self.headers.get("Content-Length", 0))

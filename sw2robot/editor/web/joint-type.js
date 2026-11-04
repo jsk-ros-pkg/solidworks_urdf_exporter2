@@ -216,6 +216,7 @@ export async function applyAxisFlip(jointName, child) {
     if (!resp.ok || r.error) { throw new Error(r.error ?? resp.status); }
     if (!r.applied?.length) { log(t('flip.noneMatched'), 'err'); return; }
     log(t('flip.done', { joint: jointName }), 'ok');
+    if (r.not_saved?.length) { log(t('flip.notSaved', { joint: jointName }), 'err'); }
     selectionState.reselectAfterLoad = child;            // keep selection/panel after reload
     loadRobot(packageState.currentInfo, { keepPose: true });
   } catch (e) {

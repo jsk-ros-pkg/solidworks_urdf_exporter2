@@ -153,3 +153,61 @@ def test_flip_records_converted_limits_and_mimic(server):
     assert follower["mimic"]["multiplier"] == -0.5
     assert follower["mimic"]["offset"] == 0.1
     assert "flip_axis" not in follower
+
+
+def test_two_flips_restore_unusual_number_text_exactly():
+    """-0, extra spaces and a poly list's own spacing come back as written."""
+    from sw2robot.editor.webserver import _flip_joint_in_yaml
+
+    txt = ("joints:\n"
+           "  - parent: a_1\n"
+           "    child:  b_1\n"
+           "    type:   revolute\n"
+           "    lower:  -0\n"
+           "    upper: 1.5e-1\n"
+           "    mimic:\n"
+           "      joint: x__y\n"
+           "      multiplier:   2\n"
+           "      offset: 0.0\n"
+           "      poly: [1.0,-2.0 ,  0.5, 0]\n")
+    once, applied = _flip_joint_in_yaml(txt, "b_1", {"a_1__b_1"})
+    assert applied and once != txt
+    twice, _ = _flip_joint_in_yaml(once, "b_1", {"a_1__b_1"})
+    assert twice == txt
+
+
+def test_a_movable_joint_without_a_yaml_entry_is_an_error():
+    from sw2robot.editor.webserver import _flip_in_package_yaml
+
+    urdf = ('<robot name="r"><joint name="j" type="revolute">'
+            '<parent link="a"/><child link="b"/><axis xyz="0 0 1"/>'
+            '</joint></robot>')
+    with pytest.raises(ValueError, match=r"no joints\.yaml entry"):
+        _flip_in_package_yaml("joints: []\n", urdf, "j")
+
+
+def test_a_failed_batch_leaves_urdf_and_yaml_untouched(server, monkeypatch):
+    from sw2robot.editor import webserver
+
+    base, pkg = server
+    yml = pkg / "fingertip.joints.yaml"
+    urdf = pkg / "urdf" / "fingertip.urdf"
+    yml_before = yml.read_text(encoding="utf-8")
+    urdf_before = urdf.read_text(encoding="utf-8")
+    real = webserver._flip_axis_in_urdf
+
+    def flaky(pkg_dir, urdf_rel, joint_name):
+        if joint_name == FOLLOWER:
+            raise OSError("disk full")
+        return real(pkg_dir, urdf_rel, joint_name)
+
+    monkeypatch.setattr(webserver, "_flip_axis_in_urdf", flaky)
+    req = urllib.request.Request(
+        base + "/api/set_axis",
+        data=json.dumps({"joints": [DRIVER, FOLLOWER]}).encode(),
+        headers={"Content-Type": "application/json"}, method="POST")
+    with pytest.raises(urllib.error.HTTPError) as err:
+        urllib.request.urlopen(req)
+    assert err.value.code == 500
+    assert urdf.read_text(encoding="utf-8") == urdf_before
+    assert yml.read_text(encoding="utf-8") == yml_before
