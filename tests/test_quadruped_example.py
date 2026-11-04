@@ -32,9 +32,9 @@ def robot(tmp_path_factory):
 def test_links_and_joints_carry_the_tutorial_names(robot):
     links = {link.get("name") for link in robot.findall("link")}
     joints = {joint.get("name") for joint in robot.findall("joint")}
-    assert links == {"base_link"} | {"%s_%s" % (leg, part) for leg in LEGS
+    assert links == {"base_link"} | {f"{leg}_{part}" for leg in LEGS
                                      for part in ("thigh", "shin")}
-    assert joints == {"%s_%s" % (leg, part) for leg in LEGS
+    assert joints == {f"{leg}_{part}" for leg in LEGS
                       for part in ("hip", "knee")}
 
 
