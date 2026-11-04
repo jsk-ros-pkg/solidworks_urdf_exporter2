@@ -1780,6 +1780,40 @@ def _concentric_axis_of(rec):
     return None
 
 
+def _contact_point_on_axis(rec, pt, d):
+    """``pt`` slid along the axis ``d`` onto the edge's contact plane.
+
+    SolidWorks reports a concentric mate's point wherever the cylinder
+    SURFACE has its origin -- for two hip axles extruded from one sketch, the
+    same end of the line for the left and the right leg -- so used verbatim
+    it can put a joint frame on the far side of the robot.  A COINCIDENT mate
+    between two planes perpendicular to the axis marks where the parts
+    actually meet; the point is moved there (the nearest such plane, if
+    several).  Kinematics are unchanged: the point only moves along the axis.
+    Without such a plane ``pt`` is returned as is.
+    """
+    d = np.asarray(d, float)
+    n = float(np.linalg.norm(d))
+    if n < 1e-9:
+        return pt
+    d = d / n
+    pt = np.asarray(pt, float)
+    best = None
+    for m in _dedup_geo(rec.get("mates") or []):
+        if m.get("type") != "COINCIDENT":
+            continue
+        ents = _mate_entities(m)
+        if len(ents) != 2 or any(et != _ET_PLANE or nd is None
+                                 for et, _p, nd in ents):
+            continue
+        if any(abs(float(nd @ d)) < 1.0 - 1e-6 for _et, _p, nd in ents):
+            continue
+        t = float((ents[0][1] - pt) @ d)
+        if best is None or abs(t) < abs(best):
+            best = t
+    return pt if best is None else pt + best * d
+
+
 def _attach_limit_joint(adjacency, a, b, jtype, ax_pt, ax_dir, lower, upper):
     """Mark the ``a``--``b`` edge as a limit-mate joint (see
     :func:`extract_limit_joints`); ``a`` is the mate's reference component,
@@ -3172,10 +3206,14 @@ def _finalize_tree(comps, adjacency, base, parent_of, edge_info, root_rpy=None,
         if info["type"] in ("revolute", "continuous", "prismatic") \
                 and info.get("axis") is not None:
             pt, d = info["axis"]
-            # Use the SolidWorks concentric-mate axis point verbatim (verified
-            # to match SW exactly).  No projection -- that moved the frame to
-            # the part origin, which is misleading for parts whose origin is
+            # The SolidWorks concentric-mate axis point (verified to match SW
+            # exactly), only slid ALONG the axis onto the contact plane when
+            # a perpendicular coincident mate gives one.  Not projected onto
+            # the part origin -- that is misleading for parts whose origin is
             # off their geometry.
+            if info["type"] in ("revolute", "continuous"):
+                pt = _contact_point_on_axis(
+                    adjacency.get(frozenset((child, parent)), {}), pt, d)
             anchor[child] = rotation_translation2matrix(
                 np.eye(3), np.asarray(pt, float))
         else:
