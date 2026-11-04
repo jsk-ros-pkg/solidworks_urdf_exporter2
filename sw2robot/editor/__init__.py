@@ -11,8 +11,7 @@ Design (a standing directive):
   the CLI (``python -m sw2robot.editor``) with no GUI and no SolidWorks.
 
 It uses the *pure* halves: ``sw2robot.exporter.export.build`` (no SolidWorks)
-and the vendored ``sw2robot.editor._vendor.rc_config`` (ROS/MoveIt/Gazebo
-config generators).
+and ``skrobot.urdf.ros_config`` (ROS/MoveIt/Gazebo config generators).
 """
 
 from . import core

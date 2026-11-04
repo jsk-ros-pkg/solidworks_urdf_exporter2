@@ -439,7 +439,7 @@ def _um_materialized(pkg_dir, urdf_rel):
 def _um_joint_by_child(state, child):
     """Map a child-link name (what the limits/types/mimic UI sends) to its joint
     name (what the overlay is keyed by); None if no joint has that child."""
-    return next((j["name"] for j in state.joints if j["childLink"] == child), None)
+    return next((j["name"] for j in state.joints if j["child_link"] == child), None)
 
 
 def _rewrite_package_urls(urdf_text, urdf_rel, pkg_dir):
@@ -4069,7 +4069,7 @@ def _parse_urdf(pkg_dir, urdf_rel):
     (``parse_urdf_content``) -- the same code path ``core.load_module`` uses --
     so link/joint listing and root-link detection don't drift between the
     server and the rest of the editor.  Returns the parsed dict or None."""
-    from ._vendor.rc_config.urdf_parser import parse_urdf_content
+    from skrobot.urdf.ros_config import parse_urdf_content
     try:
         with open(os.path.join(pkg_dir, urdf_rel), encoding="utf-8") as f:
             return parse_urdf_content(f.read())
@@ -4225,7 +4225,7 @@ def _edit_joint_block(pkg_dir, urdf_rel, child, edit):
     if not parsed:
         return False
     jname = next((j["name"] for j in parsed["joints"]
-                  if j["childLink"] == child), None)
+                  if j["child_link"] == child), None)
     if jname is None:
         return False
     path = os.path.join(pkg_dir, urdf_rel)

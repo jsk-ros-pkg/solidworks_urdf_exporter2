@@ -68,7 +68,7 @@ def movable_names(state: RobotCompilerState) -> list:
 
 
 def _link_parents(state: RobotCompilerState) -> dict:
-    return {jj["childLink"]: jj["parentLink"] for jj in state.joints}
+    return {jj["child_link"]: jj["parent_link"] for jj in state.joints}
 
 
 def _link_ancestors(link, link_parents) -> set:
@@ -86,12 +86,12 @@ def chain_related(state: RobotCompilerState, joint: str) -> list:
     if joint not in by:
         return []
     lp = _link_parents(state)
-    a = by[joint]["childLink"]
+    a = by[joint]["child_link"]
     rel = []
     for k in state.movable_joints():
         if k["name"] == joint:
             continue
-        b = k["childLink"]
+        b = k["child_link"]
         if a in _link_ancestors(b, lp) or b in _link_ancestors(a, lp):
             rel.append(k["name"])
     return rel
@@ -115,10 +115,24 @@ def save_state(state: RobotCompilerState, path=None) -> Path:
     return p
 
 
+# the parsed-URDF keys a sidecar written before the switch to
+# skrobot.urdf.ros_config carries (camelCase) -> the ones it uses now
+_LEGACY_KEYS = {"parentLink": "parent_link", "childLink": "child_link",
+                "lowerLimit": "lower_limit", "upperLimit": "upper_limit",
+                "velocityLimit": "velocity_limit",
+                "effortLimit": "effort_limit", "hasVisual": "has_visual",
+                "hasCollision": "has_collision", "hasInertial": "has_inertial"}
+
+
 def load_state(path) -> RobotCompilerState:
     """Load a complete state previously written by :func:`save_state`."""
-    return RobotCompilerState.model_validate_json(
+    state = RobotCompilerState.model_validate_json(
         Path(path).read_text(encoding="utf-8"))
+    for item in (*state.joints, *state.links):
+        for old, new in _LEGACY_KEYS.items():
+            if old in item:
+                item.setdefault(new, item.pop(old))
+    return state
 
 
 def load_edits(state: RobotCompilerState, path=None) -> int:
@@ -150,7 +164,7 @@ def load_module(urdf_path, package_dir=None) -> RobotCompilerState:
 
     ``package_dir`` (for meshes / registration) defaults to the URDF's
     grandparent (the ``<pkg>/urdf/<name>.urdf`` layout)."""
-    from ._vendor.rc_config.urdf_parser import parse_urdf_content
+    from skrobot.urdf.ros_config import parse_urdf_content
 
     urdf_path = Path(urdf_path)
     parsed = parse_urdf_content(urdf_path.read_text(encoding="utf-8"))
@@ -504,8 +518,8 @@ def reverse_direction(state: RobotCompilerState, joint: str) -> None:
     # only revolute/prismatic joints carry a travel range -- don't fabricate a
     # degenerate [0, 0] limit on a continuous/fixed joint that has none
     if state.effective_type(parsed) in ("revolute", "prismatic"):
-        lo = e.lower if e.lower is not None else parsed.get("lowerLimit", 0.0)
-        hi = e.upper if e.upper is not None else parsed.get("upperLimit", 0.0)
+        lo = e.lower if e.lower is not None else parsed.get("lower_limit", 0.0)
+        hi = e.upper if e.upper is not None else parsed.get("upper_limit", 0.0)
         e.lower, e.upper = -hi, -lo
 
 
@@ -877,8 +891,8 @@ def _servo_mappings(state: RobotCompilerState, parsed_joints: list) -> list:
         out.append({
             "jointName": eff, "servoId": e.servo_id, "direction": e.direction,
             "angleOffset": e.angle_offset,
-            "minAngle": e.lower if e.lower is not None else j.get("lowerLimit", 0.0),
-            "maxAngle": e.upper if e.upper is not None else j.get("upperLimit", 0.0),
+            "minAngle": e.lower if e.lower is not None else j.get("lower_limit", 0.0),
+            "maxAngle": e.upper if e.upper is not None else j.get("upper_limit", 0.0),
         })
     return out
 
@@ -886,25 +900,49 @@ def _servo_mappings(state: RobotCompilerState, parsed_joints: list) -> list:
 def export_ros_package(state: RobotCompilerState, out_path,
                        export_options: dict | None = None,
                        strict: bool = False) -> Path:
-    """Produce the final ROS/MoveIt/Gazebo/IL config ZIP via the vendored
-    ``rc_config.export_all_configs``.  With ``strict=True`` a non-empty
-    ``validate(state)`` raises instead of writing a broken package."""
-    from ._vendor.rc_config.export import export_all_configs
-    from ._vendor.rc_config.urdf_parser import parse_urdf_content
+    """Produce the final ROS/MoveIt/Gazebo/IL config ZIP via skrobot's
+    ``export_all_configs``, with the servo mapping and imitation-learning
+    configs -- sw2robot's own -- added as extra files.  ``export_options``
+    takes skrobot's ``include_urdf`` / ``include_moveit`` / ``include_gazebo``
+    plus ``include_servo_mapping`` / ``include_imitation_learning`` (all on by
+    default).  With ``strict=True`` a non-empty ``validate(state)`` raises
+    instead of writing a broken package."""
+    from skrobot.urdf.ros_config import export_all_configs, parse_urdf_content
+
+    from .imitation_generator import generate_il_config
+    from .servo_mapping import generate_servo_mapping_yaml
 
     problems = validate(state)
     if problems and strict:
         raise ValueError("cannot export, state has problems:\n  - "
                          + "\n  - ".join(problems))
 
+    options = dict(export_options or {})
+    skrobot_keys = ("include_urdf", "include_moveit", "include_gazebo")
+    unknown = set(options) - set(skrobot_keys) - {
+        "include_servo_mapping", "include_imitation_learning"}
+    if unknown:
+        # an option that is ignored would still write the files it was meant
+        # to leave out (the camelCase spellings, e.g. includeMoveIt, are gone)
+        raise ValueError(f"unknown export_options: {sorted(unknown)}")
+
     urdf = build_urdf(state)
     parsed = parse_urdf_content(urdf)
+    name = state.robot_name
+    extra = {}
+    if options.get("include_servo_mapping", True):
+        extra[f"{name}/config/servo_mapping.yaml"] = \
+            generate_servo_mapping_yaml(_servo_mappings(state, parsed["joints"]))
+    if options.get("include_imitation_learning", True):
+        extra[f"{name}/config/il_config.yaml"] = \
+            generate_il_config({}, {}, parsed["joints"])
     data = export_all_configs(
         urdf_content=urdf, joints=parsed["joints"],
-        servo_mappings=_servo_mappings(state, parsed["joints"]),
         planning_groups=[], controllers=[], disabled_collision_pairs=[],
-        gazebo_physics={}, gazebo_plugins=[], il_observation={}, il_action={},
-        robot_name=state.robot_name, export_options=export_options)
+        gazebo_physics={}, gazebo_plugins=[], robot_name=name,
+        export_options={k: v for k, v in options.items()
+                        if k in skrobot_keys} or None,
+        extra_files=extra)
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_bytes(data)

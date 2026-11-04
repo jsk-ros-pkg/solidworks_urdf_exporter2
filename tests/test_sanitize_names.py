@@ -67,7 +67,8 @@ def test_exporter_sanitizes_root_and_port(tmp_path):
 
 def _built(tmp_path, urdf):
     """``build_urdf`` over a raw URDF string, parsed back to a root element."""
-    from sw2robot.editor._vendor.rc_config.urdf_parser import parse_urdf_content
+    from skrobot.urdf.ros_config import parse_urdf_content
+
     from sw2robot.editor.core import build_urdf
     from sw2robot.editor.state import RobotCompilerState
 
@@ -114,7 +115,8 @@ def test_editor_sanitize_is_noop_on_clean_names(tmp_path):
 
 
 def test_servo_mapping_uses_collision_suffixed_final_joint_name(tmp_path):
-    from sw2robot.editor._vendor.rc_config.urdf_parser import parse_urdf_content
+    from skrobot.urdf.ros_config import parse_urdf_content
+
     from sw2robot.editor.core import _servo_mappings, build_urdf
     from sw2robot.editor.state import JointEdit, RobotCompilerState
 
