@@ -7,7 +7,7 @@ Exercises the agreed integration flow on the committed ``feetech_hand`` cache
     ->  validate  ->  register_module  ->  export_ros_package (ROS/MoveIt/... ZIP)
 
 The pure-build + edit half runs anywhere.  The ``register``/``export`` half uses
-the vendored ``sw2robot.editor._vendor.rc_config`` package.
+``skrobot.urdf.ros_config``.
 """
 
 import shutil
@@ -21,19 +21,6 @@ import sw2robot.editor.core as c
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CACHE = REPO_ROOT / "output" / "feetech_hand"
-
-
-def _rc_config_available() -> bool:
-    try:
-        from sw2robot.editor._vendor.rc_config.export import (
-            export_all_configs,  # noqa: F401
-        )
-        from sw2robot.editor._vendor.rc_config.urdf_parser import (
-            parse_urdf_content,  # noqa: F401
-        )
-    except Exception:
-        return False
-    return True
 
 
 @pytest.fixture(scope="module")
@@ -91,9 +78,6 @@ def test_edit_rename_limits_servo_mimic_and_bake(state):
 
 
 def test_register_and_export(state, tmp_path):
-    if not _rc_config_available():
-        pytest.skip("vendored rc_config not available")
-
     # state already carries the edits from the prior test within this module.
     mod_urdf = c.register_module(state, tmp_path / "registry")
     assert mod_urdf.is_file()
@@ -112,3 +96,37 @@ def test_register_and_export(state, tmp_path):
     # servo mapping uses the EFFECTIVE (renamed) joint name + the edited limits
     assert "thumb_drive:" in servo_yaml
     assert "servo_id: 1" in servo_yaml
+
+
+def test_export_ros_package_from_the_quadruped_example(tmp_path):
+    """The config ZIP from a committed package (no cache needed): skrobot's
+    URDF/MoveIt/Gazebo configs plus sw2robot's servo mapping and IL config."""
+    example = REPO_ROOT / "examples" / "quadruped"
+    pkg = tmp_path / "quadruped"
+    shutil.copytree(example, pkg)
+    state = c.load_module(pkg / "urdf" / "quadruped.urdf", package_dir=pkg)
+    hip = c.movable_names(state)[0]
+    c.rename_joint(state, hip, "fl_hip")
+    c.set_servo(state, hip, servo_id=3, direction=-1, angle_offset=0.0)
+
+    zip_path = c.export_ros_package(state, tmp_path / "q.zip", strict=True)
+    with zipfile.ZipFile(zip_path) as z:
+        members = set(z.namelist())
+        servo_yaml = z.read("quadruped/config/servo_mapping.yaml").decode()
+        ros2_control = z.read("quadruped/urdf/ros2_control.xacro").decode()
+    assert {"quadruped/urdf/quadruped.urdf", "quadruped/config/quadruped.srdf",
+            "quadruped/config/controllers.yaml", "quadruped/config/gazebo.xml",
+            "quadruped/config/il_config.yaml", "quadruped/README.md"} <= members
+    assert "fl_hip:" in servo_yaml and "servo_id: 3" in servo_yaml
+    # skrobot's generator: gz_ros2_control, not the end-of-life Gazebo Classic
+    assert "gz_ros2_control/GazeboSimSystem" in ros2_control
+    assert "libgazebo_ros2_control.so" not in ros2_control
+
+    only_urdf = c.export_ros_package(
+        state, tmp_path / "u.zip",
+        export_options={"include_moveit": False, "include_gazebo": False,
+                        "include_servo_mapping": False,
+                        "include_imitation_learning": False})
+    with zipfile.ZipFile(only_urdf) as z:
+        assert set(z.namelist()) == {"quadruped/urdf/quadruped.urdf",
+                                     "quadruped/README.md"}

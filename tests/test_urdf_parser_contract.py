@@ -3,15 +3,15 @@
 ``core.load_module`` and ``webserver._parse_urdf`` both go through it, so the
 key names, the defaults for everything a URDF may leave out, and the root-link
 choice on a partial document are all load-bearing for link/joint listing, the
-edit overlay and the rename routing.  The parser's docstring explains why this
-is hand-rolled rather than ``skrobot.utils.urdf.URDF``; the tolerance cases
-below are the inputs that loader rejects, and are what makes the difference
-observable rather than a matter of taste.
+edit overlay and the rename routing.  It is ``skrobot.urdf.ros_config``'s
+tolerant ElementTree reader, deliberately not ``skrobot.utils.urdf.URDF``: that
+loader validates as it parses, and the tolerance cases below are exactly the
+inputs it rejects -- a user's file, or the editor's own partial URDF.  These
+tests pin the parts of skrobot's behaviour the editor depends on.
 """
 
 import pytest
-
-from sw2robot.editor._vendor.rc_config.urdf_parser import parse_urdf_content
+from skrobot.urdf.ros_config import parse_urdf_content
 
 FULL = """<?xml version="1.0"?>
 <robot name="full">
@@ -41,17 +41,18 @@ def test_keys_and_values():
     assert parsed["root_link"] == "base"
     assert parsed["joints"] == [{
         "name": "j", "type": "revolute",
-        "parentLink": "base", "childLink": "tip",
+        "parent_link": "base", "child_link": "tip",
         # kept as written: the axis is not renormalized to a unit vector
         "axis": [0.0, 0.0, 2.0],
-        "lowerLimit": -1.5, "upperLimit": 1.5,
-        "velocityLimit": 3.0, "effortLimit": 10.0,
+        "lower_limit": -1.5, "upper_limit": 1.5,
+        "velocity_limit": 3.0, "effort_limit": 10.0,
+        "is_mimic": False, "mimic_joint": None,
     }]
     assert parsed["links"] == [
-        {"name": "base", "hasVisual": True, "hasCollision": True,
-         "hasInertial": True},
-        {"name": "tip", "hasVisual": False, "hasCollision": False,
-         "hasInertial": False},
+        {"name": "base", "has_visual": True, "has_collision": True,
+         "has_inertial": True},
+        {"name": "tip", "has_visual": False, "has_collision": False,
+         "has_inertial": False},
     ]
 
 
@@ -68,8 +69,8 @@ def test_absent_optionals_get_defaults():
 
     j = parsed["joints"][0]
     assert j["axis"] == [0.0, 0.0, 1.0]
-    assert (j["lowerLimit"], j["upperLimit"]) == (0.0, 0.0)
-    assert (j["velocityLimit"], j["effortLimit"]) == (0.0, 0.0)
+    assert (j["lower_limit"], j["upper_limit"]) == (0.0, 0.0)
+    assert (j["velocity_limit"], j["effort_limit"]) == (0.0, 0.0)
 
 
 def test_axis_element_without_xyz_still_defaults_to_z():
@@ -158,11 +159,11 @@ def test_every_link_is_a_child_leaves_no_root():
 @pytest.mark.parametrize("urdf, expected", [
     # an <inertial/> with no <mass>, as a URDF written before a mass pass
     ('<robot name="x"><link name="a"><inertial/></link></robot>',
-     {"name": "a", "hasVisual": False, "hasCollision": False,
-      "hasInertial": True}),
+     {"name": "a", "has_visual": False, "has_collision": False,
+      "has_inertial": True}),
     ('<robot name="x"><link/></robot>',
-     {"name": "unnamed_link", "hasVisual": False, "hasCollision": False,
-      "hasInertial": False}),
+     {"name": "unnamed_link", "has_visual": False, "has_collision": False,
+      "has_inertial": False}),
 ])
 def test_tolerates_partial_links(urdf, expected):
     assert parse_urdf_content(urdf)["links"] == [expected]
@@ -186,7 +187,7 @@ def test_tolerates_partial_joints(joint_xml, name, jtype, parent, child):
     )["joints"][0]
 
     assert (j["name"], j["type"]) == (name, jtype)
-    assert (j["parentLink"], j["childLink"]) == (parent, child)
+    assert (j["parent_link"], j["child_link"]) == (parent, child)
 
 
 @pytest.mark.parametrize("bad", [
