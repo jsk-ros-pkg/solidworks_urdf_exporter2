@@ -35,13 +35,13 @@
   <link name="screwlock_male_hard_jointbase_v4_1">
     <!-- sw2robot material="ABS" density="1020" inertia="hull" -->
     <visual>
-      <origin xyz="0 0.017 -0.003" rpy="-1.570796327 0 -3.141592654"/>
+      <origin xyz="0 0.0135 -0.003" rpy="-1.570796327 0 -3.141592654"/>
       <geometry>
         <mesh filename="../meshes/screwlock_male_hard_jointbase_v4_1.3dxml"/>
       </geometry>
     </visual>
     <collision>
-      <origin xyz="0 0.017 -0.003" rpy="-1.570796327 0 -3.141592654"/>
+      <origin xyz="0 0.0135 -0.003" rpy="-1.570796327 0 -3.141592654"/>
       <geometry>
         <mesh filename="../meshes/screwlock_male_hard_jointbase_v4_1.3dxml"/>
       </geometry>
@@ -49,7 +49,7 @@
     <inertial/>
   </link>
   <joint name="fingertip_front_2__screwlock_male_hard_jointbase_v4_1" type="revolute">
-    <origin xyz="0 0.0015 0.035" rpy="3.141592654 0 0"/>
+    <origin xyz="0 -0.002 0.035" rpy="3.141592654 0 0"/>
     <parent link="base_link"/>
     <child link="screwlock_male_hard_jointbase_v4_1"/>
     <axis xyz="0 -1 0"/>
