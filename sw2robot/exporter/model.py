@@ -366,6 +366,9 @@ class Component:
     # the SolidWorks appearance (.p2m under the materials library, e.g.
     # 'metal/aluminum/satin finish aluminum'); what the PBR export keys on
     appearance: str | None = None
+    # one RGBA (0..1) for the part when its mesh has no colour (graph.json
+    # ``color``); written as the URDF <visual> <material>
+    color: list | None = None
     # the SolidWorks configuration this INSTANCE references.  Two instances of
     # one part file can reference different configurations with different
     # geometry (a length-configured tube: '180cm_shoulder_L120' vs
@@ -3890,6 +3893,7 @@ def _component_states(comps):
             fixed=c.fixed, dof=c.dof, mesh_file=c.mesh_file,
             material=c.material, density=c.density,
             appearance=getattr(c, "appearance", None),
+            color=getattr(c, "color", None),
             sw_mass=c.sw_mass, sw_com=c.sw_com, sw_inertia=c.sw_inertia,
             sw_mass_overridden=c.sw_mass_overridden,
             mass_inherited_from=getattr(c, "mass_inherited_from", None),
@@ -4322,6 +4326,7 @@ def from_graph(graph, exclude=None, expand=None, no_expand=None,
             fixed=cs.fixed, dof=cs.dof, mesh_file=cs.mesh_file,
             material=cs.material, density=cs.density,
             appearance=getattr(cs, "appearance", None),
+            color=getattr(cs, "color", None),
             sw_mass=cs.sw_mass, sw_com=cs.sw_com, sw_inertia=cs.sw_inertia,
             sw_mass_overridden=getattr(cs, "sw_mass_overridden", False),
             mass_inherited_from=getattr(cs, "mass_inherited_from", None),
@@ -4461,6 +4466,7 @@ def _expand_one(inst, sub, comps, adjacency, ground, deep=None, hidden=None,
             fixed=False, dof=None, mesh_file=cs.mesh_file,
             material=cs.material, density=cs.density,
             appearance=getattr(cs, "appearance", None),
+            color=getattr(cs, "color", None),
             sw_mass=cs.sw_mass, sw_com=cs.sw_com, sw_inertia=cs.sw_inertia,
             sw_mass_overridden=getattr(cs, "sw_mass_overridden", False),
             mass_inherited_from=getattr(cs, "mass_inherited_from", None),

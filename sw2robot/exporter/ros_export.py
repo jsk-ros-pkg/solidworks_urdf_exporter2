@@ -206,6 +206,23 @@ def _hex_to_rgba(hex_color):
         return None
 
 
+def _material_hex(block):
+    """The ``<material><color rgba>`` of a URDF ``<visual>`` as ``'#RRGGBBAA'``,
+    or ``None`` when the block has none.  graph.json's per-part ``color`` reaches
+    the export this way: the build writes it as that material."""
+    color = block.find("material/color")
+    if color is None or not color.get("rgba"):
+        return None
+    try:
+        vals = [float(v) for v in color.get("rgba").split()]
+    except ValueError:
+        return None
+    if len(vals) != 4:
+        return None
+    return "#" + "".join(f"{round(max(0.0, min(1.0, v)) * 255):02x}"
+                         for v in vals)
+
+
 def _apply_uniform_color(mesh, hex_color):
     """Repaint every face of ``mesh`` one solid colour (dropping any original
     texture/material), so a per-link override wins in every output format.  A
@@ -373,7 +390,8 @@ def _atomic_write(path, data):
 # -- v2: glb visuals carry per-colour PBR materials instead of COLOR_0
 # -- v3: faces textured in SolidWorks keep their image in the glb
 # -- v4: a part with textured faces keeps its other faces' colours
-_MESH_CACHE_VERSION = 4
+# -- v5: a mesh with no colour gets the default grey in a dae, not black
+_MESH_CACHE_VERSION = 5
 
 
 class _MeshCache:
@@ -948,6 +966,11 @@ def _collada_meshes(mesh):
     elif kind == "face":
         face_colors = mesh.visual.face_colors
     else:
+        # no colour at all (a plain STL): trimesh would write a material with
+        # no diffuse, which COLLADA readers take as black -- use the same
+        # default grey an STL <visual> gets instead
+        mesh.visual.face_colors = np.tile(np.array(_DEFAULT_VISUAL_RGBA, np.uint8),
+                                          (len(mesh.faces), 1))
         return [mesh]
 
     face_colors = np.array(face_colors, dtype=np.uint8)   # copy: clamped below
@@ -1605,7 +1628,11 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
                     if src is None:
                         errors.append(f"no source mesh for '{base}'")
                         continue
-                    color = link_color or colors.get(base)
+                    override = link_color or colors.get(base)
+                    # without an override, a <visual> takes the colour the
+                    # build wrote from graph.json (a part whose mesh has none)
+                    color = override or (_material_hex(block)
+                                         if ctx == "visual" else None)
                     transform = bake.get(id(mesh))
                     tkey = None if transform is None else tuple(
                         round(float(x), 7) for x in transform.flatten())
@@ -1639,6 +1666,15 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
                     # in RViz.  Emit a URDF <material> instead: the per-link colour
                     # override if set, else a default colour.  dae/glb keep their
                     # colour in the mesh and get no <material>.
+                    existing = block.find("material/color")
+                    override_rgba = _hex_to_rgba(override)
+                    if ctx == "visual" and existing is not None \
+                            and override_rgba is not None:
+                        # the graph's colour is already a <material>; a
+                        # `colors:` override still wins over it, in every
+                        # format (the MuJoCo converter prefers a <material>
+                        # to the colour baked into a dae/glb)
+                        existing.set("rgba", _rgba_attr(override_rgba))
                     if ctx == "visual" and fmt == "stl" \
                             and block.find("material") is None:
                         rgba = _hex_to_rgba(color)

@@ -210,12 +210,19 @@ def _link_xml(comp, ros_pkg=None, rn=lambda n: n, mesh_dir=None, density=None):
                     if ros_pkg else "../" + comp.mesh_file.replace("\\", "/"))
         vorigin = (f'      <origin xyz="{fmt_urdf_vec(comp.visual_xyz)}" '
                    f'rpy="{fmt_urdf_vec(comp.visual_rpy)}"/>')
+        color = getattr(comp, "color", None)
         for tag in ("visual", "collision"):
             lines.append(f"    <{tag}>")
             lines.append(vorigin)
             lines.append("      <geometry>")
             lines.append(f'        <mesh filename="{mesh_ref}"/>')
             lines.append("      </geometry>")
+            if tag == "visual" and color is not None:
+                # the part's colour from graph.json: the ROS/MuJoCo exports
+                # read the built URDF, so this is how it reaches them
+                lines.append(f'      <material name="{rn(comp.link_name)}_color">')
+                lines.append(f'        <color rgba="{fmt_urdf_vec(color)}"/>')
+                lines.append("      </material>")
             lines.append(f"    </{tag}>")
     inertial_lines, method, problems = _inertial_xml(comp, mesh_dir, density)
     comment = _provenance_comment(comp, method)

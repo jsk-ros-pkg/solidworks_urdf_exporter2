@@ -38,6 +38,27 @@ GRAPH_FILE = "graph.json"
 UNIT_SCALE = {"m": 1.0, "mm": MM_TO_M}
 
 
+def _parse_color(color):
+    """``'#RRGGBB'`` / ``'#RRGGBBAA'`` or 3/4 floats in 0..1 -> RGBA floats."""
+    if isinstance(color, str):
+        h = color.strip().lstrip("#")
+        if len(h) not in (6, 8):
+            raise ValueError(f"colour {color!r}: expected '#RRGGBB' or "
+                             "'#RRGGBBAA'")
+        try:
+            vals = [int(h[i:i + 2], 16) / 255.0 for i in range(0, len(h), 2)]
+        except ValueError:
+            raise ValueError(f"colour {color!r} is not hexadecimal") from None
+    else:
+        vals = [float(c) for c in color]
+        if len(vals) not in (3, 4) or not all(0.0 <= v <= 1.0 for v in vals):
+            raise ValueError(f"colour {color!r}: expected 3 or 4 values in "
+                             "0..1")
+    if len(vals) == 3:
+        vals.append(1.0)
+    return vals
+
+
 def _load_geometry(geometry, scale):
     """A metre ``trimesh.Trimesh`` from a mesh, a mesh file or a build123d shape."""
     import trimesh
@@ -85,7 +106,7 @@ class GraphBuilder:
         self._joints = []
 
     def add_part(self, name, geometry, pose=None, *, fixed=False, mass=None,
-                 density=None):
+                 density=None, color=None):
         """Add a rigid part.
 
         Parameters
@@ -102,6 +123,9 @@ class GraphBuilder:
             Target mass in kg; the mesh-derived inertia is scaled to it.
         density : float | None
             Density in kg/m^3 for the mesh-derived inertia.
+        color : str | sequence of float | None
+            ``'#RRGGBB'`` / ``'#RRGGBBAA'`` or 3/4 floats in 0..1; the part is
+            drawn in it (the mesh written here carries no colour).
 
         Returns
         -------
@@ -120,9 +144,11 @@ class GraphBuilder:
         if world.shape != (4, 4):
             raise ValueError(f"part {name!r}: pose must be 4x4")
         world[:3, 3] *= self.scale
+        rgba = None if color is None else _parse_color(color)
         self._parts[name] = {
             "link": link, "mesh": _load_geometry(geometry, self.scale),
-            "world": world, "fixed": fixed, "mass": mass, "density": density}
+            "world": world, "fixed": fixed, "mass": mass, "density": density,
+            "color": rgba}
         return name
 
     def add_joint(self, parent, child, joint_type, axis_dir=None,
@@ -165,7 +191,8 @@ class GraphBuilder:
                 name=name, link_name=part["link"], part_path=None,
                 world=[float(x) for x in part["world"].flatten()],
                 fixed=part["fixed"], mesh_file=rel,
-                density=part["density"], mass_target=part["mass"]))
+                density=part["density"], mass_target=part["mass"],
+                color=part["color"]))
         graph = GraphState(
             robot_name=self.robot_name,
             source_assembly=f"{self.cad}:{self.robot_name}",
