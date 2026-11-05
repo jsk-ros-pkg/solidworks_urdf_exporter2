@@ -46,6 +46,10 @@ SINGLE_DOF_JOINT_TYPES = ("revolute", "continuous", "prismatic")
 # a point or direction in space
 Vec3 = Annotated[list[float], Field(min_length=3, max_length=3)]
 
+# an RGBA colour, each channel 0..1
+Rgba = Annotated[list[Annotated[float, Field(ge=0.0, le=1.0)]],
+                 Field(min_length=4, max_length=4)]
+
 # The rules DeclaredJoint._check enforces that JSON Schema can express, so an
 # extractor that validates against graph.schema.json alone writes a file that
 # loads.  (A non-zero axis and lower <= upper are left to the loader.)
@@ -83,6 +87,10 @@ class ComponentState(BaseModel):
     # SolidWorks appearance, as its .p2m path under the materials library
     # (e.g. "metal/aluminum/satin finish aluminum"); None on older extracts
     appearance: str | None = None
+    # One RGBA colour (0..1) for the whole part, for sources whose meshes carry
+    # none (STL from code, an agent).  None keeps the mesh's own colours; a
+    # joint config `colors:` entry still wins over it.
+    color: Rgba | None = None
     # SolidWorks-native mass properties of the PART, in its own (part-local)
     # frame and SI units -- the same frame the mesh is exported in.  Preferred
     # over the mesh-derived estimate at build time (exact CAD geometry +

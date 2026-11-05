@@ -475,6 +475,10 @@ sw2robot.
   `source` (`cad` / `inferred` / `user` / `ai`). The build uses a declared
   joint as given. Set `use_declared_joints: false` in the joint config to
   infer every joint from the mates instead.
+- A component's `color` (RGBA, 0–1) paints a part whose mesh carries no colour,
+  such as an STL written from code. It reaches the URDF as a `<material>` and
+  every export built from it. A joint config `colors:` entry still wins, and
+  a part with neither keeps its mesh's own colours.
 - `schema_version` is 2. A file without it loads as version 1. A file newer
   than the installed sw2robot is refused.
 
@@ -488,14 +492,15 @@ python -m sw2robot.exporter.schema          # regenerate after changing state.py
 `GraphBuilder` writes a package straight from code, such as build123d shapes,
 trimesh meshes, or mesh files. The author states the joints, so there is
 nothing to infer. `unit="mm"` scales meshes, poses, and axis points to
-metres. A part's inertia comes from its mesh and its `density` or `mass`.
+metres. A part's inertia comes from its mesh and its `density` or `mass`,
+and `color` (`"#RRGGBB"` or 0–1 floats) is how it is drawn.
 
 ```python
 from sw2robot.exporter.graph_builder import GraphBuilder
 
 g = GraphBuilder("arm", unit="mm", cad="build123d")
-g.add_part("base", base_shape, fixed=True, density=1200)
-g.add_part("link1", link_shape, pose=T_link1, mass=0.12)
+g.add_part("base", base_shape, fixed=True, density=1200, color="#3b4252")
+g.add_part("link1", link_shape, pose=T_link1, mass=0.12, color="#d08770")
 g.add_joint("base", "link1", "revolute", axis_dir=[0, 0, 1],
             axis_point=[0, 0, 40], lower=-1.57, upper=1.57)
 pkg_dir = g.write("output")      # then sw2robot-check / build as usual
