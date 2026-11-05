@@ -93,6 +93,12 @@ coacd = [
 # install: catkin_pkg parses/validates package.xml the way catkin/colcon do
 # (skrobot, used to load the exported URDF + resolve package:// meshes, is now a
 # core dependency; python-fcl for the collision checks is in [ui]).
+# the MCP server (`sw2robot-mcp`) that exposes the check and the build as
+# tools for an AI agent.  mcp 2.x renamed FastMCP to MCPServer; the server uses
+# the 2.x API.
+mcp = [
+    "mcp>=2.2,<3",
+]
 test = [
     "catkin_pkg",
     "pytest",
@@ -112,6 +118,8 @@ sw2urdf = "sw2robot.exporter.export:main"     # extract + build (needs SolidWork
 sw2urdf-extract = "sw2robot.exporter.extract:main"  # extract only / --refresh frames
 sw2robot = "sw2robot.editor.cli:main"        # headless build/edit/export CLI
 sw2robot-web = "sw2robot.editor.webserver:main"  # the browser editor server
+sw2robot-check = "sw2robot.exporter.check:main"  # graph/model findings (--json)
+sw2robot-mcp = "sw2robot.mcp_server:main"      # MCP tools (needs [mcp])
 
 # hatchling's default sdist sweeps in every non-gitignored path in the repo --
 # INCLUDING untracked scratch directories.  A local docs/ tree took the sdist

@@ -483,6 +483,23 @@ python -m sw2robot.exporter.schema --validate output/<robot>/graph.json
 python -m sw2robot.exporter.schema          # regenerate after changing state.py
 ```
 
+### Checking a package
+
+`sw2robot-check` reports problems in a package. Each finding has a stable
+`code`, a severity, and the names of the parts involved, so a script or an
+agent can act on it. For example, `joint-motion-blocked` means the mates do not
+allow a declared joint's motion. The command exits with 1 if any finding is an
+error.
+
+```bash
+sw2robot-check output/<robot> --config output/<robot>/<robot>.joints.yaml
+sw2robot-check output/<robot> --json      # the build's log goes to stderr
+```
+
+`sw2robot-mcp` serves the same check, plus the build and the schema, as MCP
+tools (`check_package`, `build_package`, `graph_schema`). It runs over stdio
+and needs `pip install "sw2robot[mcp]"`.
+
 ## Layout
 
 ```
