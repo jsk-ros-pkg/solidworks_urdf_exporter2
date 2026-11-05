@@ -459,6 +459,30 @@ python -m sw2robot.exporter.extract path/to/assembly.sldasm --attach
 python -m sw2robot.exporter.extract output/<robot> --refresh frames --attach
 ```
 
+## `graph.json` — the intermediate representation
+
+Everything after `extract` reads only `graph.json` and the meshes beside it, so
+any CAD can feed the build by writing that file.
+[`sw2robot/exporter/graph.schema.json`](sw2robot/exporter/graph.schema.json)
+is the contract as a JSON Schema, and the extractor does not need to import
+sw2robot.
+
+- Lengths are metres, angles are radians, and poses are in the top-level
+  document's frame. `.3dxml` meshes are millimetres; every other mesh format
+  is metres.
+- `edges` hold raw constraints (mates), and the build infers joints from their
+  geometry. `joints` hold joints the source declared — type, axis, limits, and
+  `source` (`cad` / `inferred` / `user` / `ai`). The build uses a declared
+  joint as given. Set `use_declared_joints: false` in the joint config to
+  infer every joint from the mates instead.
+- `schema_version` is 2. A file without it loads as version 1. A file newer
+  than the installed sw2robot is refused.
+
+```bash
+python -m sw2robot.exporter.schema --validate output/<robot>/graph.json
+python -m sw2robot.exporter.schema          # regenerate after changing state.py
+```
+
 ## Layout
 
 ```

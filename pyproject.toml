@@ -97,6 +97,8 @@ test = [
     "catkin_pkg",
     "pytest",
     "packaging",
+    # validates graph.json against graph.schema.json (test_graph_schema.py)
+    "jsonschema",
 ]
 
 [project.urls]

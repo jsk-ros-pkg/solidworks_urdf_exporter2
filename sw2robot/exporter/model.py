@@ -37,6 +37,7 @@ from .state import (
     MateEdge,
     MateGeo,
     ReferenceAxisState,
+    SourceInfo,
     SubGraph,
 )
 from .sw2urdf_import import (
@@ -1718,10 +1719,11 @@ def classify_edge_geo(mates, strict=False, min_radius=None):
 def classify_edge_auto(rec):
     """(jtype, axis, note): geometric when the graph has it, else legacy."""
     if rec.get("force_fixed"):
-        return "fixed", None, "config: force_fixed"
+        return "fixed", None, rec.get("declared_note") or "config: force_fixed"
     lj = rec.get("limit_joint")
-    if lj:                                  # SolidWorks LimitDistance/LimitAngle
-        return lj["type"], lj["axis"], "limit mate (SolidWorks slider/hinge)"
+    if lj:                  # declared joint, or SolidWorks LimitDistance/Angle
+        return lj["type"], lj["axis"], \
+            lj.get("note") or "limit mate (SolidWorks slider/hinge)"
     ra = rec.get("reference_axis")
     if ra:
         # a reference axis the DESIGNER drew across this pair: the mates are
@@ -2134,7 +2136,7 @@ def _mirror_axis_fallback(comps, edge_info, inherit_type=False):
     type_by_child = {ch: info.get("type") for (ch, _pa), info in
                      edge_info.items() if info.get("axis") is not None}
     for (child, parent), info in edge_info.items():
-        if info.get("axis") is not None:
+        if info.get("axis") is not None or info.get("declared"):
             continue
         cR = by_name.get(child)
         if cR is None or not cR.part_path:
@@ -2537,16 +2539,28 @@ def _auto_parent_map(comps, adjacency, base):
         # a fastener welds rigidly to its host -- never a hinge, even when it was
         # attached mate-less (nearest/twin) and would otherwise default-then-
         # inherit a movable axis from the mirror fallback below
-        if by_name[child].is_fastener or by_name[parent].is_fastener:
+        rec = adjacency.get(frozenset((child, parent)), {})
+        lj = rec.get("limit_joint")
+        declared = bool(lj and lj.get("declared"))
+        if (by_name[child].is_fastener or by_name[parent].is_fastener) \
+                and not declared:
             jt, ax, note = "fixed", None, "fastener welded fixed"
         lo, hi = (-0.05, 0.05) if jt == "prismatic" else (-3.141592, 3.141592)
         # a SolidWorks limit mate carries the real axis + travel range; orient it
         # parent -> child so the slider moves the way it does in SolidWorks
-        lj = adjacency.get(frozenset((child, parent)), {}).get("limit_joint")
         if lj and jt == lj["type"]:
-            ax, lo, hi = _oriented_limit(lj, by_name[child], by_name[parent])
+            ax, llo, lhi = _oriented_limit(lj, by_name[child], by_name[parent])
+            # a declared joint may leave its range open: keep the default then
+            lo = lo if llo is None else llo
+            hi = hi if lhi is None else lhi
         edge_info[(child, parent)] = {"type": jt, "axis": ax, "note": note,
                                       "lower": lo, "upper": hi}
+        if declared and lj.get("name"):
+            edge_info[(child, parent)]["name"] = safe_name(lj["name"])
+        # a declared joint (movable, or welded by declaration) is the source's
+        # word: the mirror fallback below must not retype or re-axis it
+        if declared or rec.get("declared_note"):
+            edge_info[(child, parent)]["declared"] = True
     # mate-less mirror/pattern copies inherit the joint (type + reflected axis)
     # of their mated twin, so the right gripper finger is a revolute like the
     # left one instead of a dead fixed link
@@ -2571,6 +2585,53 @@ def _oriented_limit(lj, child_comp, parent_comp):
     if lj.get("ref") and child_comp.name != lj["ref"]:
         d = -d
     return (np.asarray(pt, float), d), lj["lower"], lj["upper"]
+
+
+def apply_declared_joints(comps, adjacency, declared):
+    """Write ``GraphState.joints`` into the adjacency so the tree uses them.
+
+    A single-DOF joint becomes the edge's ``limit_joint`` record (the same slot
+    a SolidWorks limit mate fills, with ``ref`` = the declared child, so the
+    axis flips if the tree roots the pair the other way).  A fixed joint welds
+    the edge.  A multi-DOF joint cannot be a URDF joint: it is welded too, and
+    the build says so rather than dropping it quietly.
+
+    Returns the number of joints applied."""
+    names = {c.name for c in comps}
+    n = 0
+    for dj in declared:
+        label = dj.name or f"{dj.parent}--{dj.child}"
+        missing = [x for x in (dj.parent, dj.child) if x not in names]
+        if missing:
+            print(f"      WARN: declared joint {label!r} names "
+                  f"{', '.join(map(repr, missing))}, not in the model; skipped")
+            continue
+        rec = adjacency.setdefault(frozenset((dj.parent, dj.child)),
+                                   {"types": [], "axis": None, "mates": []})
+        note = f"declared by {dj.source}" + (
+            f" ({dj.source_type})" if dj.source_type else "")
+        if dj.type in _MOVABLE_TYPES:
+            d = np.asarray(dj.axis_dir, float)
+            d = d / np.linalg.norm(d)
+            pt = (np.asarray(dj.axis_point, float) if dj.axis_point is not None
+                  else next(c for c in comps
+                            if c.name == dj.child).world[:3, 3].copy())
+            rec.pop("force_fixed", None)
+            rec["limit_joint"] = {
+                "type": dj.type, "ref": dj.child, "axis": (pt, d),
+                "lower": dj.lower, "upper": dj.upper,
+                "declared": True, "name": dj.name, "note": note}
+        else:
+            rec.pop("limit_joint", None)
+            rec["force_fixed"] = True
+            if dj.type != "fixed":
+                print(f"      WARN: declared joint {label!r} is {dj.type}; "
+                      "URDF has no such joint, so it is exported FIXED")
+            rec["declared_note"] = f"{note}: {dj.type}"
+        n += 1
+    if n:
+        print(f"      declared joints: {n}")
+    return n
 
 
 def _auto_mimic(comps, adjacency, parent_of, edge_info):
@@ -3858,7 +3919,13 @@ def to_graph_state(comps, adjacency, ground, robot_name, source_assembly,
                       limit_joints=[LimitJoint(**j) for j in
                                     (limit_joints or [])],
                       configuration=configuration,
-                      configurations=list(configurations or []))
+                      configurations=list(configurations or []),
+                      source=_solidworks_source())
+
+
+def _solidworks_source():
+    from .. import __version__
+    return SourceInfo(cad="solidworks", extractor=f"sw2robot {__version__}")
 
 
 def capture_deep_worlds(doc):
@@ -4790,6 +4857,13 @@ def build_model(graph, robot_name=None, base_hint=None, config=None,
 
     if sw2_compat and sw2cfg is not None:
         _apply_sw2urdf_inertials(comps, sw2cfg)
+
+    # Joints the source DECLARED (a CAD joint feature, a user, an agent) are
+    # taken as given for their pair; only the remaining pairs are inferred.
+    # `use_declared_joints: false` ignores them and infers everything.
+    if config is None or config.get("use_declared_joints", True):
+        apply_declared_joints(comps, adjacency,
+                              getattr(graph, "joints", None) or [])
 
     # Standard hardware (screws/nuts/washers/pins) welds RIGIDLY to whatever it
     # fastens: tag it so its concentric-into-tapped-hole mate is never read as a
