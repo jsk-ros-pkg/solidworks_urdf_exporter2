@@ -4,6 +4,7 @@ The declared-joint check is the one an agent leans on: a joint it proposes must
 be a motion the CAD mates between the same two parts actually allow.
 """
 import asyncio
+import importlib
 import json
 import os
 
@@ -18,6 +19,16 @@ from sw2robot.exporter.state import (
     MateEdge,
     MateGeo,
 )
+
+
+def _import_extra(name):
+    """Import an optional dependency, skipping when it is absent -- unless CI
+    lists it in SW2ROBOT_REQUIRE_EXTRAS, where a broken install must fail."""
+    required = os.environ.get("SW2ROBOT_REQUIRE_EXTRAS", "").split(",")
+    if name in required:
+        return importlib.import_module(name)
+    return pytest.importorskip(name)
+
 
 EXAMPLE = os.path.join(os.path.dirname(__file__), "..", "examples", "fingertip")
 PIN = [0.1, 0.0, 0.0]          # the hinge pin: through PIN along +Z
@@ -170,11 +181,12 @@ def test_bundled_example_has_no_errors():
 
 
 def test_mcp_server_exposes_the_check(tmp_path):
-    pytest.importorskip("mcp")
+    _import_extra("mcp")
     from sw2robot import mcp_server
     server = mcp_server.create_server()
     names = {t.name for t in asyncio.run(server.list_tools())}
-    assert names == {"check_package", "build_package", "graph_schema"}
+    assert names == {"check_package", "build_package", "simulate_package",
+                     "graph_schema"}
 
     pkg = _package(tmp_path, _graph([_revolute()]))
     result = asyncio.run(server.call_tool("build_package",

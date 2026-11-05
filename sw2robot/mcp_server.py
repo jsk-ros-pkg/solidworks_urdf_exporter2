@@ -12,17 +12,28 @@ from __future__ import annotations
 import contextlib
 import os
 import sys
+import threading
 from typing import Any
 
 INSTRUCTIONS = (
     "sw2robot turns a CAD graph (graph.json + meshes) into URDF. Call "
     "check_package first; fix every finding with severity 'error' (the code "
     "names the problem, subjects names the parts) before build_package. "
+    "simulate_package runs the MuJoCo export for a moment and reports a "
+    "model that overlaps, blows up or falls through the floor. "
     "graph_schema returns the graph.json contract.")
 
 
+# redirect_stdout swaps the PROCESS-wide sys.stdout, MuJoCo's warning hook is
+# process-wide too, and two builds of one package write the same files.  So the
+# tools run one at a time: a second call waits instead of interleaving.
+_TOOL_LOCK = threading.Lock()
+
+
+@contextlib.contextmanager
 def _quiet():
-    return contextlib.redirect_stdout(sys.stderr)
+    with _TOOL_LOCK, contextlib.redirect_stdout(sys.stderr):
+        yield
 
 
 # The tools return `dict[str, Any]`, not bare `dict`: the SDK only returns
@@ -54,13 +65,41 @@ def build_package(package_dir: str,
     return {"urdf": os.path.abspath(urdf), "report": report}
 
 
+def simulate_package(package_dir: str, config_path: str | None = None,
+                     fixed_base: bool = False,
+                     seconds: float = 2.0) -> dict[str, Any]:
+    """Build the URDF and the MuJoCo package, then simulate it for a moment.
+
+    ``fixed_base`` welds the base to the world (an arm on a table) instead of
+    giving it a free joint.  Returns ``{mjcf, report}``, where the report has
+    the same shape as ``check_package``'s and flags a model that starts with
+    parts overlapping, blows up, or falls through the floor.  The MuJoCo
+    package is the build's normal output next to ``package_dir`` and is kept,
+    so the model that was judged can be opened.  Needs
+    ``pip install 'sw2robot[sim]'``.
+    """
+    from .exporter.export import build
+    from .exporter.mjcf_export import mjcf_model_stem, mjcf_pkg_name
+    from .exporter.sim_check import simulate
+    from .exporter.state import GraphState
+    with _quiet():
+        build(package_dir, config_path=config_path, mujoco=True,
+              mujoco_fixed_base=fixed_base)
+        robot = GraphState.load(os.path.join(package_dir, "graph.json")).robot_name
+        mjcf = os.path.join(os.path.dirname(os.path.abspath(package_dir)),
+                            mjcf_pkg_name(robot), "mjcf",
+                            mjcf_model_stem(robot) + ".xml")
+        report = simulate(mjcf, seconds)
+    return {"mjcf": mjcf, "report": report}
+
+
 def graph_schema() -> dict[str, Any]:
     """The JSON Schema every graph.json must satisfy."""
     from .exporter.state import graph_json_schema
     return graph_json_schema()
 
 
-TOOLS = (check_package, build_package, graph_schema)
+TOOLS = (check_package, build_package, simulate_package, graph_schema)
 
 
 def create_server():

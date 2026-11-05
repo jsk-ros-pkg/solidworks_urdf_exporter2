@@ -62,9 +62,14 @@ jobs:
           #          in test_coacd_smoke.py), so a missing/broken coacd wheel
           #          fails CI instead of surfacing at runtime
           # mcp   -> drive the MCP server's tools (test_check.py)
-          pip install ".[ui,test,coacd,mcp]"
+          # sim   -> MuJoCo, to run the simulation check (test_sim_check.py)
+          pip install ".[ui,test,coacd,mcp,sim]"
 
       - name: Run tests
+        # the extras installed above must import: a broken wheel fails the
+        # job instead of quietly skipping the MCP and simulation tests
+        env:
+          SW2ROBOT_REQUIRE_EXTRAS: mcp,mujoco
         run: pytest -q
 
   # Separate (non-required) job so the cross-platform coacd/python-fcl wheels are
