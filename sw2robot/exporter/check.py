@@ -145,6 +145,12 @@ def _check_declared_joints(graph, by_name, edges):
 def _check_components(graph, pkg_dir, constrained):
     out = []
     ground = set(graph.ground)
+    names = {c.name for c in graph.components}
+    if graph.base is not None and graph.base not in names:
+        out.append(Finding(
+            "base-unknown", "error",
+            f"base {graph.base!r} is not a component of the graph",
+            [graph.base]))
     if graph.components and not ground:
         out.append(Finding(
             "ground-missing", "warning",

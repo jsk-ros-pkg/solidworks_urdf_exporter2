@@ -235,3 +235,9 @@ def test_a_mesh_outside_the_package_is_not_probed(tmp_path):
     found = _codes(check.check_graph(_graph(components=comps), str(pkg)))
     assert found["mesh-outside-package"].subjects == ["base"]
     assert "mesh-missing" not in found
+
+
+def test_unknown_base_is_an_error():
+    graph = _graph()
+    graph.base = "ghost"
+    assert _codes(check.check_graph(graph))["base-unknown"].severity == "error"
