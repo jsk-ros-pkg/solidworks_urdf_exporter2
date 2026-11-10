@@ -499,10 +499,12 @@ def _um_components(state, pkg_dir=None, urdf_rel=None):
     # the live copy is regenerated only when the overlay changed, so this is a
     # cheap read on the common no-edit refresh
     urdf_masses = {}
+    mesh_bytes, mesh_missing = {}, []
     if pkg_dir and urdf_rel:
         try:
             _, live_rel = _um_live_urdf(pkg_dir, urdf_rel)
             urdf_masses = _urdf_link_masses(pkg_dir, live_rel)
+            mesh_bytes, mesh_missing = _urdf_link_mesh_bytes(pkg_dir, live_rel)
         except OSError:
             pass          # no usable live copy -> report no masses, not stale ones
     links, colors, mass_only = {}, {}, []
@@ -519,6 +521,7 @@ def _um_components(state, pkg_dir=None, urdf_rel=None):
             mass_only.append(name)
     return {"links": links, "excluded": [], "colors": colors,
             "mass_only": mass_only, "urdf_masses": urdf_masses,
+            "urdf_mesh_bytes": mesh_bytes, "urdf_mesh_missing": mesh_missing,
             "default_mass_links": []}
 
 
@@ -1353,6 +1356,57 @@ def _urdf_link_masses(pkg_dir, urdf_rel):
         except (TypeError, ValueError):
             pass
     return out
+
+
+def _urdf_link_mesh_bytes(pkg_dir, urdf_rel):
+    """On-disk size of each link's ``<visual>`` mesh files, from the built URDF.
+
+    Returns ``({link name -> bytes}, [links with an unresolvable mesh])``.  This
+    is the load / package-size cost of a link, which the viewer cannot see:
+    the same triangles weigh several times more as text COLLADA than as GLB.
+    A link any of whose visual meshes cannot be found is reported in the second
+    list and left OUT of the sizes, rather than given a partial number that
+    would rank it lighter than it is.  ``<collision>`` meshes are not counted.
+    Both empty on any parse failure.
+    """
+    if not pkg_dir or not urdf_rel:
+        return {}, []
+    path = os.path.join(pkg_dir, urdf_rel)
+    if not os.path.exists(path):
+        return {}, []
+    import xml.etree.ElementTree as ET
+
+    from .package_uri import resolve_package_uri
+    try:
+        root = ET.parse(path).getroot()
+    except Exception:
+        return {}, []
+    urdf_dir = os.path.dirname(path)
+    sizes, missing = {}, []
+    for ln in root.findall("link"):
+        name = ln.get("name")
+        total, ok, any_mesh = 0, True, False
+        for mesh in ln.findall("visual/geometry/mesh"):
+            any_mesh = True
+            fn = mesh.get("filename") or ""
+            if fn.startswith("package://"):
+                local = resolve_package_uri(fn, pkg_dir)
+            elif fn.startswith("file://"):
+                from urllib.request import url2pathname
+                local = url2pathname(urllib.parse.urlsplit(fn).path)
+            else:
+                local = os.path.join(urdf_dir, fn) if fn else None
+            if not local or not os.path.isfile(local):
+                ok = False
+                continue
+            total += os.path.getsize(local)
+        if not any_mesh:
+            continue
+        if ok:
+            sizes[name] = total
+        else:
+            missing.append(name)
+    return sizes, missing
 
 
 # Why a joint came out the way it did, and whether the user should check it.
@@ -5433,6 +5487,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 # the actual per-link mass in the built URDF (after density /
                 # target-mass resolution) + which links still need review
                 urdf_masses = _urdf_link_masses(cls.pkg_dir, cls.urdf_rel)
+                mesh_bytes, mesh_missing = _urdf_link_mesh_bytes(
+                    cls.pkg_dir, cls.urdf_rel)
                 joint_types = _urdf_child_joint_types(cls.pkg_dir, cls.urdf_rel)
                 default_links = _default_mass_links(cls.pkg_dir, cls.urdf_rel)
                 # Key by the FINAL display link name (what the viewer/URDF uses),
@@ -5516,6 +5572,10 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                                         # aren't top-level graph components) so
                                         # the mass editor can list them all
                                         "urdf_masses": urdf_masses,
+                                        # visual mesh file size per link, for
+                                        # the heat view's "file size" metric
+                                        "urdf_mesh_bytes": mesh_bytes,
+                                        "urdf_mesh_missing": mesh_missing,
                                         "mass_only": sorted(
                                             _read_mass_only(cls.pkg_dir)),
                                         # the `mirror_limbs:` entries, so a link

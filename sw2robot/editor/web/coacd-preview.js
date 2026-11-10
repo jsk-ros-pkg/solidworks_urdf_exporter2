@@ -88,6 +88,7 @@ function collPreviewLoadLink(link, url) {
         m.depthWrite = false; m.vertexColors = true;
       }
     });
+    grp.userData.sw2robotCollPreview = true;   // not a visual: mesh stats skip it
     grp.visible = !!collPreviewShow?.checked;
     collPreviewGroups[link] = grp;
     target.add(grp);

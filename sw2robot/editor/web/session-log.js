@@ -7,7 +7,7 @@ import { _tintLink } from './frames.js';
 import { selectLink } from './link-info.js';
 import { hiddenLinks, toggleLinkVisible } from './link-look.js';
 import { resetPose } from './load.js';
-import { massHeatOn, setMassHeat } from './mass-heatmap.js';
+import { heatMetric, massHeatOn, setHeatMetric, setMassHeat } from './mass-heatmap.js';
 import { jointRecForLink } from './mimic.js';
 import { _joPending, withJointOpSuppressed } from './play-mode.js';
 import { doHistory } from './root-frame.js';
@@ -92,6 +92,7 @@ const OP_LABEL = {
   boxSelect:   a => `Box select (${a.n})`,
   boxToggle:   a => 'Toggle: ' + a.name,
   massHeat:    a => 'Mass heat: ' + (a.on ? 'on' : 'off'),
+  heatMetric:  a => 'Heat metric: ' + a.metric,
   setMimic:    a => 'Mimic → ' + a.master,
   clearMimic:  a => 'Clear mimic: ' + a.child,
   loadRobot:   a => 'Load' + (a.name ? ': ' + a.name : ''),
@@ -187,6 +188,7 @@ const REPLAY = {
   },
   boxToggle: e => toggleBoxLink(e.name),
   massHeat:  e => { if (massHeatOn !== !!e.on) { setMassHeat(!!e.on); } },
+  heatMetric: e => { if (heatMetric !== e.metric) { setHeatMetric(e.metric); } },
   undo:      () => doHistory('undo'),
   redo:      () => doHistory('redo'),
   camera:    e => {                               // move the view to a keyframe

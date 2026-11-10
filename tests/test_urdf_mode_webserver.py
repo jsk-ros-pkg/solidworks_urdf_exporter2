@@ -300,6 +300,43 @@ def test_components_reports_masses_and_tracks_inertial_edits(server):
     assert sum(after.values()) == pytest.approx(before - masses[TIP_LINK] + 2.5)
 
 
+def test_components_reports_visual_mesh_file_sizes(server):
+    """The heat view's file-size metric reads ``urdf_mesh_bytes``: every link
+    with a visual mesh gets its on-disk size, and none is reported missing."""
+    comp = _get_json(server, "/api/components")
+    sizes = comp["urdf_mesh_bytes"]
+    assert sizes.get(TIP_LINK, 0) > 0
+    assert comp["urdf_mesh_missing"] == []
+
+
+def test_link_mesh_bytes_resolves_and_flags_missing(tmp_path):
+    """Relative and ``package://`` meshes are summed per link (visual only); a
+    link with ANY unresolvable visual mesh is listed as missing, not given a
+    partial size that would rank it lighter than it is."""
+    from sw2robot.editor.webserver import _urdf_link_mesh_bytes
+
+    (tmp_path / "meshes").mkdir()
+    (tmp_path / "urdf").mkdir()
+    (tmp_path / "meshes" / "a.stl").write_bytes(b"x" * 100)
+    (tmp_path / "meshes" / "b.stl").write_bytes(b"x" * 30)
+    (tmp_path / "meshes" / "col.stl").write_bytes(b"x" * 999)
+    (tmp_path / "urdf" / "r.urdf").write_text("""<robot name="r">
+  <link name="two">
+    <visual><geometry><mesh filename="../meshes/a.stl"/></geometry></visual>
+    <visual><geometry><mesh filename="package://r/meshes/b.stl"/></geometry></visual>
+    <collision><geometry><mesh filename="../meshes/col.stl"/></geometry></collision>
+  </link>
+  <link name="gone">
+    <visual><geometry><mesh filename="../meshes/a.stl"/></geometry></visual>
+    <visual><geometry><mesh filename="../meshes/nope.stl"/></geometry></visual>
+  </link>
+  <link name="frame"/>
+</robot>""", encoding="utf-8")
+    sizes, missing = _urdf_link_mesh_bytes(str(tmp_path), "urdf/r.urdf")
+    assert sizes == {"two": 130}
+    assert missing == ["gone"]
+
+
 def test_live_urdf_reflects_edits_and_is_cache_stable(server):
     """collision / auto-limits read a hidden live URDF that tracks the overlay
     but only rewrites when edits change (so their (path, mtime) cache holds)."""

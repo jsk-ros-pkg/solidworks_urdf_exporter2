@@ -69,6 +69,8 @@ export async function refreshCompMeta() {
       // view; both repaint here so every edit that rebuilds is reflected
       packageState.urdfMasses = r.urdf_masses ?? {};
       packageState.defaultMassLinks = r.default_mass_links ?? [];
+      packageState.urdfMeshBytes = r.urdf_mesh_bytes ?? {};
+      packageState.urdfMeshMissing = r.urdf_mesh_missing ?? [];
       // `mirror_limbs:` entries, so a link panel knows whether THIS link
       // already generates the limb on the other side
       packageState.mirrorLimbs = r.mirror_limbs ?? [];

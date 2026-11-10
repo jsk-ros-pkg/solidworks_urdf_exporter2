@@ -281,6 +281,14 @@
                           white-space: nowrap; }
   #heatlegend .heatval { color: #cfe3ff; }
   #heatlegend .heatpct { color: #7a8494; font-size: 10px; }
+  /* metric switch: mass / triangles / density */
+  #heatlegend .heatmetric { display: flex; gap: 3px; margin-bottom: 6px; }
+  #heatlegend .heatmetric button { flex: 1; font-size: 10px; padding: 2px 4px;
+                                   background: #22272e; color: #aab3c0;
+                                   border: 1px solid #39414d; border-radius: 3px;
+                                   cursor: pointer; }
+  #heatlegend .heatmetric button.active { background: #2f4a6b; color: #e6f0ff;
+                                          border-color: #4f78a8; }
   .joint .mimictag { font-size: 10px; padding: 0 4px; border-radius: 3px;
                      background: #3d3556; color: #c5b3ff; }
   .joint .motag { font-size: 10px; padding: 0 4px; border-radius: 3px;
