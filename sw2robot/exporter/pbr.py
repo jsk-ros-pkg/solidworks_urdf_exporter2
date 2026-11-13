@@ -191,6 +191,35 @@ def provenance(link):
 
 
 # ------------------------------------------------------------------ GLB write
+def _merge_by_image(textured):
+    """``textured`` pieces (UVs + image) joined into one piece per distinct
+    image, compared by its pixels; first-seen order kept.  New meshes: the
+    inputs are not changed."""
+    import hashlib
+
+    import numpy as np
+    import trimesh
+    from trimesh.visual import TextureVisuals
+
+    groups = {}
+    for piece in textured:
+        image = piece.visual.material.image
+        key = (image.mode, image.size, hashlib.sha1(image.tobytes()).hexdigest())
+        groups.setdefault(key, []).append(piece)
+    out = []
+    for pieces in groups.values():
+        offsets = np.cumsum([0] + [len(p.vertices) for p in pieces[:-1]])
+        merged = trimesh.Trimesh(
+            vertices=np.vstack([p.vertices for p in pieces]),
+            faces=np.vstack([p.faces + o for p, o in zip(pieces, offsets)]),
+            process=False)
+        merged.visual = TextureVisuals(uv=np.vstack([p.visual.uv for p in pieces]),
+                                       image=pieces[0].visual.material.image)
+        merged.units = pieces[0].units
+        out.append(merged)
+    return out
+
+
 def glb_with_materials(mesh, metallic, roughness, name=None, textured=()):
     """GLB bytes of ``mesh`` split into one primitive per face colour, each
     bound to a glTF PBR material: ``baseColorFactor`` = that colour, plus the
@@ -208,8 +237,10 @@ def glb_with_materials(mesh, metallic, roughness, name=None, textured=()):
     ``textured`` -- trimesh pieces carrying ``TextureVisuals`` (UVs + image,
     see :func:`sw2robot.exporter.textures.split_textured`) -- are added as
     primitives of their own whose material has the image as
-    ``baseColorTexture`` and the same metallic / roughness.  ``mesh`` may then
-    be None (every face textured).
+    ``baseColorTexture`` and the same metallic / roughness.  Pieces whose
+    images have the same pixels share one primitive, so the image is written
+    once (SolidWorks gives every face of a tiled appearance its own copy).
+    ``mesh`` may then be None (every face textured).
     """
     import numpy as np
     import trimesh
@@ -217,8 +248,7 @@ def glb_with_materials(mesh, metallic, roughness, name=None, textured=()):
     from trimesh.visual.material import PBRMaterial
 
     scene = trimesh.Scene()
-    for i, piece in enumerate(textured):
-        piece = piece.copy()
+    for i, piece in enumerate(_merge_by_image(textured)):
         piece.visual = TextureVisuals(uv=piece.visual.uv, material=PBRMaterial(
             baseColorTexture=piece.visual.material.image,
             metallicFactor=float(metallic), roughnessFactor=float(roughness),

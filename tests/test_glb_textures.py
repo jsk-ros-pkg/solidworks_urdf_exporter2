@@ -207,3 +207,24 @@ def test_colour_only_copy_is_skipped_without_textures(tmp_path):
                                     b'Value="urn:3DXML:CATRepImage.3dxml#1"/>', b"")
             out.writestr(n, data)
     assert textures.colour_only_3dxml(str(tmp_path / "plain.3dxml")) is None
+
+
+def test_same_image_is_written_once():
+    # three textured quads: two carry separate copies of one image (SolidWorks
+    # writes one per face), the third another image
+    def quad(z, colour):
+        piece = trimesh.Trimesh([(0, 0, z), (1, 0, z), (0, 1, z), (1, 1, z)],
+                                [[0, 1, 2], [2, 1, 3]], process=False)
+        piece.visual = trimesh.visual.TextureVisuals(
+            uv=[(0, 0), (1, 0), (0, 1), (1, 1)], image=Image.new("RGB", (8, 4), colour))
+        return piece
+
+    pieces = [quad(0, (200, 30, 30)), quad(1, (30, 200, 30)), quad(2, (200, 30, 30))]
+    glb = pbr.glb_with_materials(None, 0.0, 0.5, textured=pieces)
+    n = struct.unpack_from("<I", glb, 12)[0]
+    tree = json.loads(glb[20:20 + n])
+    assert len(tree["images"]) == 2 and len(tree["materials"]) == 2
+    loaded = trimesh.load(io.BytesIO(glb), file_type="glb")
+    assert sum(len(g.faces) for g in loaded.geometry.values()) == 6
+    # the inputs are left as they were
+    assert all(len(p.faces) == 2 for p in pieces)
