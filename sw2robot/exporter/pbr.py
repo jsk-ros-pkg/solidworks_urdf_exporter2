@@ -269,9 +269,12 @@ def glb_with_materials(mesh, metallic, roughness, name=None, textured=()):
         part = (mesh.submesh([faces], append=True, repair=False)
                 if len(unique) > 1 else mesh.copy())
         part.units = mesh.units
+        # glTF draws a material OPAQUE unless told otherwise, whatever its
+        # alpha: a see-through face (SolidWorks transparency) needs BLEND
         part.visual = TextureVisuals(material=PBRMaterial(
             baseColorFactor=[int(c) for c in rgba],
             metallicFactor=float(metallic), roughnessFactor=float(roughness),
+            alphaMode="BLEND" if len(rgba) > 3 and rgba[3] < 255 else None,
             name=str(name) if name else None))
         label = f"{name or 'material'}_{i}"
         scene.add_geometry(part, node_name=label, geom_name=label)

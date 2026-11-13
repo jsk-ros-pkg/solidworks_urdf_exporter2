@@ -228,3 +228,18 @@ def test_same_image_is_written_once():
     assert sum(len(g.faces) for g in loaded.geometry.values()) == 6
     # the inputs are left as they were
     assert all(len(p.faces) == 2 for p in pieces)
+
+
+def test_see_through_colour_is_blended():
+    # one opaque and one see-through face colour (a SolidWorks part with a
+    # transparent appearance): only the see-through one is BLEND
+    mesh = trimesh.creation.box()
+    fc = np.tile([200, 200, 200, 255], (len(mesh.faces), 1))
+    fc[:6] = [204, 217, 224, 63]
+    mesh.visual.face_colors = fc
+    glb = pbr.glb_with_materials(mesh, 0.0, 0.1, name="glass")
+    n = struct.unpack_from("<I", glb, 12)[0]
+    mats = json.loads(glb[20:20 + n])["materials"]
+    modes = {round(m["pbrMetallicRoughness"]["baseColorFactor"][3], 2): m.get("alphaMode", "OPAQUE")
+             for m in mats}
+    assert modes == {0.25: "BLEND", 1.0: "OPAQUE"}
