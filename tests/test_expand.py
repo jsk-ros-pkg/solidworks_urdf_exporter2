@@ -2175,6 +2175,80 @@ def test_preview_default_no_expand_does_not_change_normal_model():
         "plate_1", "servo_1__case_1", "servo_1__horn_1"}
 
 
+def _normal_tree(graph, txt):
+    import yaml
+
+    model = build_model(graph, config=yaml.safe_load(txt))
+    return (sorted(c.link_name for c in model.components),
+            sorted((j.parent, j.child, j.jtype) for j in model.joints))
+
+
+@pytest.mark.parametrize("rule", ["no_expand:\n- servo-1\n",
+                                  "no_expand: [servo-1]\n"],
+                         ids=["block", "flow"])
+@pytest.mark.parametrize("mode", ["no_expand", "expand", "auto"])
+def test_preview_mode_keeps_no_expand_and_normal_model(mode, rule):
+    """The preview-only mode writes subassembly_modes and nothing else: the
+    ``no_expand:`` rule stays byte-for-byte (block or flow style), so the
+    normal build (which never reads subassembly_modes) does not change."""
+    from sw2robot.editor.webserver import (
+        _set_subassembly_mode_yaml,
+        _subassemblies_payload,
+    )
+
+    graph = make_graph()
+    before = "base: plate-1\n" + rule
+    txt, members = _set_subassembly_mode_yaml(before, graph, "servo-1", mode)
+
+    assert txt == f"subassembly_modes:\n  servo-1: {mode}\n" + before
+    assert members["no_expand"] == ["servo-1"]
+    assert members["expand"] == []
+    assert _normal_tree(graph, txt) == _normal_tree(graph, before)
+    assert _normal_tree(graph, before)[0] == ["plate_1", "servo_1"]
+    row = _subassemblies_payload(graph, txt)["subassemblies"][0]
+    assert (row["override"], row["mode_source"]) == (mode, "saved")
+
+
+def test_preview_mode_keeps_sibling_substring_rule():
+    """``expand: [servo-1]`` also matches servo-10.  Setting servo-1's preview
+    mode must not delete that rule, so servo-10 stays expanded in the normal
+    build and keeps its legacy row in the preview."""
+    from sw2robot.editor.webserver import (
+        _set_subassembly_mode_yaml,
+        _subassemblies_payload,
+    )
+
+    graph = make_graph()
+    graph.subassemblies["X:/fake/servo_unit.SLDASM"].edges = [
+        _edge("case-1", "horn-1",                  # rigid: only expand opens it
+              dup(conc([0.005, 0, 0], Z), conc([-0.005, 0, 0], Z),
+                  coinc_planes(O, Z)))]
+    graph.components.append(_comp("servo-10", "servo_10", xyz=(0.3, 0, 0),
+                                  sub=True, path="X:/fake/servo_unit.SLDASM"))
+    mount = _edge("plate-1", "servo-10",
+                  dup(conc([0.31, 0, 0], Z), conc([0.29, 0, 0], Z),
+                      coinc_planes([0.3, 0, 0], Z)))
+    for g in mount.mates:
+        g.owners = ["plate-1", "servo-10/case-1"]
+    graph.edges.append(mount)
+    before = "base: plate-1\nexpand:\n- servo-1\n"
+    txt, members = _set_subassembly_mode_yaml(
+        before, graph, "servo-1", "no_expand")
+
+    assert txt.endswith(before)
+    assert members["expand"] == ["servo-1"]
+    assert members["retained_shared_legacy_modes"] == ["servo-1"]
+    links = _normal_tree(graph, txt)[0]
+    assert links == _normal_tree(graph, before)[0]
+    assert {"servo_1__case_1", "servo_10__case_1"} <= set(links)
+    rows = {row["name"]: row for row in
+            _subassemblies_payload(graph, txt)["subassemblies"]}
+    assert (rows["servo-1"]["override"], rows["servo-1"]["mode_source"]) == (
+        "no_expand", "saved")
+    assert (rows["servo-10"]["override"], rows["servo-10"]["mode_source"]) == (
+        "expand", "legacy")
+
+
 def test_rigid_subassembly_not_expanded():
     g = make_graph()
     # make the internals rigid: bolt pair instead of a hinge

@@ -1679,8 +1679,8 @@ def _matching_subasm_members(members, name, all_names):
 
     ``expand`` / ``no_expand`` are substring lists by design.  The web control
     writes exact CAD instance names, but older hand-authored configs may contain
-    broad substrings.  Only remove a matching broad entry when it is unique to
-    this instance; otherwise the UI would silently change sibling rows too.
+    broad substrings.  The second list holds the entries that also match a
+    sibling row.
     """
     lname = name.lower()
     safe, shared = [], []
@@ -1709,19 +1709,16 @@ def _set_subassembly_mode_yaml(txt, graph, name, mode):
         cfg = {}
     exp = [str(x) for x in (cfg.get("expand") or [])]
     noexp = [str(x) for x in (cfg.get("no_expand") or [])]
-    exp_rm, exp_shared = _matching_subasm_members(exp, name, names)
-    noexp_rm, noexp_shared = _matching_subasm_members(noexp, name, names)
-    # Remove only legacy entries unique to this row. Shared substring entries
-    # remain for siblings; this exact preview mode takes precedence for name.
-    txt, exp_members = _set_yaml_list_block(
-        txt, "expand", remove=[*exp_rm, name])
-    txt, noexp_members = _set_yaml_list_block(
-        txt, "no_expand", remove=[*noexp_rm, name])
+    _, exp_shared = _matching_subasm_members(exp, name, names)
+    _, noexp_shared = _matching_subasm_members(noexp, name, names)
+    # Only subassembly_modes is written.  expand / no_expand are the build's
+    # own rules (the exporter never reads subassembly_modes), and the preview
+    # already ranks this exact mode above them, so they stay as they are.
     txt = _upsert_yaml_map(
         txt, "subassembly_modes", name, _yaml_scalar(mode))
     return txt, {
-        "expand": exp_members,
-        "no_expand": noexp_members,
+        "expand": exp,
+        "no_expand": noexp,
         "subassembly_modes": _subassembly_modes(txt),
         "retained_shared_legacy_modes": sorted(
             {*exp_shared, *noexp_shared}),
