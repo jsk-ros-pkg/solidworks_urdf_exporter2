@@ -4668,16 +4668,68 @@ _sw = {"sess": None}
 
 # We prefer to ATTACH to the user's running SolidWorks (no new process). When we
 # can't (no attachable instance) we spawn a private one -- and that one can leak
-# if the server is hard-killed (atexit never runs).  Record each PID we spawn to
-# a file so the NEXT startup (and a clean shutdown) can reap exactly our own
-# orphans, never the user's interactive SolidWorks.
-_SW_PID_FILE = os.path.join(_DATA_DIR, "_sw_spawned_pids.txt")
+# if the server is hard-killed (atexit never runs).  Record each PID we spawn so
+# the NEXT startup (and a clean shutdown) can reap exactly our own orphans,
+# never the user's interactive SolidWorks.
+#
+# The record is ONE FILE PER EDITOR PROCESS (`_sw_spawned_pids.<editor pid>.txt`):
+# every instance shares _DATA_DIR, and a single shared file let a second editor
+# taskkill the SolidWorks a first, still-running editor was extracting in -- on
+# its startup and again on its exit.  An editor now reaps only its own file, plus
+# the files of editors that are no longer running.
+_SW_PID_PREFIX = "_sw_spawned_pids."
+_SW_PID_SUFFIX = ".txt"
+_SW_PID_FILE = os.path.join(
+    _DATA_DIR, f"{_SW_PID_PREFIX}{os.getpid()}{_SW_PID_SUFFIX}")
+# the shared, ownerless record written up to 0.4.13; reaped at startup as
+# those versions always did
+_SW_PID_FILE_LEGACY = os.path.join(_DATA_DIR, "_sw_spawned_pids.txt")
 
 
 def _sldworks_pids():
     """Set of PIDs of every running SLDWORKS.exe (empty on failure/non-Windows)."""
     from sw2robot.exporter.swcom import sldworks_pids
     return sldworks_pids() or set()
+
+
+def _process_alive(pid):
+    """Whether process ``pid`` is running.  Unknown counts as alive: wrongly
+    "dead" would kill another editor's SolidWorks, wrongly "alive" only leaves
+    an orphan for a later startup.
+
+    Never ``os.kill(pid, 0)`` on Windows -- there it calls TerminateProcess."""
+    if sys.platform != "win32":
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except OSError:
+            return True        # exists but not ours to signal (EPERM)
+        return True
+    import ctypes
+    from ctypes import wintypes
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    STILL_ACTIVE = 259
+    ERROR_ACCESS_DENIED = 5
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL,
+                                     wintypes.DWORD)
+    kernel32.GetExitCodeProcess.argtypes = (wintypes.HANDLE,
+                                            ctypes.POINTER(wintypes.DWORD))
+    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        # access denied means the process exists; anything else
+        # (ERROR_INVALID_PARAMETER) means there is no such process
+        return ctypes.get_last_error() == ERROR_ACCESS_DENIED
+    try:
+        code = wintypes.DWORD()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+            return True
+        return code.value == STILL_ACTIVE
+    finally:
+        kernel32.CloseHandle(handle)
 
 
 def _record_spawned_pid(pid):
@@ -4688,17 +4740,16 @@ def _record_spawned_pid(pid):
         print(f"[sw2robot.web] could not record spawned SW pid: {e!r}")
 
 
-def _reap_spawned_sw():
-    """Kill any SLDWORKS.exe THIS tool spawned in a previous/this run (matched
-    by recorded PID, and only if it is still a live SLDWORKS.exe), then clear
-    the record.  Never touches the user's interactive SolidWorks."""
+def _reap_pid_file(path):
+    """Kill every SLDWORKS.exe recorded in ``path`` that is still a live
+    SLDWORKS.exe (PID-reuse safe), then delete the record."""
     try:
-        with open(_SW_PID_FILE, encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             recorded = {int(x) for x in f.read().split() if x.strip().isdigit()}
     except OSError:
         return
     import subprocess
-    for pid in recorded & _sldworks_pids():       # PID-reuse safe: must still be SW
+    for pid in recorded & _sldworks_pids():
         try:
             subprocess.run(["taskkill", "/PID", str(pid), "/F", "/T"],
                            capture_output=True, timeout=10)
@@ -4706,9 +4757,45 @@ def _reap_spawned_sw():
         except Exception:
             pass
     try:
-        os.remove(_SW_PID_FILE)
+        os.remove(path)
     except OSError:
         pass
+
+
+def _reap_spawned_sw():
+    """Kill the SLDWORKS.exe THIS editor spawned (its own record only).  Never
+    touches the user's interactive SolidWorks or another editor's instance."""
+    _reap_pid_file(_SW_PID_FILE)
+
+
+def _orphaned_pid_files():
+    """Records whose editor is no longer running: other editors' files whose
+    owner PID is dead, the legacy shared file, and our own file (at startup it
+    can only be left by a dead editor that had the same PID)."""
+    try:
+        names = os.listdir(_DATA_DIR)
+    except OSError:
+        return []
+    out = []
+    for name in sorted(names):
+        path = os.path.join(_DATA_DIR, name)
+        if path == _SW_PID_FILE_LEGACY or path == _SW_PID_FILE:
+            out.append(path)
+            continue
+        if not (name.startswith(_SW_PID_PREFIX)
+                and name.endswith(_SW_PID_SUFFIX)):
+            continue
+        owner = name[len(_SW_PID_PREFIX):-len(_SW_PID_SUFFIX)]
+        if owner.isdigit() and not _process_alive(int(owner)):
+            out.append(path)
+    return out
+
+
+def _reap_orphaned_sw():
+    """Startup clean-up: reap SolidWorks instances left by editors that were
+    hard-killed before their atexit ran.  A live editor's instance is kept."""
+    for path in _orphaned_pid_files():
+        _reap_pid_file(path)
 
 
 def _warm_sw(progress):
@@ -8074,8 +8161,9 @@ def serve(package_dir=None, root_dir=None, port=None, open_browser=True,
     import atexit
     import signal
     # reap any private SolidWorks instance a PREVIOUS run spawned and leaked
-    # (hard-killed before atexit could run) -- by recorded PID, never the user's
-    _reap_spawned_sw()
+    # (hard-killed before atexit could run) -- by recorded PID, never the user's,
+    # and never one that another still-running editor owns
+    _reap_orphaned_sw()
     # and reap the <exe>.old image a previous self-update left behind (it could
     # not delete itself while it was the running process)
     from . import update
