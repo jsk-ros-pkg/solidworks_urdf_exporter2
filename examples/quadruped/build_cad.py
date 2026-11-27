@@ -465,13 +465,33 @@ def orient_view(sw, doc):
     member(doc, "GraphicsRedraw2")
 
 
+def save_image(doc, path):
+    """Save the graphics area of ``doc`` as a PNG at ``path``.
+
+    Taken with ``SaveBMP`` and converted, not with a ``.png`` SaveAs: when
+    SolidWorks' "view PNG after saving" export option is on, every image
+    SaveAs opens the picture in the system viewer, and a recorded build
+    leaves one viewer window per frame.  BMP has no such option.  The BMP is
+    taken at the window's own size, since the camera is fitted to the window
+    and ``SaveBMP`` at another aspect does not re-fit it.
+    """
+    from PIL import Image
+
+    view = member(doc, "ActiveView")
+    width, height = member(view, "FrameWidth"), member(view, "FrameHeight")
+    bmp = os.path.splitext(path)[0] + ".bmp"
+    member(doc, "GraphicsRedraw2")
+    if not member(doc, "SaveBMP", bmp, int(width), int(height))             or not os.path.isfile(bmp):
+        raise RuntimeError(f"SaveBMP wrote nothing to {bmp}")
+    with Image.open(bmp) as im:
+        im.convert("RGB").save(path)
+    os.remove(bmp)
+
+
 def screenshot(sw, doc, path):
     """Save the Z-up three-quarter view of ``doc`` as an image."""
     orient_view(sw, doc)
-    # an image SaveAs never replaces an existing file
-    if os.path.exists(path):
-        os.remove(path)
-    save_as(doc, path)
+    save_image(doc, path)
 
 
 def make_recorder(sw, frames_dir):
@@ -496,8 +516,7 @@ def make_recorder(sw, frames_dir):
                 view = member(doc, "ActiveView")
                 view.ZoomByFactor(ASSEMBLY_CAMERA["zoom"])
                 view.TranslateBy(*ASSEMBLY_CAMERA["pan_m"])
-            member(doc, "GraphicsRedraw2")
-            save_as(doc, path)
+            save_image(doc, path)
         paths.append(path)
 
     record.frames = frames
@@ -550,7 +569,7 @@ def main(sw=None, out_dir=None, overwrite=False, screenshots=None,
         raise SystemExit(
             f"refusing to overwrite: {', '.join(existing)} (use --overwrite)")
     os.makedirs(out_dir, exist_ok=True)
-    # SolidWorks' SaveAs writes nothing for a relative path
+    # SolidWorks writes nothing for a relative path
     screenshots = os.path.abspath(screenshots) if screenshots else None
     record_dir = os.path.abspath(record_dir) if record_dir else None
     record = (make_recorder(sw, os.path.join(record_dir, "frames"))
