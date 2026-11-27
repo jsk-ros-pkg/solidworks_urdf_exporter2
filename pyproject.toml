@@ -126,6 +126,7 @@ sw2robot-web = "sw2robot.editor.webserver:main"  # the browser editor server
 sw2robot-check = "sw2robot.exporter.check:main"  # graph/model findings (--json)
 sw2robot-sim = "sw2robot.exporter.sim_check:main"  # run an MJCF (needs [sim])
 sw2robot-mcp = "sw2robot.mcp_server:main"      # MCP tools (needs [mcp])
+sw2robot-solidworks = "sw2robot.exporter.swinstance:main"  # one SolidWorks per runner
 
 # hatchling's default sdist sweeps in every non-gitignored path in the repo --
 # INCLUDING untracked scratch directories.  A local docs/ tree took the sdist

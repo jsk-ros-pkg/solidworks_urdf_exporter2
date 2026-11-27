@@ -537,6 +537,24 @@ sw2robot-sim output/<robot>_mjcf/mjcf/<robot>.xml --seconds 2 --json
 over stdio and needs `pip install "sw2robot[mcp]"`, plus `[sim]` for
 `simulate_package`.
 
+## Several agents on one PC
+
+Every SolidWorks client normally gets the same SLDWORKS.exe, so agents running
+side by side would edit each other's documents. Give each one its own:
+
+```bash
+pid=$(sw2robot-solidworks start)    # safe to run many at once: starts queue up
+export SOLIDWORKS_PID=$pid          # every sw2robot session now uses that process
+sw2urdf-extract robot.SLDASM        # ... the agent's work
+sw2robot-solidworks stop "$pid"     # refuses while a document has unsaved changes
+```
+
+Only one SolidWorks can be starting at a time (several launched at once exit
+before they are ready), so `start` waits its turn and prints a line every 10 s
+while it waits. Jobs in different processes then run in parallel; without
+`SOLIDWORKS_PID` they share one SolidWorks and queue. `sw2robot-solidworks
+list` shows which processes can be pinned this way.
+
 ## Layout
 
 ```

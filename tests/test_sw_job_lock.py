@@ -18,9 +18,11 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture(autouse=True)
 def private_mutex(monkeypatch):
-    """Use a test-only name so a real sw2robot job on this PC is unaffected."""
+    """Use a test-only name so a real sw2robot job on this PC is unaffected,
+    and the session-wide lock (no runner pinned)."""
     monkeypatch.setattr(swcom, "SW_JOB_MUTEX_NAME",
                         f"Local\\sw2robot-test-{id(object())}")
+    monkeypatch.delenv(swcom.SW_PID_ENV, raising=False)
 
 
 def _hold_in_thread():
@@ -67,7 +69,7 @@ def test_busy_times_out_and_reports_waiting():
             with swcom.solidworks_job_lock(progress=msgs.append, timeout=0.3,
                                            poll_s=0.05):
                 pass
-        assert msgs and "waiting for another sw2robot job" in msgs[0]
+        assert msgs and "another sw2robot job is using SolidWorks" in msgs[0]
     finally:
         release.set()
         t.join(10)
