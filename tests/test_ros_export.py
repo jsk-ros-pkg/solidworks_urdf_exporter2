@@ -658,6 +658,37 @@ def test_ros2_without_couplings_has_no_relay(tmp_path):
     assert "rclpy" not in pxml
 
 
+def test_glb_up_y_turns_only_the_glb(tmp_path):
+    # glb_up="y" writes glTF's Y up, (x, y, z) -> (x, z, -y), for loaders that
+    # turn glTF from Y up to Z up; the default keeps the link frame's Z up
+    import io
+
+    import numpy as np
+    import trimesh
+
+    from sw2robot.exporter.ros_export import ISAAC_CTX_FMT, build_ros_description
+
+    def bounds(files, name):
+        m = trimesh.load(io.BytesIO(files[name]),
+                         file_type=name.rsplit(".", 1)[1])
+        m = m.to_geometry() if isinstance(m, trimesh.Scene) else m
+        return np.asarray(m.bounds)
+
+    pkg_dir = _make_pkg(tmp_path, robot="u")
+    z = dict(build_ros_description(pkg_dir, "u", ctx_fmt=ISAAC_CTX_FMT))
+    y = dict(build_ros_description(pkg_dir, "u", ctx_fmt=ISAAC_CTX_FMT,
+                                   glb_up="y"))
+    glb, stl = "u_description/meshes/part.glb", "u_description/meshes/part.stl"
+    bz, by = bounds(z, glb), bounds(y, glb)
+    assert np.allclose(by[:, 0], bz[:, 0], atol=1e-6)            # x stays
+    assert np.allclose(by[:, 1], bz[:, 2], atol=1e-6)            # y <- z
+    assert np.allclose(by[:, 2], -bz[::-1, 1], atol=1e-6)        # z <- -y
+    assert not np.allclose(bz[:, 1], bz[:, 2])                   # a real test
+    assert z[stl] == y[stl]                                      # stl untouched
+    with pytest.raises(ValueError):
+        build_ros_description(pkg_dir, "u", ctx_fmt=ISAAC_CTX_FMT, glb_up="x")
+
+
 def test_glb_ctx_exports_uniform_glb(tmp_path):
     import io
     import xml.etree.ElementTree as ET

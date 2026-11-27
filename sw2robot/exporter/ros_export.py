@@ -31,6 +31,7 @@ import tempfile
 import threading
 import xml.etree.ElementTree as ET
 
+import numpy as np
 from skrobot.utils.convex_decomposition import (
     COACD_PRESETS,
     convex_decomposition,
@@ -316,6 +317,15 @@ _CONVERT = {"dae": _mesh_to_dae_bytes, "stl": _mesh_to_stl_bytes,
 _CTX_FMT = (("visual", "dae"), ("collision", "stl"))
 # a uniform GLB variant (both contexts) for native-mesh / three.js consumers
 GLB_CTX_FMT = (("visual", "glb"), ("collision", "glb"))
+#: turns a link frame's Z-up vertices to glTF's Y up (-90 deg about X):
+#: (x, y, z) -> (x, z, -y), what a loader that turns glTF from Y up to Z up
+#: undoes (see ``glb_up`` in :func:`build_ros_description`)
+#: the ``glb_up`` choices
+GLB_UP_AXES = ("z", "y")
+GLB_Z_TO_Y_UP = np.array([[1.0, 0.0, 0.0, 0.0],
+                          [0.0, 0.0, 1.0, 0.0],
+                          [0.0, -1.0, 0.0, 0.0],
+                          [0.0, 0.0, 0.0, 1.0]])
 # Isaac Sim: PBR .glb visuals (consumed by scikit-robot urdf_to_usd; Isaac Sim 6.0
 # own URDF importer drops glb materials), plain .stl collision
 ISAAC_CTX_FMT = (("visual", "glb"), ("collision", "stl"))
@@ -1233,7 +1243,7 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
                           coacd_quality="balanced", merge_fixed=False,
                           mesh_dir=None, loop_closures=None,
                           zero_origins=True, progress=None, should_cancel=None,
-                          materials=None, url_style="package"):
+                          materials=None, url_style="package", glb_up="z"):
     """``pkg_dir`` (a built package) -> ``[(arcname, bytes), ...]`` for a portable
     ROS package, all behind ``package://`` URLs.  The package is named
     ``pkg_name`` if given (validated, see :func:`ros_pkg_name`), else
@@ -1263,6 +1273,13 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
     one gets its finish from the SolidWorks appearance / material recorded in
     its ``<!-- sw2robot ... -->`` comment, else the default.  Only ``glb``
     output carries it: ``.dae`` and ``.stl`` have no PBR to write.
+
+    ``glb_up`` -- ``"z"`` (default) writes ``.glb`` vertices in the link frame,
+    Z up, which trimesh-based loaders (scikit-robot, Isaac Sim through its
+    URDF-to-USD conversion) take as they are.  ``"y"`` turns them to the
+    glTF convention, Y up, for loaders that turn glTF content from Y up to
+    Z up on load (Gazebo, RViz 2 from rviz_rendering 15.1.4) and would
+    otherwise lay a Z-up mesh on its side.  Only ``.glb`` files are turned.
 
     ``url_style`` -- ``"package"`` (default) writes ``package://<pkg>/...``
     mesh refs, ``"relative"`` writes ``../<mesh_dir>/...`` relative to the
@@ -1316,6 +1333,9 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
     if url_style not in URL_STYLES:
         raise ValueError(f"unsupported url_style: {url_style!r} "
                          f"(use one of {URL_STYLES})")
+    if glb_up not in GLB_UP_AXES:
+        raise ValueError(f"unsupported glb_up: {glb_up!r} "
+                         f"(use one of {GLB_UP_AXES})")
     materials = materials or {}
     if collision not in COLLISION_MODES:
         raise ValueError(f"unsupported collision mode: {collision!r} "
@@ -1634,6 +1654,8 @@ def build_ros_description(pkg_dir, robot_name, email="auto@example.com",
                     color = override or (_material_hex(block)
                                          if ctx == "visual" else None)
                     transform = bake.get(id(mesh))
+                    if fmt == "glb" and glb_up == "y":
+                        transform = GLB_Z_TO_Y_UP if transform is None                             else GLB_Z_TO_Y_UP @ transform
                     tkey = None if transform is None else tuple(
                         round(float(x), 7) for x in transform.flatten())
                     # every glb (collision too, so a uniform-glb package keeps
@@ -1779,7 +1801,7 @@ def write_ros_description_package(pkg_dir, robot_name, dest_dir,
                                   coacd_quality="balanced",
                                   merge_fixed=False, mesh_dir=None,
                                   loop_closures=None, zero_origins=True,
-                                  ctx_fmt=None, materials=None):
+                                  ctx_fmt=None, materials=None, glb_up="z"):
     """Write the ROS package under ``dest_dir`` and return its directory path.
     The package is named ``pkg_name`` if given, else ``<robot_name>_description``;
     the URDF inside is named ``urdf_name`` if given, else the package name, and
@@ -1790,8 +1812,9 @@ def write_ros_description_package(pkg_dir, robot_name, dest_dir,
     ``mesh_dir`` (package-relative mesh directory, default ``meshes``) and
     ``loop_couplings`` (ROS 2 closed-loop relay node + config), ``ctx_fmt``
     (per-context mesh format, default ``.dae`` visual + ``.stl`` collision)
-    and ``materials`` (per-link PBR overrides for ``glb`` visuals) are passed
-    through to :func:`build_ros_description`."""
+    ``materials`` (per-link PBR overrides for ``glb`` visuals) and ``glb_up``
+    (``"y"`` writes ``.glb`` in the glTF Y-up convention) are passed through
+    to :func:`build_ros_description`."""
     pkg = ros_pkg_name(robot_name, pkg_name)
     files = build_ros_description(pkg_dir, robot_name, email=email,
                                   ros_version=ros_version, pkg_name=pkg,
@@ -1803,7 +1826,7 @@ def write_ros_description_package(pkg_dir, robot_name, dest_dir,
                                   loop_closures=loop_closures,
                                   zero_origins=zero_origins,
                                   ctx_fmt=ctx_fmt or _CTX_FMT,
-                                  materials=materials)
+                                  materials=materials, glb_up=glb_up)
     _write_files(dest_dir, files)
     return os.path.join(os.path.abspath(dest_dir), pkg)
 
