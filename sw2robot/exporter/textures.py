@@ -240,7 +240,7 @@ def split_textured(mesh, patches, scale=0.001, decimals=9):
     to its colour rather than drawn twice.
     """
     import trimesh
-    from trimesh.visual import TextureVisuals
+    from trimesh.visual import ColorVisuals, TextureVisuals
 
     where = {}
     for i, k in enumerate(_tri_keys(mesh.vertices, mesh.faces, decimals)):
@@ -265,4 +265,12 @@ def split_textured(mesh, patches, scale=0.001, decimals=9):
     rest = mesh.submesh([keep], append=True, repair=False) if len(keep) else None
     if rest is not None:
         rest.units = mesh.units
+        if mesh.visual.kind == "face":
+            # submesh hands face colours on as VERTEX colours, and reading
+            # them back as face colours averages each face's corners: a face
+            # sharing a vertex with a differently coloured one comes out in a
+            # blend of the two (an opaque face turned half see-through by the
+            # glass beside it).  Carry the face colours over as they were.
+            rest.visual = ColorVisuals(
+                mesh=rest, face_colors=mesh.visual.face_colors[keep])
     return rest, textured

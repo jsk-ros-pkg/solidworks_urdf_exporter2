@@ -106,6 +106,24 @@ def test_unmatched_texture_keeps_the_colour(tmp_path):
     assert rest is mesh and pieces == []
 
 
+def test_plain_faces_keep_their_own_colours(tmp_path):
+    # two plain triangles sharing an edge, one opaque wood and one see-through
+    # glass: cutting the textured quad out must not blend them at that edge
+    src = tmp_path / "part.3dxml"
+    top, bottom = _archive(src)
+    verts = np.array(top + bottom, float) * 0.001
+    faces = np.array([[0, 1, 2], [2, 1, 3], [4, 5, 6], [6, 5, 7]])
+    wood, glass = [171, 142, 104, 255], [204, 217, 224, 62]
+    mesh = trimesh.Trimesh(verts, faces, process=False,
+                           face_colors=[[255, 255, 255, 255]] * 2 + [wood, glass])
+    rest, pieces = textures.split_textured(mesh, textures.read_3dxml_textures(str(src)))
+    assert len(pieces) == 1
+    assert rest.visual.face_colors.tolist() == [wood, glass]
+    glb = pbr.glb_with_materials(rest, 0.0, 0.5, textured=pieces)
+    colours = sorted(c for _, c, _, _ in pbr.glb_materials(glb) if c)
+    assert colours == sorted([[c / 255 for c in wood], [c / 255 for c in glass]])
+
+
 def _loadable_archive(path, plain_rgb=(132, 92, 61)):
     """A whole 3DXML trimesh can load: one part whose plain-coloured rep comes
     first and its textured rep last (the order in which trimesh's loader turned
