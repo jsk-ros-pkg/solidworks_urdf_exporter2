@@ -577,6 +577,19 @@ Every `.3dxml` in the package is stamped at the end of the extract, meshes
 reused from the cache included. Unset, the login stays. The exporter's temp
 name `~sw2robot` in `<Title>` is replaced by the file's own name either way.
 
+## Mass of parts modelled solid
+
+A `densities:` override in the joints config multiplies the density by the
+volume of the part as modelled. An object modelled as a solid block but hollow
+in reality (an appliance, a cabinet, a housing whose walls were not modelled)
+then gets the mass of a solid block of that material, easily ten or twenty
+times too heavy. Give such a part its real weight with `masses:` instead:
+
+```yaml
+masses:
+  cabinet_body: 0.84    # kg; the inertia is rescaled to match
+```
+
 ## Layout
 
 ```
