@@ -81,8 +81,11 @@ def safe_name(raw):
 # 'screw'/'pin' are bounded so they fire on the hardware noun but NOT on
 # compound part names that merely contain them -- NejiNeji's "screwlock" /
 # "ScrewRing" connectors and "Pinion" gears are structural, not fasteners.
+# 'washer' is not bounded on the left ("lockwasher", "springwasher" are
+# hardware) but skips "dishwasher": an appliance whose door and racks move.
 _FASTENER_WORD = re.compile(
-    r"(?i)(?:bolt|screw(?![a-z])|hex[\s_-]*socket|socket[\s_-]*head|washer|"
+    r"(?i)(?:bolt|screw(?![a-z])|hex[\s_-]*socket|socket[\s_-]*head|"
+    r"(?<!dish)washer|"
     r"[\s_-]nut\b|clinch|self[\s_-]*clinch|rivet|dowel|(?<![a-z])pin(?![a-z])|"
     r"[\s_-]stud\b|fastener|(?<![a-z])vida(?![a-z])|"   # vida = screw (TR)
     r"ねじ|ネジ|ビス|ボルト|ナット|ワッシャ|座金|止めねじ|皿ねじ|ピン)")
