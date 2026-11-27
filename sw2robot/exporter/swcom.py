@@ -129,23 +129,55 @@ def sldworks_pids():
 # (and quit it under the other), and the search folders / CommandInProgress
 # each saves and restores would interleave.  "Local\" scopes the mutex to the
 # login session, which is exactly the scope Dispatch shares a process in.
-SW_JOB_MUTEX_NAME = "Local\\sw2robot-solidworks-job"
+SW_JOB_MUTEX_NAME = r"Local\sw2robot-solidworks-job"
+
+# Only one SLDWORKS.exe may be STARTING at a time.  Measured on SolidWorks
+# 2024: three launched at the same moment left one running -- the other two
+# exited before registering in the ROT -- while three launched one after
+# another (each waited until it registered) all ran.  See launch_solidworks.
+SW_STARTUP_MUTEX_NAME = r"Local\sw2robot-solidworks-startup"
+
+# A process id here pins every SolidWorks session in this process to THAT
+# SLDWORKS.exe (reached through its ROT moniker) instead of whatever Dispatch
+# hands back.  It is how several agents/runners on one PC each get their own
+# SolidWorks: start one per runner with ``sw2robot-solidworks start`` and
+# export its pid under this name.  Tool-neutral on purpose, so other
+# SolidWorks clients (MCP servers) can honour the same variable.
+SW_PID_ENV = "SOLIDWORKS_PID"
 
 
 class SolidWorksBusy(RuntimeError):
     """Another sw2robot job holds SolidWorks and the wait timed out."""
 
 
+def dedicated_pid():
+    """The SolidWorks process id pinned by ``$SOLIDWORKS_PID``, or None.
+
+    Raises ValueError for a value that is not a process id: silently ignoring
+    it would send the job to whatever SolidWorks Dispatch returns -- possibly
+    another runner's."""
+    raw = os.environ.get(SW_PID_ENV, "").strip()
+    if not raw:
+        return None
+    if not raw.isdigit():
+        raise ValueError(f"${SW_PID_ENV}={raw!r} is not a process id")
+    return int(raw)
+
+
 @contextlib.contextmanager
-def solidworks_job_lock(progress=None, timeout=None, check=None,
-                        poll_s=1.0, notify_s=10.0):
-    """Hold the machine-wide SolidWorks job lock for the ``with`` block.
+def _named_mutex(name, what, progress=None, timeout=None, check=None,
+                 poll_s=1.0, notify_s=10.0):
+    """Hold the Win32 named mutex ``name`` for the ``with`` block.
 
     Parameters
     ----------
+    name : str
+        Mutex name (``Local\\...`` = this login session).
+    what : str
+        What the holder is doing, for the waiting / busy messages.
     progress : callable or None
-        Receives a "waiting for another job" message when the lock is busy,
-        then again every ``notify_s`` seconds while still waiting.
+        Receives a "waiting for ..." message when the mutex is busy, then
+        again every ``notify_s`` seconds while still waiting.
     timeout : float or None
         Seconds to wait; None waits for as long as it takes, 0 tries once.
         Raises :class:`SolidWorksBusy` when it expires.
@@ -156,10 +188,9 @@ def solidworks_job_lock(progress=None, timeout=None, check=None,
         Wait-slice and message interval, in seconds.
 
     Re-entrant on the same thread (a Win32 mutex counts recursive
-    acquisitions), so ``extract()`` can take it inside a caller that already
-    holds it.  A holder that dies releases it as *abandoned*, which counts as
-    acquired here: the job it guarded is over.  Without pywin32 there is no
-    SolidWorks to guard and the block runs unlocked.
+    acquisitions).  A holder that dies releases it as *abandoned*, which
+    counts as acquired here: what it guarded is over.  Without pywin32 there
+    is no SolidWorks to guard and the block runs unlocked.
     """
     if not _HAVE_WIN32:
         yield
@@ -169,7 +200,7 @@ def solidworks_job_lock(progress=None, timeout=None, check=None,
     import win32api
     import win32event
     acquired = (win32event.WAIT_OBJECT_0, win32event.WAIT_ABANDONED)
-    handle = win32event.CreateMutex(None, False, SW_JOB_MUTEX_NAME)
+    handle = win32event.CreateMutex(None, False, name)
     try:
         rc = win32event.WaitForSingleObject(handle, 0)
         t0 = time.monotonic()
@@ -178,11 +209,9 @@ def solidworks_job_lock(progress=None, timeout=None, check=None,
             now = time.monotonic()
             if timeout is not None and now - t0 >= timeout:
                 raise SolidWorksBusy(
-                    "another sw2robot job is using SolidWorks; try again "
-                    "when it has finished")
+                    f"{what} is in progress; try again when it has finished")
             if progress is not None and now >= next_note:
-                progress(f"waiting for another sw2robot job to finish with "
-                         f"SolidWorks ({int(now - t0)}s) ...")
+                progress(f"waiting: {what} ({int(now - t0)}s) ...")
                 next_note = now + notify_s
             if check is not None:
                 check()
@@ -193,6 +222,69 @@ def solidworks_job_lock(progress=None, timeout=None, check=None,
             win32event.ReleaseMutex(handle)
     finally:
         win32api.CloseHandle(handle)
+
+
+def solidworks_job_lock(progress=None, timeout=None, check=None,
+                        poll_s=1.0, notify_s=10.0):
+    """Hold the SolidWorks job lock for the ``with`` block (one job at a time).
+
+    Scoped to the SolidWorks the job will run in: with ``$SOLIDWORKS_PID``
+    set the lock is per that process, so runners with their own SolidWorks do
+    not queue behind each other; otherwise it is the one session-wide lock
+    that every Dispatch-shared job contends for.  Parameters as
+    :func:`_named_mutex`; re-entrant, so ``extract()`` can take it inside a
+    caller that already holds it.
+    """
+    pid = dedicated_pid()
+    name = SW_JOB_MUTEX_NAME if pid is None else f"{SW_JOB_MUTEX_NAME}-{pid}"
+    what = ("another sw2robot job is using SolidWorks" if pid is None else
+            f"another sw2robot job is using SolidWorks pid {pid}")
+    return _named_mutex(name, what, progress=progress, timeout=timeout,
+                        check=check, poll_s=poll_s, notify_s=notify_s)
+
+
+def solidworks_startup_lock(progress=None, timeout=None, check=None,
+                            poll_s=1.0, notify_s=10.0):
+    """Hold the lock that lets only one SLDWORKS.exe start at a time."""
+    return _named_mutex(
+        SW_STARTUP_MUTEX_NAME, "another SolidWorks is still starting",
+        progress=progress, timeout=timeout, check=check, poll_s=poll_s,
+        notify_s=notify_s)
+
+
+def solidworks_exe():
+    """Path of the SLDWORKS.exe registered as the SldWorks.Application COM
+    server -- the same one Dispatch would start, so every launch path agrees
+    on the version (several releases can be installed side by side)."""
+    import winreg
+    clsid = winreg.QueryValue(winreg.HKEY_CLASSES_ROOT,
+                              r"SldWorks.Application\CLSID")
+    raw = winreg.QueryValue(winreg.HKEY_CLASSES_ROOT,
+                            rf"CLSID\{clsid}\LocalServer32")
+    raw = raw.strip()
+    if raw.startswith('"'):
+        return raw[1:raw.index('"', 1)]
+    return raw.split(" /")[0]
+
+
+def rot_solidworks(pid):
+    """The SolidWorks application object of process ``pid`` from the Running
+    Object Table (moniker ``SolidWorks_PID_<pid>``), or None if it is not
+    registered (not started yet, gone, or started by COM -- see the module
+    docstring)."""
+    ctx = pythoncom.CreateBindCtx(0)
+    rot = pythoncom.GetRunningObjectTable()
+    suffix = f"SolidWorks_PID_{pid}"
+    for moniker in rot.EnumRunning():
+        try:
+            name = moniker.GetDisplayName(ctx, None)
+        except Exception:
+            continue
+        if name.endswith(suffix):
+            unk = rot.GetObject(moniker)
+            return win32com.client.Dispatch(
+                unk.QueryInterface(pythoncom.IID_IDispatch))
+    return None
 
 
 def _owns_new_process(pid, before):
@@ -579,10 +671,22 @@ class SolidWorks:
             ...
     """
 
-    def __init__(self, visible=False, attach=False):
+    def __init__(self, visible=False, attach=False, pid=None):
         """``attach=True``: connect to the USER'S RUNNING SolidWorks via
         GetActiveObject instead of spawning a private instance.  In that mode
-        shutdown() leaves the application and its documents untouched."""
+        shutdown() leaves the application and its documents untouched.
+
+        ``pid`` -- or ``$SOLIDWORKS_PID`` when ``pid`` is None -- connects to
+        THAT SolidWorks process through its ROT moniker and overrides both
+        ``attach`` and spawning: a runner that was given its own SolidWorks
+        must never land in someone else's.  It is treated like an attached
+        session (the process belongs to whoever started it, so shutdown()
+        closes only what this session opened and never quits it)."""
+        if pid is None:
+            pid = dedicated_pid()
+        if pid is not None:
+            self._connect_pid(pid)
+            return
         self._attached = attach
         if attach:
             try:
@@ -677,6 +781,44 @@ class SolidWorks:
                 "SolidWorks launched but is not responding -- it most likely "
                 "cannot check out a license (is the license server "
                 "reachable?). Fix the license and retry; nothing was cached.")
+
+    def _connect_pid(self, pid):
+        """Attach to SolidWorks process ``pid`` via its ROT moniker (see
+        __init__).  No fallback to Dispatch: that could hand back another
+        runner's SolidWorks."""
+        try:
+            pythoncom.CoInitialize()
+        except Exception:
+            pass
+        _require_typelibs()
+        app = rot_solidworks(pid)
+        if app is None:
+            running = pid in (sldworks_pids() or set())
+            raise SolidWorksUnavailable(
+                f"SolidWorks pid {pid} ({SW_PID_ENV}) is "
+                + ("running but not in the Running Object Table -- it was "
+                   "probably started by COM; start it with "
+                   "'sw2robot-solidworks start' instead" if running else
+                   "not running -- start one with 'sw2robot-solidworks "
+                   "start' and set " + SW_PID_ENV + " to the pid it prints"))
+        try:
+            app = win32com.client.gencache.EnsureDispatch(app)
+        except Exception:
+            pass        # dynamic dispatch still reaches OpenDoc6 with typelibs
+        self.app = app
+        self._attached = True
+        self._shared = False
+        self._dedicated_pid = pid
+        self.visible = bool(safe_prop(app, "Visible"))
+        self._open_docs = []
+        self._tempdirs = []
+        self._sibling_dirs = {}
+        self._reused_titles = set()
+        if not self._responds():
+            self.app = None
+            raise SolidWorksUnavailable(
+                f"SolidWorks pid {pid} is not responding (license issue?)")
+        print(f"  [swcom] using SolidWorks pid {pid} ({SW_PID_ENV})")
 
     def _responds(self):
         """True if the app answers a trivial, license-free call.  Lenient on
