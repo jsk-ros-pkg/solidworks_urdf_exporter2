@@ -431,6 +431,13 @@ python -m sw2robot.exporter.export path/to/assembly.sldasm -o output --isaac --w
 python -m sw2robot.exporter.export path/to/assembly.sldasm -o output --ros-pkg --visual-format glb
 ```
 
+The `.glb` vertices are in the link frame, Z up, which trimesh-based loaders
+(scikit-robot, and Isaac Sim through its URDF-to-USD conversion) take as they
+are. glTF itself is Y up, and some loaders turn glTF content from Y up to Z up
+on load -- Gazebo, and RViz 2 from rviz_rendering 15.1.4 -- which lays a Z-up
+mesh on its side. For those, add `--glb-up y` to write the ROS package's `.glb`
+in the glTF convention.
+
 Each `.glb` carries one glTF PBR material -- metallic / roughness -- on top of
 the CAD's per-face colours, which is what makes an aluminium extrusion read as
 aluminium rather than grey clay. A `.glb` with no material is, by the glTF

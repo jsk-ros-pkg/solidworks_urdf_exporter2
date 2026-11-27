@@ -686,7 +686,7 @@ def build(pkg_dir, config_path=None, base_hint=None, exclude=None,
           mujoco_name=None, mujoco_fixed_base=False, mujoco_actuator="position",
           mujoco_kp=50.0, mujoco_armature=0.0, mujoco_self_collision=False,
           mujoco_backemf_damping=True, visual_format="dae", isaac=False,
-          isaac_pkg_name=None, world_link=None):
+          isaac_pkg_name=None, world_link=None, glb_up="z"):
     _tolerant_console()
     graph = GraphState.load(os.path.join(pkg_dir, GRAPH_FILE))
     robot_name = graph.robot_name
@@ -821,7 +821,7 @@ def build(pkg_dir, config_path=None, base_hint=None, exclude=None,
             merge_fixed=merge_fixed, mesh_dir=ros_mesh_dir,
             loop_closures=closures,
             ctx_fmt=(("visual", visual_format), ("collision", "stl")),
-            materials=materials)
+            materials=materials, glb_up=glb_up)
 
     isaac_dir = None
     if isaac:
@@ -884,7 +884,7 @@ def export(assembly_path, out_dir=None, robot_name=None, visible=False,
            mujoco_actuator="position", mujoco_kp=50.0, mujoco_armature=0.0,
            mujoco_self_collision=False, mujoco_backemf_damping=True,
            visual_format="dae", isaac=False, isaac_pkg_name=None,
-           world_link=None):
+           world_link=None, glb_up="z"):
     pkg_dir = extract(assembly_path, out_dir, robot_name, visible,
                       configuration=configuration, attach=attach,
                       scan_part_frames=scan_part_frames)
@@ -902,7 +902,8 @@ def export(assembly_path, out_dir=None, robot_name=None, visible=False,
                  mujoco_self_collision=mujoco_self_collision,
                  mujoco_backemf_damping=mujoco_backemf_damping,
                  visual_format=visual_format, isaac=isaac,
-                 isaac_pkg_name=isaac_pkg_name, world_link=world_link)
+                 isaac_pkg_name=isaac_pkg_name, world_link=world_link,
+                 glb_up=glb_up)
 
 
 def _exclude_list(s):
@@ -975,6 +976,12 @@ def main():
                          "metallic/roughness from the part's SolidWorks "
                          "appearance or material, or a joints.yaml "
                          "'materials:' override; for Isaac Sim, three.js)")
+    ap.add_argument("--glb-up", choices=("z", "y"), default="z",
+                    help="up axis of the --ros-pkg package's .glb meshes: 'z' "
+                         "(default, the link frame as it is, for trimesh-based "
+                         "loaders such as scikit-robot) / 'y' (the glTF "
+                         "convention, for loaders that turn glTF from Y up to "
+                         "Z up: Gazebo, RViz 2 from rviz_rendering 15.1.4)")
     ap.add_argument("--isaac", action="store_true",
                     help="also write a standalone <name>_isaac package for "
                          "NVIDIA Isaac Sim: mesh refs relative to the URDF "
@@ -1076,7 +1083,8 @@ def main():
            mujoco_self_collision=args.mujoco_self_collision,
            mujoco_backemf_damping=not args.mujoco_no_backemf_damping,
            visual_format=args.visual_format, isaac=args.isaac,
-           isaac_pkg_name=args.isaac_pkg_name, world_link=args.world_link)
+           isaac_pkg_name=args.isaac_pkg_name, world_link=args.world_link,
+           glb_up=args.glb_up)
 
 
 if __name__ == "__main__":
