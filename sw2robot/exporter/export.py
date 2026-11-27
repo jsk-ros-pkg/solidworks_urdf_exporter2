@@ -56,6 +56,7 @@ from .swcom import (
     doc_type_for,
     safe_call,
     safe_prop,
+    solidworks_job_lock,
 )
 from .urdf_writer import write_ros_package, write_urdf
 
@@ -77,11 +78,12 @@ def configuration_names(cad_path, sw=None, visible=False):
     stays the default.
     """
     cad_path = os.path.abspath(cad_path)
-    if sw is not None:
-        names = safe_call(sw.app, "GetConfigurationNames", cad_path)
-    else:
-        with SolidWorks(visible=visible) as own:
-            names = safe_call(own.app, "GetConfigurationNames", cad_path)
+    with solidworks_job_lock():
+        if sw is not None:
+            names = safe_call(sw.app, "GetConfigurationNames", cad_path)
+        else:
+            with SolidWorks(visible=visible) as own:
+                names = safe_call(own.app, "GetConfigurationNames", cad_path)
     return [str(n) for n in (names or [])]
 
 
@@ -439,19 +441,23 @@ def extract(assembly_path, out_dir=None, robot_name=None, visible=False,
 
     # CommandInProgress for the whole extraction: 19x on every COM call, see
     # SolidWorks._begin_api_batch.  Scoped so the user's session never keeps it.
+    # The job lock is taken BEFORE the session starts, so the spawned-or-shared
+    # decision SolidWorks() makes cannot race another job (see
+    # swcom.SW_JOB_MUTEX_NAME).
     if sw is not None:
-        with sw.api_batch():
+        with solidworks_job_lock(progress=_say), sw.api_batch():
             _extract_into(sw, assembly_path, pkg_dir, meshes_dir, robot_name,
                           _say, _part, configuration=configuration,
                           scan_part_frames=scan_part_frames)
     else:
-        sw_ctx = (SolidWorks(attach=True) if attach
-                  else SolidWorks(visible=visible))
-        with sw_ctx as sw_own, sw_own.api_batch():
-            _extract_into(sw_own, assembly_path, pkg_dir, meshes_dir,
-                          robot_name, _say, _part,
-                          configuration=configuration,
-                          scan_part_frames=scan_part_frames)
+        with solidworks_job_lock(progress=_say):
+            sw_ctx = (SolidWorks(attach=True) if attach
+                      else SolidWorks(visible=visible))
+            with sw_ctx as sw_own, sw_own.api_batch():
+                _extract_into(sw_own, assembly_path, pkg_dir, meshes_dir,
+                              robot_name, _say, _part,
+                              configuration=configuration,
+                              scan_part_frames=scan_part_frames)
 
     print(f"  graph: {os.path.join(pkg_dir, GRAPH_FILE)}")
     return pkg_dir
@@ -600,13 +606,16 @@ def refresh_frames(target, out_dir=None, robot_name=None, visible=False,
         finally:
             sw_sess.close_doc(doc)
 
+    # same job lock and job-scoped settings (search folders) as extract()
     if sw is not None:
-        _refresh_into(sw)
+        with solidworks_job_lock(progress=_say), sw.api_batch():
+            _refresh_into(sw)
     else:
-        sw_ctx = (SolidWorks(attach=True) if attach
-                  else SolidWorks(visible=visible))
-        with sw_ctx as sw_own:
-            _refresh_into(sw_own)
+        with solidworks_job_lock(progress=_say):
+            sw_ctx = (SolidWorks(attach=True) if attach
+                      else SolidWorks(visible=visible))
+            with sw_ctx as sw_own, sw_own.api_batch():
+                _refresh_into(sw_own)
 
     graph.save(graph_path)
     n_sub = sum(len(s.coordinate_systems)
