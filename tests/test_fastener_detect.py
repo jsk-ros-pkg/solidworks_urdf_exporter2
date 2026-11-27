@@ -42,6 +42,11 @@ CASES = [
     ("Axis", "ボールねじ_12", False),
     ("Axis", "lead_screw_M8x300", False),
     ("BallScrew", "M3x6", True),          # the bolts kept beside it still weld
+    # 'washer' inside "dishwasher" is the appliance, whose door and racks move
+    ("Kitchen", "dishwasher_door", False),
+    ("Dishwasher", "rack_upper", False),
+    ("Hardware", "lockwasher_M4", True),  # a compound washer is still hardware
+    ("Hardware", "spring_washer", True),
 ]
 
 
