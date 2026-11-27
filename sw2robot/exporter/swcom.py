@@ -2,9 +2,16 @@
 
 KEY FACTS about this machine (discovered empirically):
 
-* The user's running SolidWorks does NOT register itself in the COM Running
-  Object Table, so ``win32com.client.GetActiveObject("SldWorks.Application")``
-  fails with ``MK_E_UNAVAILABLE`` and we cannot attach to the live session.
+* Whether a SolidWorks is in the COM Running Object Table depends on how it
+  was STARTED (measured on SolidWorks 2024, 2026-11).  One launched as a plain
+  ``SLDWORKS.exe`` registers ``SolidWorks_PID_<pid>`` and the
+  ``SldWorks.Application`` class moniker within ~25 s, so
+  ``GetActiveObject`` (``attach=True``) reaches it -- and each such process
+  can be addressed separately through its PID moniker.  One started by COM
+  (``Dispatch``) registers NOTHING, so ``GetActiveObject`` fails with
+  ``MK_E_UNAVAILABLE`` while only COM-started instances are running.  The ROT
+  is also per login session, so a service-like shell cannot see the user's
+  instance either (see ``editor.core.sw_session_status``).
 * ``Dispatch("SldWorks.Application")`` spawns a *new* SolidWorks process only
   when none is running; this module then OWNS it and shuts it down
   (``ExitApp``) so it never leaks empty instances.  While ANY SolidWorks runs
