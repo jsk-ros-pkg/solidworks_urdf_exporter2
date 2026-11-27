@@ -16,6 +16,7 @@ import os
 import re
 import xml.etree.ElementTree as ET
 import zipfile
+from xml.sax.saxutils import escape as xml_escape
 
 from .swcom import (
     SW_OPEN_SILENT,
@@ -141,12 +142,82 @@ def _dedupe_reference_names(raw):
     return _REF3D.sub(sub, raw), n
 
 
-def _unique_part_names(path):
-    """Rewrite ``path`` in place so no two ``Reference3D`` share a name.
+# the 3DXML <Header> SolidWorks writes into the root structure file:
+#   <Header><SchemaVersion>4.2</SchemaVersion><Title>~sw2robot</Title>
+#   <Author>WINDOWS-LOGIN</Author><Generator>SOLIDWORKS 2024 SP5.0</Generator>
+#   <Created>2026-10-30</Created></Header>
+_HEADER = re.compile(rb"<Header>.*?</Header>", re.S)
+# what the exporter's temp SaveAs name leaves in <Title> (see _save_3dxml)
+_TEMP_TITLE = b"~sw2robot"
+# the author to stamp on every 3DXML in a package; unset keeps what SolidWorks
+# wrote (the Windows login), set-but-empty clears it
+AUTHOR_ENV = "SW2URDF_3DXML_AUTHOR"
 
-    Returns how many were renamed (0 = the file was already unambiguous and
-    nothing was rewritten).  Best-effort: any failure leaves the original file
-    untouched, since a mesh with ambiguous names still beats no mesh."""
+
+def _header_field(header, tag, value):
+    """``header`` with ``<tag>`` holding ``value`` (raw, already-escaped
+    bytes), added before ``</Header>`` if SolidWorks left it out."""
+    field = re.compile(rb"<%s>.*?</%s>|<%s\s*/>" % (tag, tag, tag), re.S)
+    new = b"<%s>%s</%s>" % (tag, value, tag)
+    if field.search(header):
+        return field.sub(lambda m: new, header, count=1)
+    return header.replace(b"</Header>", new + b"</Header>", 1)
+
+
+def _set_header(raw, author=None, title=None):
+    """``(xml, changed)`` -- the root structure ``raw`` with its ``<Header>``
+    ``<Author>`` set to ``author`` and a ``<Title>`` that is the exporter's
+    temp file name (``~sw2robot``) replaced by ``title``.
+
+    SolidWorks fills ``<Author>`` with the Windows login of whoever exported,
+    so a package committed to a public repository publishes it; nothing in the
+    SaveAs options controls it.  ``None`` leaves a field as it is.  Text is
+    XML-escaped and UTF-8 encoded, the encoding SolidWorks declares."""
+    m = _HEADER.search(raw)
+    if m is None:
+        return raw, False
+    header = m.group(0)
+    if author is not None:
+        header = _header_field(header, b"Author",
+                               xml_escape(author).encode("utf-8"))
+    if title is not None and re.search(
+            rb"<Title>%s</Title>" % re.escape(_TEMP_TITLE), header):
+        header = _header_field(header, b"Title",
+                               xml_escape(title).encode("utf-8"))
+    if header == m.group(0):
+        return raw, False
+    return raw[:m.start()] + header + raw[m.end():], True
+
+
+def set_3dxml_header(path, author=None):
+    """Rewrite the ``<Header>`` of the 3DXML at ``path`` in place: ``author``
+    as its ``<Author>`` (``None`` = keep), and the temp ``~sw2robot`` title
+    replaced by the file's own name.  Returns whether the file changed.
+    Best-effort like :func:`_unique_part_names`."""
+    title = os.path.splitext(os.path.basename(path))[0]
+    changed = _rewrite_root(
+        path, lambda raw: _set_header(raw, author=author, title=title)[0])
+    return bool(changed)
+
+
+def stamp_3dxml_headers(paths, author=None):
+    """:func:`set_3dxml_header` over ``paths``; ``author`` defaults to the
+    ``SW2URDF_3DXML_AUTHOR`` environment variable (unset = keep SolidWorks'
+    value).  Returns how many files changed.
+
+    Run over the finished package, not inside the SaveAs, so meshes reused
+    from the cache get the same author as freshly exported ones."""
+    if author is None:
+        author = os.environ.get(AUTHOR_ENV)
+    return sum(set_3dxml_header(p, author=author) for p in paths)
+
+
+def _rewrite_root(path, fix):
+    """Apply ``fix(raw) -> raw`` to the root structure file of the 3DXML at
+    ``path`` (the one ``Manifest.xml`` names) and rewrite the archive in place
+    if it changed.  Returns True when rewritten, False when ``fix`` changed
+    nothing or the file could not be read or written -- any failure leaves the
+    original untouched."""
     try:
         with zipfile.ZipFile(path) as z:
             root_name = None
@@ -158,15 +229,15 @@ def _unique_part_names(path):
             except KeyError:
                 pass
             if root_name is None or root_name not in z.namelist():
-                return 0
+                return False
             raw = z.read(root_name)
-            fixed, n = _dedupe_reference_names(raw)
-            if not n:
-                return 0
+            fixed = fix(raw)
+            if fixed == raw:
+                return False
             items = [(i, z.read(i.filename)) for i in z.infolist()]
     except (OSError, zipfile.BadZipFile, ET.ParseError) as e:
         print(f"    could not inspect {os.path.basename(path)}: {e!r}")
-        return 0
+        return False
 
     tmp = os.path.join(os.path.dirname(path), "~sw2robot.uniq")
     try:
@@ -183,8 +254,24 @@ def _unique_part_names(path):
             os.remove(tmp)
         except OSError:
             pass
-        return 0
-    return n
+        return False
+    return True
+
+
+def _unique_part_names(path):
+    """Rewrite ``path`` in place so no two ``Reference3D`` share a name.
+
+    Returns how many were renamed (0 = the file was already unambiguous and
+    nothing was rewritten).  Best-effort: any failure leaves the original file
+    untouched, since a mesh with ambiguous names still beats no mesh."""
+    renamed = 0
+
+    def fix(raw):
+        nonlocal renamed
+        fixed, renamed = _dedupe_reference_names(raw)
+        return fixed
+
+    return renamed if _rewrite_root(path, fix) else 0
 
 
 def _declared_counts(path):

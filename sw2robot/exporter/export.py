@@ -31,6 +31,7 @@ from .mesh import (
     export_meshes,
     export_part_mesh,
     export_subgraph_meshes,
+    stamp_3dxml_headers,
     verify_meshes,
 )
 from .mirror import apply_mirror_mass_inheritance, print_mirror_report
@@ -108,6 +109,17 @@ def _pkg_paths(assembly_path, out_dir, robot_name):
     return robot_name, pkg_dir
 
 
+def _stamp_headers(pkg_dir, _say):
+    """Give every .3dxml in the package the author from SW2URDF_3DXML_AUTHOR
+    (unset: keep the Windows login SolidWorks wrote) and its own name as the
+    title, cached meshes included -- see mesh.stamp_3dxml_headers."""
+    paths = [os.path.join(d, f) for d, _, fs in os.walk(pkg_dir)
+             for f in fs if f.lower().endswith(".3dxml")]
+    n = stamp_3dxml_headers(paths)
+    if n:
+        _say(f"rewrote the 3DXML header of {n} mesh(es)")
+
+
 # ---------------------------------------------------------------- extract
 def _extract_part_into(sw, part_path, pkg_dir, meshes_dir, robot_name, _say):
     """Extraction body for a single ``.SLDPRT``: one link, no joints.
@@ -124,6 +136,7 @@ def _extract_part_into(sw, part_path, pkg_dir, meshes_dir, robot_name, _say):
 
     _say("exporting part mesh ...")
     export_part_mesh(doc, comps[0], meshes_dir)
+    _stamp_headers(pkg_dir, _say)
 
     _say("saving graph.json ...")
     (coordinate_systems,
@@ -358,6 +371,7 @@ def _extract_into(sw, assembly_path, pkg_dir, meshes_dir, robot_name, _say,
         if f.lower().endswith(".3dxml"))
     if whole_rel:
         written.append(whole)
+    _stamp_headers(pkg_dir, _say)
     verify_meshes(written, say=_say)
 
     _say(f"{n} meshes exported; saving graph.json ...")
