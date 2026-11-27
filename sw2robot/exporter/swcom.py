@@ -115,6 +115,79 @@ def sldworks_pids():
     return pids
 
 
+# One SolidWorks job at a time per login session, across every process.
+# ``Dispatch`` hands every client the SAME SLDWORKS.exe (see the module
+# docstring), so two concurrent jobs -- two editors, an editor and the CLI, a
+# gallery batch -- would share one process: both could decide they spawned it
+# (and quit it under the other), and the search folders / CommandInProgress
+# each saves and restores would interleave.  "Local\" scopes the mutex to the
+# login session, which is exactly the scope Dispatch shares a process in.
+SW_JOB_MUTEX_NAME = "Local\\sw2robot-solidworks-job"
+
+
+class SolidWorksBusy(RuntimeError):
+    """Another sw2robot job holds SolidWorks and the wait timed out."""
+
+
+@contextlib.contextmanager
+def solidworks_job_lock(progress=None, timeout=None, check=None,
+                        poll_s=1.0, notify_s=10.0):
+    """Hold the machine-wide SolidWorks job lock for the ``with`` block.
+
+    Parameters
+    ----------
+    progress : callable or None
+        Receives a "waiting for another job" message when the lock is busy,
+        then again every ``notify_s`` seconds while still waiting.
+    timeout : float or None
+        Seconds to wait; None waits for as long as it takes, 0 tries once.
+        Raises :class:`SolidWorksBusy` when it expires.
+    check : callable or None
+        Called every ``poll_s`` seconds while waiting; raise from it to give up
+        (the editor's cancel button).
+    poll_s, notify_s : float
+        Wait-slice and message interval, in seconds.
+
+    Re-entrant on the same thread (a Win32 mutex counts recursive
+    acquisitions), so ``extract()`` can take it inside a caller that already
+    holds it.  A holder that dies releases it as *abandoned*, which counts as
+    acquired here: the job it guarded is over.  Without pywin32 there is no
+    SolidWorks to guard and the block runs unlocked.
+    """
+    if not _HAVE_WIN32:
+        yield
+        return
+    import time
+
+    import win32api
+    import win32event
+    acquired = (win32event.WAIT_OBJECT_0, win32event.WAIT_ABANDONED)
+    handle = win32event.CreateMutex(None, False, SW_JOB_MUTEX_NAME)
+    try:
+        rc = win32event.WaitForSingleObject(handle, 0)
+        t0 = time.monotonic()
+        next_note = t0
+        while rc not in acquired:
+            now = time.monotonic()
+            if timeout is not None and now - t0 >= timeout:
+                raise SolidWorksBusy(
+                    "another sw2robot job is using SolidWorks; try again "
+                    "when it has finished")
+            if progress is not None and now >= next_note:
+                progress(f"waiting for another sw2robot job to finish with "
+                         f"SolidWorks ({int(now - t0)}s) ...")
+                next_note = now + notify_s
+            if check is not None:
+                check()
+            rc = win32event.WaitForSingleObject(handle, int(poll_s * 1000))
+        try:
+            yield
+        finally:
+            win32event.ReleaseMutex(handle)
+    finally:
+        win32api.CloseHandle(handle)
+
+
 def _owns_new_process(pid, before):
     """Whether Dispatch started a NEW SolidWorks: its ``pid`` was not running
     ``before``.  Unknowns decide for "shared", since wrongly owning means
@@ -834,13 +907,23 @@ class SolidWorks:
         try:
             from win32com.client import constants
             if not hasattr(self, "_saved_search_prefs"):
+                # swUserPreferenceToggle_e.swUseFolderSearchRules -- with the
+                # "s".  The name without it does not exist, so this capture
+                # used to fail every time: the user's folders were then
+                # REPLACED by ours, never restored, and written to the
+                # registry by ExitApp.  If the capture fails, change nothing:
+                # a setting that cannot be put back must not be touched.
                 try:
-                    self._saved_search_prefs = (
+                    saved = (
                         self.app.GetSearchFolders(constants.swDocumentType),
                         bool(self.app.GetUserPreferenceToggle(
-                            constants.swUseFolderSearchRule)))
-                except Exception:
-                    self._saved_search_prefs = None
+                            constants.swUseFolderSearchRules)))
+                except Exception as e:
+                    print(f"      WARN: could not read the current search "
+                          f"folders ({e!r}); leaving them unchanged, so "
+                          f"stale part references may not resolve")
+                    return
+                self._saved_search_prefs = saved
             src_dir = os.path.dirname(src_path)
             parent = os.path.dirname(src_dir)
             cand = [src_dir, parent]
@@ -871,7 +954,7 @@ class SolidWorks:
             folders = ";".join(merged)
             try:
                 self.app.SetUserPreferenceToggle(
-                    constants.swUseFolderSearchRule, True)
+                    constants.swUseFolderSearchRules, True)
             except Exception:
                 pass
             self.app.SetSearchFolders(constants.swDocumentType, folders)
@@ -894,10 +977,11 @@ class SolidWorks:
             folders, toggle = saved
             self.app.SetSearchFolders(constants.swDocumentType, folders or "")
             self.app.SetUserPreferenceToggle(
-                constants.swUseFolderSearchRule, toggle)
+                constants.swUseFolderSearchRules, toggle)
             del self._saved_search_prefs
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"      WARN: could not restore the reference search "
+                  f"folders ({e!r})")
 
     def _find_open_doc(self, path):
         """The already-open ModelDoc2 of the file at ``path``, or None.  Lets a
@@ -1081,12 +1165,19 @@ class SolidWorks:
 
     @contextlib.contextmanager
     def api_batch(self):
-        """Scope the ``CommandInProgress`` flag to a block, always restoring it."""
+        """Scope the ``CommandInProgress`` flag to a block, always restoring it.
+
+        The reference search folders that ``open_copy`` adds are put back here
+        too, not only at ``shutdown``: a warm session outlives the job (the
+        editor keeps one for its whole lifetime), and the next job -- possibly
+        another process handed the same SolidWorks by Dispatch -- must see the
+        user's settings as its "original", not this job's additions."""
         self._begin_api_batch()
         try:
             yield self
         finally:
             self._end_api_batch()
+            self._restore_search_folders()
 
     def __enter__(self):
         return self

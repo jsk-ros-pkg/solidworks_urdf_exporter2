@@ -4841,9 +4841,16 @@ def _keepalive_loop():
         if sess is None or _job["running"]:
             fails = 0
             continue
+        from sw2robot.exporter.swcom import SolidWorksBusy, solidworks_job_lock
         alive = False
         try:
-            alive = sess.app is not None and sess._responds()
+            # another process may be driving this very SolidWorks (Dispatch
+            # shares it); stay out of its way and ping on a later tick
+            with solidworks_job_lock(timeout=0):
+                alive = sess.app is not None and sess._responds()
+        except SolidWorksBusy:
+            fails = 0
+            continue
         except Exception:
             alive = False
         if alive:
@@ -4920,7 +4927,19 @@ def _configurations_of(cad_path):
     this short-lived request thread could not be cached anyway (see
     :func:`_acquire_sw`).  With no session reachable, returns
     ``([], "unavailable")`` and the caller falls back to the file's
-    saved-active configuration."""
+    saved-active configuration.  While another job (this editor's or another
+    process's) holds SolidWorks it returns ``([], "busy")`` at once instead of
+    holding the request for a multi-minute extract."""
+    from sw2robot.exporter.swcom import SolidWorksBusy, solidworks_job_lock
+
+    try:
+        with solidworks_job_lock(timeout=0):
+            return _configurations_of_locked(cad_path)
+    except SolidWorksBusy:
+        return [], "busy"
+
+
+def _configurations_of_locked(cad_path):
     from sw2robot.exporter.export import configuration_names
     from sw2robot.exporter.swcom import SolidWorks
 
@@ -5005,33 +5024,45 @@ def _run_extract(sldasm, configuration=None):
                     else "")
                  + " -- this opens a throwaway COPY in a hidden SolidWorks "
                    "instance (the original is never modified)")
-        sw = _acquire_sw(progress)
-        try:
-            state = core.extract_and_import(
-                sldasm, out_dir=_Handler.root_dir, progress=progress, sw=sw,
-                configuration=configuration)
-        except ValueError as e:
-            # "no usable components" out of the USER's SolidWorks does not mean
-            # the assembly is broken: a session busy with the user's own
-            # documents can hand back a copy whose component tree is empty.
-            # A private instance opens it from scratch, so retry there once
-            # rather than telling the user their CAD cannot be read.
-            if not (getattr(sw, "_attached", False)
-                    and "no usable components" in str(e)):
-                raise
-            progress("the running SolidWorks returned an empty assembly "
-                     "(it is busy with your own documents); retrying in a "
-                     "private instance ...")
-            _sw["sess"] = None
-            from sw2robot.exporter.swcom import SolidWorks
-            before = _sldworks_pids()
-            sw = SolidWorks(visible=False)
-            for pid in _sldworks_pids() - before:
-                _record_spawned_pid(pid)
-            _sw["sess"] = sw
-            state = core.extract_and_import(
-                sldasm, out_dir=_Handler.root_dir, progress=progress, sw=sw,
-                configuration=configuration)
+        from sw2robot.exporter.swcom import solidworks_job_lock
+
+        def _cancel_check():
+            if _job.get("cancel"):
+                raise _CancelExtract()
+
+        # one SolidWorks job at a time across editors / CLI runs: held from
+        # BEFORE the session is acquired, so whether we spawned SolidWorks or
+        # were handed another job's process is decided with nobody racing us
+        # -- and that is also what makes the spawned-PID record trustworthy
+        with solidworks_job_lock(progress=progress, check=_cancel_check):
+            sw = _acquire_sw(progress)
+            try:
+                state = core.extract_and_import(
+                    sldasm, out_dir=_Handler.root_dir, progress=progress,
+                    sw=sw, configuration=configuration)
+            except ValueError as e:
+                # "no usable components" out of the USER's SolidWorks does not
+                # mean the assembly is broken: a session busy with the user's
+                # own documents can hand back a copy whose component tree is
+                # empty.  A private instance opens it from scratch, so retry
+                # there once rather than telling the user their CAD cannot be
+                # read.
+                if not (getattr(sw, "_attached", False)
+                        and "no usable components" in str(e)):
+                    raise
+                progress("the running SolidWorks returned an empty assembly "
+                         "(it is busy with your own documents); retrying in a "
+                         "private instance ...")
+                _sw["sess"] = None
+                from sw2robot.exporter.swcom import SolidWorks
+                before = _sldworks_pids()
+                sw = SolidWorks(visible=False)
+                for pid in _sldworks_pids() - before:
+                    _record_spawned_pid(pid)
+                _sw["sess"] = sw
+                state = core.extract_and_import(
+                    sldasm, out_dir=_Handler.root_dir, progress=progress,
+                    sw=sw, configuration=configuration)
         _job["package"] = str(state.package_dir)
         _preconvert_meshes(str(state.package_dir))
         progress(f"done -> {state.package_dir} (SolidWorks kept warm for "

@@ -7,6 +7,8 @@ graph.json in place and must leave everything else (components, mates, deep
 worlds, meshes) untouched.  SolidWorks is faked out; only the orchestration is
 under test here.
 """
+import contextlib
+
 import numpy as np
 import pytest
 
@@ -35,6 +37,10 @@ class FakeSW:
 
     def close_doc(self, doc):
         self.closed.append(doc)
+
+    @contextlib.contextmanager
+    def api_batch(self):
+        yield self
 
 
 def _make_package(tmp_path):
