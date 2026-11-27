@@ -555,6 +555,21 @@ while it waits. Jobs in different processes then run in parallel; without
 `SOLIDWORKS_PID` they share one SolidWorks and queue. `sw2robot-solidworks
 list` shows which processes can be pinned this way.
 
+## The author in exported meshes
+
+SolidWorks writes the Windows login of whoever exported into each `.3dxml`
+(`<Header><Author>`), so a package pushed to a public repository publishes it.
+Set the name to use instead before extracting:
+
+```bash
+export SW2URDF_3DXML_AUTHOR="Your Name"   # empty string: no author at all
+sw2urdf-extract robot.SLDASM
+```
+
+Every `.3dxml` in the package is stamped at the end of the extract, meshes
+reused from the cache included. Unset, the login stays. The exporter's temp
+name `~sw2robot` in `<Title>` is replaced by the file's own name either way.
+
 ## Layout
 
 ```
