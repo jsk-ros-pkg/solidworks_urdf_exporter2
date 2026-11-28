@@ -144,6 +144,87 @@ def test_set_yaml_list_block_append_vs_prepend_and_clear():
     assert "exclude:" not in out2 and members2 == []
 
 
+def test_set_yaml_list_block_indented_items():
+    """A hand-written ``key:\\n  - x`` list is edited as a list: removing its
+    last item drops the whole block instead of leaving ``  - x`` to fold into
+    the previous key, and an added item copies the indentation."""
+    from sw2robot.editor.webserver import _set_yaml_list_block
+    txt = "base: plate-1\nno_expand:\n  - servo-1\n"
+    out, members = _set_yaml_list_block(txt, "no_expand", remove=["servo-1"])
+    assert out == "base: plate-1\n" and members == []
+    assert yaml.safe_load(out) == {"base": "plate-1"}
+
+    joints = "joints:\n  - parent: a\n    child: b\n    type: fixed\n"
+    out, _ = _set_yaml_list_block(joints + "frame_only:\n  - cam\n",
+                                  "frame_only", remove=["cam"])
+    assert yaml.safe_load(out) == yaml.safe_load(joints)
+
+    txt = "base: x\nframe_only:\n  - dummy_axis\n" + joints
+    out, members = _set_yaml_list_block(txt, "frame_only", add=["cam"])
+    assert out == ("base: x\nframe_only:\n  - dummy_axis\n  - cam\n" + joints)
+    assert members == ["dummy_axis", "cam"]
+    assert yaml.safe_load(out)["frame_only"] == ["dummy_axis", "cam"]
+    out, members = _set_yaml_list_block(out, "frame_only",
+                                        remove=["dummy_axis"])
+    assert yaml.safe_load(out) == {"base": "x", "frame_only": ["cam"],
+                                   **yaml.safe_load(joints)}
+    # read-only use (mass_reviewed / joint_reviewed) sees the items too
+    assert _set_yaml_list_block(txt, "frame_only")[1] == ["dummy_axis"]
+
+
+def test_set_yaml_list_block_flow_list():
+    """``key: [a]`` (the style the joints.yaml template comment shows) is
+    edited in place: no second ``key:`` (which YAML would read instead,
+    dropping ``a``), and a remove really removes."""
+    from sw2robot.editor.webserver import _set_yaml_list_block
+    tail = "joints:\n  - parent: a\n    child: b\n    type: fixed\n"
+    txt = "base: x\nframe_only: [dummy_axis]\n" + tail
+    out, members = _set_yaml_list_block(txt, "frame_only", add=["cam"])
+    assert out == "base: x\nframe_only: [dummy_axis, cam]\n" + tail
+    assert members == ["dummy_axis", "cam"]
+    assert yaml.safe_load(out)["frame_only"] == ["dummy_axis", "cam"]
+    out, members = _set_yaml_list_block(out, "frame_only",
+                                        remove=["dummy_axis"])
+    assert out == "base: x\nframe_only: [cam]\n" + tail and members == ["cam"]
+    out, members = _set_yaml_list_block(out, "frame_only", remove=["cam"])
+    assert out == "base: x\n" + tail and members == []
+    assert yaml.safe_load(out) == {"base": "x", **yaml.safe_load(tail)}
+    # nothing to change -> text untouched; an empty flow list takes an add
+    assert _set_yaml_list_block(txt, "frame_only", remove=["zz"]) == (
+        txt, ["dummy_axis"])
+    out, members = _set_yaml_list_block("exclude: []\nbase: x\n", "exclude",
+                                        add=["bolt"], append_if_absent=False)
+    assert out == "exclude: [bolt]\nbase: x\n" and members == ["bolt"]
+    out, members = _set_yaml_list_block(out, "exclude", clear=True)
+    assert out == "base: x\n" and members == []
+
+
+
+def test_set_yaml_list_block_keeps_quoted_strings_in_a_flow_list():
+    """Rewriting a flow list must not turn quoted names into booleans or
+    numbers (``'on'`` -> True, ``'01'`` -> 1) on the next load."""
+    from sw2robot.editor.webserver import _set_yaml_list_block
+    out, members = _set_yaml_list_block("frame_only: ['on', '01']\n",
+                                        "frame_only", add=["cam"])
+    assert yaml.safe_load(out)["frame_only"] == ["on", "01", "cam"]
+    assert members == ["on", "01", "cam"]
+    out, _ = _set_yaml_list_block("frame_only: [a, b]\n", "frame_only",
+                                  add=["cam"])
+    assert out == "frame_only: [a, b, cam]\n"     # plain names stay plain
+
+
+def test_set_yaml_list_block_last_item_without_newline():
+    """A file that ends on a list item with no trailing newline: the item is
+    still part of the block, so an add or remove does not corrupt it."""
+    from sw2robot.editor.webserver import _set_yaml_list_block
+    for txt in ("frame_only:\n  - shin_1", "frame_only:\n- shin_1"):
+        out, members = _set_yaml_list_block(txt, "frame_only", add=["shin_2"])
+        assert yaml.safe_load(out)["frame_only"] == ["shin_1", "shin_2"]
+        assert members == ["shin_1", "shin_2"]
+        out, members = _set_yaml_list_block(txt, "frame_only",
+                                            remove=["shin_1"])
+        assert yaml.safe_load(out) is None and members == []
+
 def test_um_set_types_maps_mass_only_to_fixed_plus_flag(tmp_path):
     """URDF-mode: a 'mass_only' type change sets the joint fixed AND flags the
     child link mass-only; switching to a real type clears the flag."""

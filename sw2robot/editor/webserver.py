@@ -1150,16 +1150,46 @@ def _set_yaml_list_block(txt, key, add=(), remove=(), clear=False,
     joints.yaml (e.g. ``mass_only:`` / ``exclude:``).  ``clear`` empties the
     block; ``append_if_absent`` puts a freshly created block at the end of the
     file (vs the start).  Returns ``(new_text, members)`` where ``members`` is
-    the resulting list of names (block dropped entirely when it ends up empty)."""
-    m = re.search(r"(?m)^" + re.escape(key) + r":\n((?:- .*\n)*)", txt)
+    the resulting list of names (block dropped entirely when it ends up empty).
+
+    Items may be indented (``key:\n  - x``); new ones copy that indentation.
+    A flow list (``key: [a, b]``, the style the template comment shows) is
+    edited in place rather than followed by a second ``key:``."""
+    import yaml as _yaml
+
+    if txt and not txt.endswith("\n"):     # a last item with no newline
+        txt += "\n"                         # would be missed by the regexes
+    m = re.search(r"(?m)^" + re.escape(key) + r":\n((?:[ \t]*- .*\n)*)", txt)
+    flow = None if m else re.search(
+        r"(?m)^" + re.escape(key) + r":[ \t]*\[.*\n?(?:[ \t]+\S.*\n?)*", txt)
+    if flow:
+        try:
+            items = _yaml.safe_load(flow.group(0))[key]
+        except Exception:
+            items = None
+        if isinstance(items, list):
+            old = [str(x) for x in items]
+            drop = set(add) | set(remove)
+            kept = [] if clear else [x for x in old if x not in drop] + list(add)
+            if kept == old:
+                return txt, old
+            def item(x):    # keep a string a string ('on', '01' ...)
+                q = _yaml_scalar(x)
+                return q if _yaml.safe_load(q) == x else (
+                    "'" + x.replace("'", "''") + "'")
+            line = (f"{key}: [{', '.join(item(x) for x in kept)}]\n"
+                    if kept else "")
+            return txt[:flow.start()] + line + txt[flow.end():], kept
     block = m.group(1) if m else ""
+    indent = re.match(r"[ \t]*", block).group(0)
     if clear:
         block = ""
     else:
         for nm in set(add) | set(remove):       # drop existing entries first
-            block = re.sub(r"(?m)^- " + re.escape(nm) + r"\s*$\n?", "", block)
+            block = re.sub(r"(?m)^[ \t]*- " + re.escape(nm) + r"\s*$\n?", "",
+                           block)
         for nm in add:
-            block += f"- {nm}\n"
+            block += f"{indent}- {nm}\n"
     new = f"{key}:\n{block}" if block else ""
     if m:
         out = txt[:m.start()] + new + txt[m.end():]
@@ -1169,7 +1199,7 @@ def _set_yaml_list_block(txt, key, add=(), remove=(), clear=False,
         out = (txt if txt.endswith("\n") or not txt else txt + "\n") + new
     else:
         out = new + txt
-    members = [ln[2:].strip() for ln in block.splitlines()]
+    members = [ln.strip()[2:].strip() for ln in block.splitlines()]
     return out, members
 
 
@@ -3785,14 +3815,24 @@ def _tree_rows_payload(base_link, links, joints):
     return out
 
 
+def _yaml_key_re(key):
+    """Regex for ``key`` as a mapping key spelled plain, single- or
+    double-quoted, so an entry is found however it was written."""
+    key = str(key)
+    forms = (key, "'" + key.replace("'", "''") + "'",
+             '"' + key.replace("\\", "\\\\").replace('"', '\\"') + '"')
+    return "(?:" + "|".join(re.escape(f) for f in forms) + ")"
+
+
 def _upsert_yaml_map(txt, mapkey, key, value):
     """Set ``mapkey: {key: value}`` (block style) in joints.yaml text, replacing
-    any existing entry for ``key`` and creating the map if needed."""
-    line = f"  {key}: {value}"
+    any existing entry for ``key`` and creating the map if needed.  ``key`` is
+    quoted when it needs it (a CAD name like ``Assembly #2-1``)."""
+    line = f"  {_yaml_scalar(key)}: {value}"
     block = re.compile(r"(?m)^" + re.escape(mapkey) + r":\n((?:[ \t]+\S.*\n?)*)")
     m = block.search(txt)
     if m:
-        body = re.sub(r"(?m)^[ \t]+" + re.escape(key) + r":.*\n?", "",
+        body = re.sub(r"(?m)^[ \t]+" + _yaml_key_re(key) + r":.*\n?", "",
                       m.group(1))
         if body and not body.endswith("\n"):
             body += "\n"
@@ -3821,7 +3861,8 @@ def _remove_yaml_map_entry(txt, mapkey, key):
     m = block.search(txt)
     if not m:
         return txt
-    body = re.sub(r"(?m)^[ \t]+" + re.escape(key) + r":.*\n?", "", m.group(1))
+    body = re.sub(r"(?m)^[ \t]+" + _yaml_key_re(key) + r":.*\n?", "",
+                  m.group(1))
     if body.strip():
         return txt[:m.start()] + f"{mapkey}:\n{body}" + txt[m.end():]
     return txt[:m.start()] + txt[m.end():]
