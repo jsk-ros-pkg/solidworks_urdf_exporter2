@@ -424,6 +424,13 @@ the origin, and a rig whose base part sits 74 mm above the CAD floor loads
 `--isaac`, because a mobile robot must not be welded to the CAD origin;
 `--no-world-link` overrides a config that turns it on.
 
+A mobile robot usually wants its root on the floor instead: give the root a
+name, `--world-link base_footprint` (or `world_link: base_footprint` in the
+joint config), and it is named `base_footprint` and placed at the top
+assembly's coordinate system of that name. Put that coordinate system on the
+floor under the robot, X forward and Z up, and the URDF's origin is there
+whatever the CAD origin is.
+
 ```bash
 python -m sw2robot.exporter.export path/to/assembly.sldasm -o output --isaac --world-link
 

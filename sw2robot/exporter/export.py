@@ -715,6 +715,20 @@ def build(pkg_dir, config_path=None, base_hint=None, exclude=None,
     if world_link is None:
         world_link = (config.get("world_link") if isinstance(config, dict)
                       and config.get("world_link") is not None else False)
+    # A NAME instead of true: root link of that name, placed at the assembly
+    # coordinate system of that name (a mobile robot's base_footprint).
+    if isinstance(world_link, str):
+        frame = next((cs for cs in graph.coordinate_systems or []
+                      if cs.name == world_link), None)
+        if frame is None:
+            known = sorted(cs.name for cs in graph.coordinate_systems or [])
+            raise ValueError(
+                f"world_link: {world_link!r} names no coordinate system of "
+                f"the top assembly; it has {known}")
+        urdf_kwargs["world_link_name"] = world_link
+        urdf_kwargs["world_frame"] = frame.document_from_frame
+        print(f"[build] root link {world_link!r} at the assembly coordinate "
+              f"system of that name")
     urdf_kwargs["world_link"] = bool(world_link)
     # the working URDF keeps URDF-relative mesh paths (our viewer + skrobot
     # auto-limits resolve those); the portable ROS variant is a SEPARATE package.
@@ -990,14 +1004,17 @@ def main():
     ap.add_argument("--isaac-pkg-name", default=None,
                     help="directory name for the --isaac package "
                          "(default <name>_isaac)")
-    ap.add_argument("--world-link", dest="world_link", action="store_const",
-                    const=True, default=None,
+    ap.add_argument("--world-link", dest="world_link", nargs="?",
+                    const=True, default=None, metavar="FRAME",
                     help="add a massless 'world' root link fixed to the base "
                          "at the base's ASSEMBLY pose, so the URDF origin is "
                          "the CAD origin (for fixtures; without it a base "
                          "part sitting above the CAD floor loads that far "
                          "into a simulator's ground). Also `world_link: true` "
-                         "in the joint config")
+                         "in the joint config. With FRAME (e.g. "
+                         "base_footprint) the root link is named FRAME and "
+                         "sits at the top assembly's coordinate system of "
+                         "that name; `world_link: FRAME` in the config")
     ap.add_argument("--no-world-link", dest="world_link", action="store_const",
                     const=False, help="never add the 'world' root link")
     ap.add_argument("--collision",

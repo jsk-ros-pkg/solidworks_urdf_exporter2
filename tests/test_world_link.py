@@ -61,6 +61,42 @@ def test_world_link_fixes_the_base_at_its_assembly_pose(tmp_path):
         assert j.find("child").get("link") in names
 
 
+def test_named_world_link_sits_at_an_assembly_frame(tmp_path):
+    """``world_link: base_footprint``: the root is named after the frame and
+    the base is placed relative to that frame, not the assembly origin."""
+    from sw2robot.exporter import urdf_writer
+    # base_footprint 116 mm below the assembly origin, X = assembly +Z,
+    # Y = assembly +X, Z = assembly +Y (a Y-up CAD model)
+    frame = np.eye(4)
+    frame[:3, :3] = [[0, 1, 0], [0, 0, 1], [1, 0, 0]]
+    frame[:3, 3] = [0.0, -0.116, 0.0]
+    from sw2robot.exporter.model import Port
+    model = _model(np.eye(4))
+    # the same coordinate system also comes out as an output port; the root
+    # replaces it rather than adding a second 'base_footprint' link
+    model.ports = [Port(name="base_footprint", parent_link="station_2"),
+                   Port(name="tool0", parent_link="rail_1")]
+    out = tmp_path / "urdf" / "rig.urdf"
+    urdf_writer.write_urdf(model, str(out), world_link=True,
+                           world_link_name="base_footprint",
+                           world_frame=frame.flatten().tolist())
+    root = ET.parse(out).getroot()
+    names = [link.get("name") for link in root.findall("link")]
+    assert names.count("base_footprint") == 1
+    assert "tool0" in names
+    assert root.find("link").get("name") == "base_footprint"
+    assert root.find("link[@name='world']") is None
+    joint = root.find("joint[@name='base_footprint_to_base_link']")
+    assert joint.find("parent").get("link") == "base_footprint"
+    xyz = [float(v) for v in joint.find("origin").get("xyz").split()]
+    rpy = [float(v) for v in joint.find("origin").get("rpy").split()]
+    # the base (at the assembly origin) is 116 mm above the footprint
+    assert np.allclose(xyz, [0.0, 0.0, 0.116])
+    expected = np.linalg.inv(frame)
+    from sw2robot.exporter.geometry import matrix_to_xyz_rpy
+    assert np.allclose(rpy, matrix_to_xyz_rpy(expected)[1], atol=1e-9)
+
+
 def test_without_world_link_nothing_changes(tmp_path):
     from sw2robot.exporter import urdf_writer
     out = tmp_path / "urdf" / "rig.urdf"
