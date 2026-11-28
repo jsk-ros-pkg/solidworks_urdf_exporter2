@@ -546,3 +546,19 @@ def test_a_different_material_still_gets_reported(monkeypatch):
         None, "/cad/mir.SLDPRT",
         lambda p: "mirror" if p.endswith("mir.SLDPRT") else "source")
     assert plan and "sets its own material" in plan["skip"]
+
+
+# ------------------------------------------------- reading a part's properties
+
+def test_read_props_takes_the_four_values_read_part_props_returns(monkeypatch):
+    """``model._read_part_props`` also returns the appearance; unpacking three
+    values made every mirror check fail with 'too many values to unpack'."""
+    from sw2robot.exporter import mirror, model
+    sw = {"mass": 0.25, "com": [0.0, 0.0, 0.01],
+          "inertia": (1e-5, 0, 0, 1e-5, 0, 1e-5), "overridden": False}
+    monkeypatch.setattr(model, "_read_part_props",
+                        lambda doc, is_assembly=False:
+                        ("PLA", 1240.0, sw, {"rgba": [1, 1, 1, 1]}))
+    props = mirror._read_props(object())
+    assert props["material"] == "PLA" and props["density"] == 1240.0
+    assert props["mass"] == 0.25 and props["overridden"] is False

@@ -399,7 +399,8 @@ def _read_props(doc):
     """``{"material","density","mass","com","inertia","overridden"}`` of a part."""
     from .model import _read_part_props  # see has_mirror_feature
 
-    material, density, sw = _read_part_props(doc, is_assembly=False)
+    material, density, sw, _appearance = _read_part_props(
+        doc, is_assembly=False)
     sw = sw or {}
     return {"material": material, "density": density,
             "mass": sw.get("mass"), "com": sw.get("com"),
