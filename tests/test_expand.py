@@ -2154,6 +2154,90 @@ def test_exact_subassembly_mode_overrides_shared_legacy_substring():
     assert rows["servo-2"]["mode_source"] == "legacy"
 
 
+def test_subassembly_settings_quote_a_cad_name_with_hash():
+    """A CAD instance name such as ``Assembly #2-1`` is written as a quoted
+    key.  Unquoted, `` #`` starts a comment: the saved mode read back as
+    'Assembly', and a second save made joints.yaml unparseable."""
+    import yaml
+
+    from sw2robot.editor.webserver import (
+        _set_subassembly_mode_yaml,
+        _set_subassembly_parent_override_yaml,
+        _subassemblies_payload,
+        _subassembly_parent_overrides,
+    )
+
+    graph = make_graph()
+    graph.components.append(_comp("Assembly #2-1", "Assembly_2_1",
+                                  xyz=(0.3, 0, 0), sub=True,
+                                  path="X:/fake/servo_unit.SLDASM"))
+    txt, _ = _set_subassembly_mode_yaml(
+        "base: plate-1\n", graph, "Assembly #2-1", "expand")
+    assert txt == ("subassembly_modes:\n  'Assembly #2-1': expand\n"
+                   "base: plate-1\n")
+    txt, _ = _set_subassembly_mode_yaml(txt, graph, "servo-1", "expand")
+    txt, _ = _set_subassembly_mode_yaml(txt, graph, "Assembly #2-1", "auto")
+    assert yaml.safe_load(txt)["subassembly_modes"] == {
+        "servo-1": "expand", "Assembly #2-1": "auto"}
+    rows = {row["name"]: (row["override"], row["mode_source"]) for row in
+            _subassemblies_payload(graph, txt)["subassemblies"]}
+    assert rows == {"Assembly #2-1": ("auto", "saved"),
+                    "servo-1": ("expand", "saved")}
+
+    txt = _set_subassembly_parent_override_yaml(
+        txt, graph, "Assembly #2-1", "plate_1")
+    assert _subassembly_parent_overrides(txt) == {"Assembly #2-1": "plate_1"}
+    txt = _set_subassembly_parent_override_yaml(txt, graph, "Assembly #2-1", "")
+    assert "subassembly_parent_overrides" not in yaml.safe_load(txt)
+
+
+@pytest.mark.parametrize("spelled", ["Assembly #2-1", "'Assembly #2-1'",
+                                     '"Assembly #2-1"'],
+                         ids=["plain", "single", "double"])
+def test_yaml_map_entry_found_in_any_key_spelling(spelled):
+    """Replace and remove find a key written plain (what older versions wrote
+    for this name), single- or double-quoted, so no duplicate is left."""
+    import yaml
+
+    from sw2robot.editor.webserver import (
+        _remove_yaml_map_entry,
+        _upsert_yaml_map,
+    )
+
+    txt = (f"subassembly_modes:\n  {spelled}: expand\n  servo-1: auto\n"
+           "base: plate-1\n")
+    out = _upsert_yaml_map(txt, "subassembly_modes", "Assembly #2-1",
+                           "no_expand")
+    assert out == ("subassembly_modes:\n  servo-1: auto\n"
+                   "  'Assembly #2-1': no_expand\nbase: plate-1\n")
+    assert yaml.safe_load(out)["subassembly_modes"] == {
+        "servo-1": "auto", "Assembly #2-1": "no_expand"}
+    out = _remove_yaml_map_entry(txt, "subassembly_modes", "Assembly #2-1")
+    assert out == "subassembly_modes:\n  servo-1: auto\nbase: plate-1\n"
+    assert yaml.safe_load(out)["subassembly_modes"] == {"servo-1": "auto"}
+
+
+def test_yaml_map_keys_stay_plain_unless_needed():
+    """Sanitized link / joint names stay plain (existing files do not churn);
+    a quote inside a name is doubled and still round-trips."""
+    import yaml
+
+    from sw2robot.editor.webserver import (
+        _remove_yaml_map_entry,
+        _upsert_yaml_map,
+    )
+
+    out = _upsert_yaml_map("base: z\n", "collapsed_driver_joints",
+                           "plate_1__servo_1", "plate_1__servo_1")
+    assert out == ("collapsed_driver_joints:\n"
+                   "  plate_1__servo_1: plate_1__servo_1\nbase: z\n")
+    out = _upsert_yaml_map(out, "subassembly_modes", "O'Brien-1", "expand")
+    assert "  'O''Brien-1': expand\n" in out
+    assert yaml.safe_load(out)["subassembly_modes"] == {"O'Brien-1": "expand"}
+    out = _remove_yaml_map_entry(out, "subassembly_modes", "O'Brien-1")
+    assert "subassembly_modes" not in yaml.safe_load(out)
+
+
 def test_preview_default_no_expand_does_not_change_normal_model():
     import yaml
 
@@ -2173,6 +2257,80 @@ def test_preview_default_no_expand_does_not_change_normal_model():
     normal = build_model(graph, config=yaml.safe_load(txt))
     assert {component.link_name for component in normal.components} == {
         "plate_1", "servo_1__case_1", "servo_1__horn_1"}
+
+
+def _normal_tree(graph, txt):
+    import yaml
+
+    model = build_model(graph, config=yaml.safe_load(txt))
+    return (sorted(c.link_name for c in model.components),
+            sorted((j.parent, j.child, j.jtype) for j in model.joints))
+
+
+@pytest.mark.parametrize("rule", ["no_expand:\n- servo-1\n",
+                                  "no_expand: [servo-1]\n"],
+                         ids=["block", "flow"])
+@pytest.mark.parametrize("mode", ["no_expand", "expand", "auto"])
+def test_preview_mode_keeps_no_expand_and_normal_model(mode, rule):
+    """The preview-only mode writes subassembly_modes and nothing else: the
+    ``no_expand:`` rule stays byte-for-byte (block or flow style), so the
+    normal build (which never reads subassembly_modes) does not change."""
+    from sw2robot.editor.webserver import (
+        _set_subassembly_mode_yaml,
+        _subassemblies_payload,
+    )
+
+    graph = make_graph()
+    before = "base: plate-1\n" + rule
+    txt, members = _set_subassembly_mode_yaml(before, graph, "servo-1", mode)
+
+    assert txt == f"subassembly_modes:\n  servo-1: {mode}\n" + before
+    assert members["no_expand"] == ["servo-1"]
+    assert members["expand"] == []
+    assert _normal_tree(graph, txt) == _normal_tree(graph, before)
+    assert _normal_tree(graph, before)[0] == ["plate_1", "servo_1"]
+    row = _subassemblies_payload(graph, txt)["subassemblies"][0]
+    assert (row["override"], row["mode_source"]) == (mode, "saved")
+
+
+def test_preview_mode_keeps_sibling_substring_rule():
+    """``expand: [servo-1]`` also matches servo-10.  Setting servo-1's preview
+    mode must not delete that rule, so servo-10 stays expanded in the normal
+    build and keeps its legacy row in the preview."""
+    from sw2robot.editor.webserver import (
+        _set_subassembly_mode_yaml,
+        _subassemblies_payload,
+    )
+
+    graph = make_graph()
+    graph.subassemblies["X:/fake/servo_unit.SLDASM"].edges = [
+        _edge("case-1", "horn-1",                  # rigid: only expand opens it
+              dup(conc([0.005, 0, 0], Z), conc([-0.005, 0, 0], Z),
+                  coinc_planes(O, Z)))]
+    graph.components.append(_comp("servo-10", "servo_10", xyz=(0.3, 0, 0),
+                                  sub=True, path="X:/fake/servo_unit.SLDASM"))
+    mount = _edge("plate-1", "servo-10",
+                  dup(conc([0.31, 0, 0], Z), conc([0.29, 0, 0], Z),
+                      coinc_planes([0.3, 0, 0], Z)))
+    for g in mount.mates:
+        g.owners = ["plate-1", "servo-10/case-1"]
+    graph.edges.append(mount)
+    before = "base: plate-1\nexpand:\n- servo-1\n"
+    txt, members = _set_subassembly_mode_yaml(
+        before, graph, "servo-1", "no_expand")
+
+    assert txt.endswith(before)
+    assert members["expand"] == ["servo-1"]
+    assert members["retained_shared_legacy_modes"] == ["servo-1"]
+    links = _normal_tree(graph, txt)[0]
+    assert links == _normal_tree(graph, before)[0]
+    assert {"servo_1__case_1", "servo_10__case_1"} <= set(links)
+    rows = {row["name"]: row for row in
+            _subassemblies_payload(graph, txt)["subassemblies"]}
+    assert (rows["servo-1"]["override"], rows["servo-1"]["mode_source"]) == (
+        "no_expand", "saved")
+    assert (rows["servo-10"]["override"], rows["servo-10"]["mode_source"]) == (
+        "expand", "legacy")
 
 
 def test_rigid_subassembly_not_expanded():
