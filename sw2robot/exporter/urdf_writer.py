@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 
+import numpy as np
 from skrobot.utils.inertia import (
     DEFAULT_DENSITY,
     rescale_inertial_to_mass,
@@ -233,20 +234,28 @@ def _link_xml(comp, ros_pkg=None, rn=lambda n: n, mesh_dir=None, density=None):
     return "\n".join(lines), method, problems
 
 
-def _world_link_xml(model, rn):
-    """A ``world`` root link and the fixed joint placing the base link at its
-    assembly pose (``Component.world``, metres)."""
+def _world_link_xml(model, rn, name="world", frame=None):
+    """A massless root link ``name`` and the fixed joint placing the base link
+    at its assembly pose (``Component.world``, metres).
+
+    ``frame`` (4x4, assembly-from-frame, metres) puts the root at an assembly
+    coordinate system instead of the assembly origin, e.g. a
+    ``base_footprint`` on the floor under a mobile robot."""
     base = next((c for c in model.components if c.link_name == model.base_link),
                 None)
     if base is None:
         raise ValueError(f"base link {model.base_link!r} is not a component")
-    xyz, rpy = matrix_to_xyz_rpy(base.world)
+    pose = np.asarray(base.world, dtype=float)
+    if frame is not None:
+        frame = np.asarray(frame, dtype=float).reshape(4, 4)
+        pose = np.linalg.inv(frame) @ pose
+    xyz, rpy = matrix_to_xyz_rpy(pose)
     root = rn(base.link_name)
     return [
-        '  <link name="world"/>',
-        f'  <joint name="world_to_{root}" type="fixed">',
+        f'  <link name="{name}"/>',
+        f'  <joint name="{name}_to_{root}" type="fixed">',
         f'    <origin xyz="{fmt_urdf_vec(xyz)}" rpy="{fmt_urdf_vec(rpy)}"/>',
-        '    <parent link="world"/>',
+        f'    <parent link="{name}"/>',
         f'    <child link="{root}"/>',
         '  </joint>',
     ]
@@ -350,7 +359,8 @@ def _port_xml(port, rn=lambda n: n, link_name=None, joint_name=None):
 
 
 def write_urdf(model, urdf_path, ros_pkg=None, density=None,
-               link_overrides=None, joint_overrides=None, world_link=False):
+               link_overrides=None, joint_overrides=None, world_link=False,
+               world_link_name="world", world_frame=None):
     """Write the URDF.  ``link_overrides`` / ``joint_overrides`` map a COMPONENT
     link name / joint name to a user-chosen display name (from the editor's
     rename feature); they are applied before safe_name + collision suffixing, so
@@ -362,6 +372,9 @@ def write_urdf(model, urdf_path, ros_pkg=None, density=None,
     assembly's origin rather than the base part's own frame.  Without it a
     fixed-base rig whose base part sits above the CAD floor loads that far
     into the ground in Isaac Sim / MuJoCo (74 mm on the dielectric rig).
+    ``world_link_name`` names that root link, and ``world_frame`` (4x4,
+    assembly-from-frame) places it at an assembly coordinate system instead
+    of the assembly origin.
 
     Returns the set of FINAL (emitted) link names that are mass-only -- the
     export step folds these into their fixed parent.  write_urdf owns the name
@@ -388,6 +401,10 @@ def write_urdf(model, urdf_path, ros_pkg=None, density=None,
         return mapping
 
     ports = list(getattr(model, "ports", []))
+    if world_link and world_frame is not None:
+        # the root IS that coordinate system: its output port would be a
+        # second link of the same name hanging off the base (a cycle)
+        ports = [p for p in ports if p.name != world_link_name]
     comp_name_items = [
         (("comp", c.link_name),
          root_name if c.link_name == model.base_link
@@ -419,8 +436,13 @@ def write_urdf(model, urdf_path, ros_pkg=None, density=None,
     mesh_dir = os.path.dirname(os.path.dirname(os.path.abspath(urdf_path)))
 
     parts = ['<?xml version="1.0"?>', f'<robot name="{model.name}">']
+    if world_link and world_link_name in set(link_names.values()):
+        raise ValueError(
+            f"root link name {world_link_name!r} is already a link of the "
+            f"model; pick another world_link name")
     if world_link:
-        parts.extend(_world_link_xml(model, rn))
+        parts.extend(_world_link_xml(model, rn, name=world_link_name,
+                                     frame=world_frame))
     methods = {}
     bad_inertia = {}
     mass_only_links = set()
